@@ -1,0 +1,295 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 224 55% 6%;
+    --foreground: 210 40% 98%;
+    --card: 223 48% 9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 223 48% 9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 220 30% 15%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 220 26% 14%;
+    --muted-foreground: 216 18% 58%;
+    --accent: 220 30% 15%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 158 72% 40%;
+    --success-foreground: 210 40% 98%;
+    --warning: 42 96% 58%;
+    --warning-foreground: 222 47% 11%;
+    --danger: 0 72% 51%;
+    --danger-foreground: 210 40% 98%;
+    --border: 220 22% 18%;
+    --input: 220 26% 20%;
+    --ring: 217 91% 60%;
+    --radius: 0.9rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-family: var(--font-sans), "SF Pro Display", -apple-system,
+      BlinkMacSystemFont, "Segoe UI", system-ui, ui-sans-serif, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background-image: radial-gradient(
+        1000px 500px at 80% -10%,
+        hsl(217 91% 60% / 0.06),
+        transparent 60%
+      ),
+      radial-gradient(
+        800px 500px at -10% 110%,
+        hsl(239 84% 67% / 0.04),
+        transparent 60%
+      );
+    background-attachment: fixed;
+    background-size: cover;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted));
+    border-radius: 3px;
+  }
+
+  .card-chrome {
+    background: linear-gradient(
+      180deg,
+      hsl(223 48% 11%) 0%,
+      hsl(222 40% 9.2%) 100%
+    );
+    border: 1px solid hsl(var(--border) / 0.9);
+    box-shadow:
+      0 1px 0 0 hsl(0 0% 100% / 0.03) inset,
+      0 12px 40px -20px hsl(0 0% 0% / 0.5);
+  }
+  .card-chrome-warn {
+    background: linear-gradient(
+      180deg,
+      hsl(40 60% 14%) 0%,
+      hsl(222 40% 9.2%) 100%
+    );
+    border: 1px solid hsl(var(--warning) / 0.28);
+    box-shadow:
+      0 1px 0 0 hsl(var(--warning) / 0.12) inset,
+      0 0 0 1px hsl(var(--warning) / 0.06),
+      0 12px 40px -20px hsl(38 92% 50% / 0.15);
+  }
+  .card-chrome-crit {
+    background: linear-gradient(
+      180deg,
+      hsl(6 60% 14%) 0%,
+      hsl(222 40% 9.2%) 100%
+    );
+    border: 1px solid hsl(var(--danger) / 0.34);
+    box-shadow:
+      0 1px 0 0 hsl(var(--danger) / 0.16) inset,
+      0 0 0 1px hsl(var(--danger) / 0.08);
+  }
+
+  .text-gradient-primary {
+    background: linear-gradient(
+      135deg,
+      hsl(217 91% 72%) 0%,
+      hsl(239 84% 78%) 100%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* === 呼吸灯：温和克制 === */
+  @keyframes breath-light-danger {
+    0%,
+    100% {
+      opacity: 1;
+      border-color: hsl(var(--danger) / 0.34);
+      box-shadow:
+        0 1px 0 0 hsl(var(--danger) / 0.16) inset,
+        0 0 0 1px hsl(var(--danger) / 0.08),
+        0 0 28px -8px hsl(var(--danger) / 0.08);
+    }
+    50% {
+      opacity: 0.96;
+      border-color: hsl(var(--danger) / 0.62);
+      box-shadow:
+        0 1px 0 0 hsl(var(--danger) / 0.22) inset,
+        0 0 0 1px hsl(var(--danger) / 0.12),
+        0 0 56px -6px hsl(var(--danger) / 0.28);
+    }
+  }
+  @keyframes breath-light-warning {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 18px -6px hsl(var(--warning) / 0.05);
+    }
+    50% {
+      opacity: 0.97;
+      box-shadow: 0 0 28px -4px hsl(var(--warning) / 0.18);
+    }
+  }
+  @keyframes pulse-green-dot {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 1;
+      box-shadow: 0 0 0 0 hsl(var(--success) / 0.55);
+    }
+    70% {
+      transform: scale(1.06);
+      opacity: 0.8;
+      box-shadow: 0 0 0 8px hsl(var(--success) / 0);
+    }
+  }
+  @keyframes flash-up {
+    0% {
+      background-color: hsl(var(--success) / 0);
+      color: hsl(var(--foreground));
+    }
+    15% {
+      background-color: hsl(var(--success) / 0.22);
+      color: hsl(var(--success));
+    }
+    100% {
+      background-color: hsl(var(--success) / 0);
+      color: hsl(var(--foreground));
+    }
+  }
+  @keyframes flash-down {
+    0% {
+      background-color: hsl(var(--danger) / 0);
+      color: hsl(var(--foreground));
+    }
+    15% {
+      background-color: hsl(var(--danger) / 0.22);
+      color: hsl(var(--danger));
+    }
+    100% {
+      background-color: hsl(var(--danger) / 0);
+      color: hsl(var(--foreground));
+    }
+  }
+  @keyframes drawer-in {
+    0% {
+      transform: translateX(100%);
+      opacity: 0.2;
+    }
+    100% {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+  @keyframes drawer-scrim-in {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  @keyframes needle-sweep {
+    0%,
+    100% {
+      transform: rotate(var(--from, 0deg));
+    }
+    50% {
+      transform: rotate(calc(var(--from, 0deg) + 2deg));
+    }
+  }
+
+  @keyframes crit-card-border-breath {
+    0%,
+    100% {
+      border-color: hsl(var(--danger) / 0.32);
+      box-shadow:
+        0 1px 0 0 hsl(var(--danger) / 0.14) inset,
+        0 0 0 1px hsl(var(--danger) / 0.06),
+        0 0 36px -10px hsl(var(--danger) / 0.10);
+    }
+    50% {
+      border-color: hsl(var(--danger) / 0.72);
+      box-shadow:
+        0 1px 0 0 hsl(var(--danger) / 0.26) inset,
+        0 0 0 1px hsl(var(--danger) / 0.18),
+        0 0 72px -6px hsl(var(--danger) / 0.34);
+    }
+  }
+
+  @keyframes warn-card-border-breath {
+    0%,
+    100% {
+      border-color: hsl(var(--warning) / 0.28);
+      box-shadow: 0 0 22px -8px hsl(var(--warning) / 0.08);
+    }
+    50% {
+      border-color: hsl(var(--warning) / 0.55);
+      box-shadow: 0 0 40px -6px hsl(var(--warning) / 0.22);
+    }
+  }
+
+  .animate-breath-danger {
+    animation: breath-light-danger 7.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .animate-card-crit {
+    animation: crit-card-border-breath 4.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+  .animate-card-warn {
+    animation: warn-card-border-breath 5.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+  .animate-breath-warning {
+    animation: breath-light-warning 6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .animate-pulse-green {
+    animation: pulse-green-dot 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .animate-flash-up {
+    animation: flash-up 900ms ease-out both;
+  }
+  .animate-flash-down {
+    animation: flash-down 900ms ease-out both;
+  }
+  .animate-drawer-in {
+    animation: drawer-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .animate-drawer-scrim {
+    animation: drawer-scrim-in 220ms ease-out both;
+  }
+
+  .risk-water-track {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--success) / 0.35) 0%,
+      hsl(120 60% 40% / 0.28) 40%,
+      hsl(var(--warning) / 0.45) 65%,
+      hsl(var(--warning) / 0.7) 82%,
+      hsl(var(--danger) / 0.8) 100%
+    );
+  }
+}

@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+enum BatchStatus {
+  LOCKED
+  TRADING_OPEN
+  CLOSED
+  LIQUIDATED
+}
+
+enum RiskLevel {
+  NORMAL
+  WARNING
+  CRITICAL
+}
+
+enum ClientStatus {
+  ACTIVE
+  EXIT_REQUESTED
+  SETTLED
+}
+
+enum MarginCallStatus {
+  PENDING
+  FULLFILLED
+  EXPIRED
+}
+
+enum AppRole {
+  RISK_MANAGER
+  BD_MANAGER
+  OPERATIONS
+}
+
+model AppUser {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  passwordHash       String?
+  displayName        String
+  role               AppRole
+  avatarInitials     String
+  bdManagerFullName  String?  @unique
+  lastLoginAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  clients            Client[] @relation("BdToClients")
+  sessions           Session[]
+
+  @@index([role])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  expiresAt  DateTime
+  token      String   @unique
+  ipAddr     String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  user       AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Batch {
+  id                String          @id @default(cuid())
+  batchNumber       String          @unique
+  stockSymbol       String
+  stockName         String?
+  stockPriceAtStart Float
+  currentStockPrice Float?
+  currentDayChange  Float?          @default(0)
+  initialTotalAmount Float
+  priorityAmount    Float
+  subordinateAmount Float
+  signDate          DateTime
+  maturityDate      DateTime
+  totalShares       Float
+  currentMarketValue Float?
+  totalPnL          Float?          @default(0)
+  totalPnLPercent   Float?          @default(0)
+  cumulativeMarginCalls Float        @default(0)
+  status            BatchStatus     @default(LOCKED)
+  riskLevel         RiskLevel       @default(NORMAL)
+  nextTradingWindow DateTime?
+  clients           Client[]
+  marginCalls       MarginCall[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([status])
+  @@index([riskLevel])
+  @@index([signDate])
+}
+
+model Client {
+  id              String       @id @default(cuid())
+  batchId         String
+  name            String
+  investmentAmount Float
+  bdManager       String
+  bdUserId        String?
+  bdUser          AppUser?     @relation("BdToClients", fields: [bdUserId], references: [id])
+  signDate        DateTime
+  profitSplitClient Float
+  profitSplitInstitution Float
+  realtimePnL     Float?       @default(0)
+  estimatedExitAmount Float?
+  status          ClientStatus @default(ACTIVE)
+  settledAt       DateTime?
+  settlementNote  String?
+  batch           Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([batchId])
+  @@index([bdManager])
+  @@index([status])
+  @@index([bdUserId])
+}
+
+model MarginCall {
+  id              String          @id @default(cuid())
+  batchId         String
+  triggerDate     DateTime
+  triggerMarketValue Float
+  dropPercent     Float
+  requiredAmount  Float
+  fulfilledAmount Float?
+  fulfilledDate   DateTime?
+  status          MarginCallStatus @default(PENDING)
+  note            String?
+  notifiedEmails  String?
+  notifiedWhatsApps String?
+  batch           Batch           @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdAt       DateTime        @default(now())
+
+  @@index([batchId])
+  @@index([status])
+}
+
+model StockHistory {
+  id         String   @id @default(cuid())
+  symbol     String   @unique
+  name       String?
+  usageCount Int      @default(1)
+  lastUsed   DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([usageCount])
+  @@index([lastUsed])
+}
