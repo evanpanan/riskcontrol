@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   Volume2,
   VolumeX,
-  X,
 } from "lucide-react";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
@@ -96,43 +95,33 @@ export function RiskAlertDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onDismissAll()}>
       <DialogContent className="sm:max-w-[640px] max-h-[85vh] overflow-hidden flex flex-col animate-drawer-in">
         <DialogHeader className="pb-0">
-          <DialogTitle className="flex items-start justify-between gap-3 flex-wrap">
+          <DialogTitle className="flex items-start justify-start gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="h-10 w-10 rounded-xl bg-danger/15 border border-danger/30 flex items-center justify-center shrink-0 animate-breath-danger">
                 <Flame className="h-5 w-5 text-danger" />
               </div>
-              <div>
+              <div className="flex items-center gap-3">
                 <p className="font-bold tracking-tight">
                   风险警报 · 实时监控
                 </p>
-                <p className="text-[11px] text-muted-foreground font-normal mt-0.5">
-                  检测到 {alerts.length} 个新风险批次 · 击穿 {criticalAlerts.length} · 预警 {warningAlerts.length}
-                </p>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => setMuted(!muted)}
+                  title={muted ? "开启提示音" : "静音提示音"}
+                >
+                  {muted ? (
+                    <VolumeX className="h-3.5 w-3.5 text-muted-foreground" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5 text-success" />
+                  )}
+                </Button>
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setMuted(!muted)}
-                title={muted ? "开启提示音" : "静音提示音"}
-              >
-                {muted ? (
-                  <VolumeX className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <Volume2 className="h-4 w-4 text-success" />
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={onDismissAll}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <p className="text-[11px] text-muted-foreground font-normal w-full pl-12">
+              检测到 {alerts.length} 个新风险批次 · 击穿 {criticalAlerts.length} · 预警 {warningAlerts.length}
+            </p>
           </DialogTitle>
         </DialogHeader>
 
@@ -236,11 +225,11 @@ export function RiskAlertDialog({
             可在「系统设置 → 风险预警 & 实时联动」中关闭弹窗
           </p>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={onDismissAll}>
+            <Button variant="outline" size="sm" onClick={onDismissAll}>
               全部知晓
             </Button>
             <Link href="/batch/0">
-              <Button size="sm" className="gap-1" variant="gradient">
+              <Button size="sm" className="gap-1" variant="danger">
                 <Flame className="h-3.5 w-3.5" />
                 处理击穿批次
               </Button>

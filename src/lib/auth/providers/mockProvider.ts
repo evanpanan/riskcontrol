@@ -1,8 +1,10 @@
 import {
   APP_ROLES,
+  type AppRole,
   type AppSessionUser,
   type MockUserKey,
   MOCK_USER_META,
+  ROLE_LABELS,
 } from '@/types/auth';
 
 const MOCK_LS_KEY = 'rbac_mock_session_v1';
@@ -12,10 +14,11 @@ interface CustomUserStored {
   id: string;
   displayName: string;
   email: string;
-  role: 'RISK_MANAGER' | 'BD_MANAGER' | 'OPERATIONS';
+  role: AppRole;
   whatsapp?: string;
   bdManagerFullName?: string;
   avatarInitials: string;
+  avatarDataUrl?: string;
   enabled: boolean;
   createdAt: string;
 }
@@ -35,20 +38,15 @@ export function getCustomMockUsers(): Record<string, typeof MOCK_USER_META[keyof
     for (const u of parsed) {
       if (!u.enabled) continue;
       const key = `custom_${u.id}` as MockUserKey;
-      const role =
-        u.role === 'RISK_MANAGER'
-          ? APP_ROLES.RISK_MANAGER
-          : u.role === 'BD_MANAGER'
-          ? APP_ROLES.BD_MANAGER
-          : APP_ROLES.OPERATIONS;
-      const roleShort =
-        role === APP_ROLES.RISK_MANAGER ? '风控总监' : role === APP_ROLES.BD_MANAGER ? 'BD经理' : '运营';
+      const role = (isAllowedRole(u.role) ? u.role : APP_ROLES.OPERATIONS) as AppRole;
+      const roleShort = ROLE_LABELS[role] ?? '运营';
       out[key] = {
         id: u.id,
         email: u.email,
         role,
         displayName: u.displayName,
         avatarInitials: u.avatarInitials || 'US',
+        avatarDataUrl: u.avatarDataUrl,
         bdManagerFullName: u.bdManagerFullName,
         menuLabel: `${roleShort} · ${u.displayName}`,
       };
@@ -57,6 +55,10 @@ export function getCustomMockUsers(): Record<string, typeof MOCK_USER_META[keyof
   } catch {
     return {};
   }
+}
+
+function isAllowedRole(r: unknown): r is AppRole {
+  return r === APP_ROLES.ADMIN || r === APP_ROLES.RISK_MANAGER || r === APP_ROLES.BD_MANAGER || r === APP_ROLES.OPERATIONS;
 }
 
 export function getAllMockUsersMeta(): typeof MOCK_USER_META {
@@ -104,6 +106,16 @@ export function clearSession(): void {
   }
 }
 
+export function createDefaultAdminSession(): AppSessionUser {
+  return {
+    id: MOCK_USER_META.admin_root.id,
+    email: MOCK_USER_META.admin_root.email,
+    role: APP_ROLES.ADMIN,
+    displayName: MOCK_USER_META.admin_root.displayName,
+    avatarInitials: MOCK_USER_META.admin_root.avatarInitials,
+  };
+}
+
 export function createDefaultRiskManagerSession(): AppSessionUser {
   return {
     id: MOCK_USER_META.risk_evan.id,
@@ -122,6 +134,7 @@ export function createMockSessionByKey(key: MockUserKey): AppSessionUser {
     role: meta.role,
     displayName: meta.displayName,
     avatarInitials: meta.avatarInitials,
+    avatarDataUrl: (meta as any).avatarDataUrl,
     bdManagerFullName: meta.bdManagerFullName,
   };
 }

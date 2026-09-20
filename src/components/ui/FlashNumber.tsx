@@ -77,12 +77,27 @@ export function FlashNumber({
   const [displayValue, setDisplayValue] = useState<number>(
     animateOnMount ? 0 : value
   );
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelRaf = () => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+  };
+  const clearFallback = () => {
+    if (fallbackTimerRef.current !== null) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  };
+  const ensureFinalValueSoon = (target: number) => {
+    clearFallback();
+    fallbackTimerRef.current = setTimeout(() => {
+      setDisplayValue(target);
+      phaseRef.current = "idle";
+      fallbackTimerRef.current = null;
+    }, 1500);
   };
 
   const runTween = (from: number, to: number, onDone?: () => void) => {
@@ -106,13 +121,14 @@ export function FlashNumber({
         setDisplayValue(to);
         rafRef.current = null;
         phaseRef.current = "idle";
+        clearFallback();
         onDone?.();
       }
     };
     rafRef.current = requestAnimationFrame(tick);
+    ensureFinalValueSoon(to);
   };
 
-  // 唯一标记「本次挂载是否已完成 mount 动画」的实例级 key
   const mountAnimatedKey = useRef<number>(0);
   useEffect(() => {
     const myKey = ++mountAnimatedKey.current;
@@ -121,6 +137,7 @@ export function FlashNumber({
     if (!animateOnMount || value === 0) {
       setDisplayValue(value);
       phaseRef.current = "idle";
+      clearFallback();
       return () => {
         if (myKey === mountAnimatedKey.current) {
           cancelRaf();
@@ -135,11 +152,10 @@ export function FlashNumber({
     const tFlash = setTimeout(() => setFlash(null), 1400);
 
     return () => {
-      // Strict 模式下：第一次 unmount 时，停止 tween + 重置关键标记，
-      // 让第二次 (真实挂载) mount effect 再重新启动动画。
       if (myKey === mountAnimatedKey.current) {
         cancelRaf();
         clearTimeout(tFlash);
+        clearFallback();
         phaseRef.current = "idle";
         mountAnimatedKey.current = 0;
         setFlash(null);
@@ -149,8 +165,6 @@ export function FlashNumber({
   }, []);
 
   useEffect(() => {
-    // mount 刚过（或 Strict 双调用后真的挂载）时，
-    // 如果 displayValue 仍为 0 但目标 value != 0 → 强制追一次
     if (phaseRef.current === "idle" && displayValue === 0 && value !== 0) {
       phaseRef.current = "mounting";
       setFlash(value >= 0 ? "up" : "down");
@@ -158,7 +172,15 @@ export function FlashNumber({
       const t = setTimeout(() => setFlash(null), 1400);
       return () => clearTimeout(t);
     }
-    if (value === valueRef.current) return;
+    if (value === valueRef.current) {
+      if (
+        phaseRef.current === "idle" &&
+        Math.abs(displayValue - value) > Math.max(1e-6, Math.abs(value) * 1e-4)
+      ) {
+        setDisplayValue(value);
+      }
+      return;
+    }
     const prev = valueRef.current;
     valueRef.current = value;
     setFlash(value > prev ? "up" : "down");
@@ -169,7 +191,12 @@ export function FlashNumber({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
-  useEffect(() => cancelRaf, []);
+  useEffect(() => {
+    return () => {
+      cancelRaf();
+      clearFallback();
+    };
+  }, []);
 
   return (
     <span

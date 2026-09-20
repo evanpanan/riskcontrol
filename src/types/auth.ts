@@ -1,16 +1,25 @@
-export type AppRole = 'RISK_MANAGER' | 'BD_MANAGER' | 'OPERATIONS';
+export type AppRole = 'ADMIN' | 'RISK_MANAGER' | 'BD_MANAGER' | 'OPERATIONS';
 
 export const APP_ROLES = {
+  ADMIN: 'ADMIN',
   RISK_MANAGER: 'RISK_MANAGER',
   BD_MANAGER: 'BD_MANAGER',
   OPERATIONS: 'OPERATIONS',
 } as const;
 
 export const ALLOWED_ROLES: readonly AppRole[] = [
+  APP_ROLES.ADMIN,
   APP_ROLES.RISK_MANAGER,
   APP_ROLES.BD_MANAGER,
   APP_ROLES.OPERATIONS,
 ] as const;
+
+export const ROLE_LABELS: Record<AppRole, string> = {
+  ADMIN: '系统管理员',
+  RISK_MANAGER: '风控总监',
+  BD_MANAGER: 'BD经理',
+  OPERATIONS: '运营',
+};
 
 export interface AppSessionUser {
   id: string;
@@ -18,6 +27,7 @@ export interface AppSessionUser {
   role: AppRole;
   displayName: string;
   avatarInitials: string;
+  avatarDataUrl?: string;
   bdManagerFullName?: string;
 }
 
@@ -27,11 +37,17 @@ export function isAllowedRole(r: unknown): r is AppRole {
 }
 
 export type MockUserKey =
+  | 'admin_root'
   | 'risk_evan'
   | 'bd_lixiaoming'
   | 'bd_wangsy'
   | 'bd_zhangzhiq'
   | 'bd_liujia';
+
+export const MOCK_DEFAULT_ADMIN_CREDENTIALS = {
+  email: 'admin@riskcontrol.io',
+  password: 'Admin@Risk2026',
+};
 
 export const MOCK_USER_META: Record<
   MockUserKey,
@@ -41,10 +57,21 @@ export const MOCK_USER_META: Record<
     role: AppRole;
     displayName: string;
     avatarInitials: string;
+    avatarDataUrl?: string;
     bdManagerFullName?: string;
     menuLabel: string;
+    defaultPassword?: string;
   }
 > = {
+  admin_root: {
+    id: 'user_admin_root_demo_00',
+    email: MOCK_DEFAULT_ADMIN_CREDENTIALS.email,
+    role: APP_ROLES.ADMIN,
+    displayName: '系统管理员 (Administrator)',
+    avatarInitials: 'AD',
+    menuLabel: '系统管理员 · Admin',
+    defaultPassword: MOCK_DEFAULT_ADMIN_CREDENTIALS.password,
+  },
   risk_evan: {
     id: 'user_risk_evan_pan_demo_01',
     email: 'evan.pan@institution.com',

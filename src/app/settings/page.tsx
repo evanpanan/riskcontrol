@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { APP_ROLES } from "@/types/auth";
+import { toast } from "sonner";
 import {
   Settings,
   Shield,
@@ -47,28 +48,90 @@ import {
   X,
   MonitorDot,
   Eye,
+  ImagePlus,
+  Palette,
+  RotateCcw,
+  Upload,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import {
   DEFAULT_RISK_RECIPIENTS,
   RiskRecipient,
   getRiskRecipients,
   setRiskRecipients,
 } from "@/lib/riskRecipients";
+import { sendTestNotification } from "@/lib/notifier";
 
 const LS_KEY = "risk_control_settings";
 const RECIPIENTS_LS_KEY = "risk_control_recipients";
 const USERS_LS_KEY = "risk_control_users_v1";
 
+type CountryCode = {
+  code: string;
+  label: string;
+  country: string;
+  isDefault?: boolean;
+};
+
+const COUNTRY_CODES: CountryCode[] = [
+  { code: "+852", country: "HK", label: "🇭🇰 香港 Hong Kong", isDefault: true },
+  { code: "+86",  country: "CN", label: "🇨🇳 中国大陆 China" },
+  { code: "+65",  country: "SG", label: "🇸🇬 新加坡 Singapore" },
+  { code: "+886", country: "TW", label: "🇹🇼 台湾 Taiwan" },
+  { code: "+60",  country: "MY", label: "🇲🇾 马来西亚 Malaysia" },
+  { code: "+66",  country: "TH", label: "🇹🇭 泰国 Thailand" },
+  { code: "+81",  country: "JP", label: "🇯🇵 日本 Japan" },
+  { code: "+82",  country: "KR", label: "🇰🇷 韩国 Korea" },
+  { code: "+1",   country: "US", label: "🇺🇸 美国 United States" },
+  { code: "+44",  country: "GB", label: "🇬🇧 英国 United Kingdom" },
+  { code: "+61",  country: "AU", label: "🇦🇺 澳大利亚 Australia" },
+  { code: "+49",  country: "DE", label: "🇩🇪 德国 Germany" },
+  { code: "+33",  country: "FR", label: "🇫🇷 法国 France" },
+  { code: "+91",  country: "IN", label: "🇮🇳 印度 India" },
+  { code: "+63",  country: "PH", label: "🇵🇭 菲律宾 Philippines" },
+  { code: "+62",  country: "ID", label: "🇮🇩 印尼 Indonesia" },
+  { code: "+84",  country: "VN", label: "🇻🇳 越南 Vietnam" },
+  { code: "CUSTOM", country: "CUSTOM", label: "✏️ 自定义 / 手动输入" },
+];
+
+function parseWhatsApp(v?: string | null): { code: string; local: string; customRaw?: string } {
+  if (!v) return { code: "+852", local: "" };
+  if (v.startsWith("CUSTOM:")) return { code: "CUSTOM", local: "", customRaw: v.slice("CUSTOM:".length) };
+  const m = v.match(/^(\+\d+)[-\s]?(.*)$/);
+  if (m) {
+    const code = COUNTRY_CODES.find((c) => c.code === m[1]) ? m[1] : "+852";
+    return { code, local: m[2] || "" };
+  }
+  return { code: "+852", local: v };
+}
+
+function buildWhatsApp(code: string, local: string, customRaw?: string): string {
+  if (code === "CUSTOM") {
+    const raw = (customRaw || "").trim();
+    return raw ? `CUSTOM:${raw}` : "";
+  }
+  const l = (local || "").replace(/[^\d]/g, "");
+  return l ? `${code}-${l}` : "";
+}
+
+function displayWhatsApp(v?: string | null): string {
+  if (!v) return "";
+  if (v.startsWith("CUSTOM:")) return v.slice("CUSTOM:".length);
+  return v;
+}
+
 interface SystemAppUser {
   id: string;
   displayName: string;
   email: string;
-  role: "RISK_MANAGER" | "BD_MANAGER" | "OPERATIONS";
+  role: "ADMIN" | "RISK_MANAGER" | "BD_MANAGER" | "OPERATIONS";
   whatsapp?: string;
   bdManagerFullName?: string;
   avatarInitials: string;
+  avatarDataUrl?: string;
   enabled: boolean;
   createdAt: string;
 }
@@ -83,14 +146,24 @@ const emptyUserForm = (): UserFormState => ({
   role: "BD_MANAGER",
   whatsapp: "",
   bdManagerFullName: "",
+  avatarDataUrl: "",
   enabled: true,
 });
 
 const SYSTEM_ROLE_LABELS: Record<SystemAppUser["role"], string> = {
+  ADMIN: "系统管理员",
   RISK_MANAGER: "风控总监",
   BD_MANAGER: "BD经理",
   OPERATIONS: "运营",
 };
+
+function computeInitials(name: string, email?: string): string {
+  const src = (name || email || '??').trim();
+  if (!src) return 'US';
+  const parts = src.split(/[\s\-_\.@]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase().slice(0, 2);
+  return src.slice(0, 2).toUpperCase();
+}
 
 const ROLE_LABELS: Record<RiskRecipient["role"], string> = {
   RISK_MANAGER: "风控经理",
@@ -122,36 +195,66 @@ const emptyForm = (): RecipientFormState => ({
   enabled: true,
 });
 
+interface SettingsFormState {
+  warningThreshold: number;
+  marginThreshold: number;
+  priorityRatio: number;
+  subordinateRatio: number;
+  emailWebhook: string;
+  whatsappWebhook: string;
+  defaultRiskEmail: string;
+  emergencyPhone: string;
+  dataSource: string;
+  apiKey: string;
+  vipThreshold: number;
+  vipClient: number;
+  vipInstitution: number;
+  normalClient: number;
+  normalInstitution: number;
+  webAlertEnabled: boolean;
+  webAlertSound: boolean;
+  webAlertCriticalOnly: boolean;
+  realtimeTickEnabled: boolean;
+  realtimeTickIntervalSec: number;
+}
+
+const DEFAULT_FORM: SettingsFormState = {
+  warningThreshold: 15,
+  marginThreshold: 20,
+  priorityRatio: 70,
+  subordinateRatio: 30,
+  emailWebhook: "https://api.example.com/email-webhook",
+  whatsappWebhook: "",
+  defaultRiskEmail: "risk-control@institution.com",
+  emergencyPhone: "+852-9123-4567",
+  dataSource: "Yahoo Finance (免费)",
+  apiKey: "",
+  vipThreshold: 100000,
+  vipClient: 40,
+  vipInstitution: 60,
+  normalClient: 30,
+  normalInstitution: 70,
+  webAlertEnabled: true,
+  webAlertSound: true,
+  webAlertCriticalOnly: false,
+  realtimeTickEnabled: true,
+  realtimeTickIntervalSec: 8,
+};
+
 export default function SettingsPage() {
   const [saved, setSaved] = useState<string | null>(null);
-  const [form, setForm] = useState(() => {
+  const [hydrated, setHydrated] = useState(false);
+  const [form, setForm] = useState<SettingsFormState>(() => DEFAULT_FORM);
+  useEffect(() => {
+    setHydrated(true);
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<SettingsFormState>;
+        setForm((prev) => ({ ...prev, ...parsed }));
+      }
     } catch (e) {}
-    return {
-      warningThreshold: 15,
-      marginThreshold: 20,
-      priorityRatio: 70,
-      subordinateRatio: 30,
-      emailWebhook: "https://api.example.com/email-webhook",
-      whatsappWebhook: "",
-      defaultRiskEmail: "risk-control@institution.com",
-      emergencyPhone: "+852-9123-4567",
-      dataSource: "Yahoo Finance (免费)",
-      apiKey: "",
-      vipThreshold: 100000,
-      vipClient: 40,
-      vipInstitution: 60,
-      normalClient: 30,
-      normalInstitution: 70,
-      webAlertEnabled: true,
-      webAlertSound: true,
-      webAlertCriticalOnly: false,
-      realtimeTickEnabled: true,
-      realtimeTickIntervalSec: 8,
-    };
-  });
+  }, []);
   useEffect(() => {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(form));
@@ -159,19 +262,19 @@ export default function SettingsPage() {
   }, [form]);
 
   // 收件人：持久化 + 联动 riskRecipients global
-  const [recipients, setRecipients] = useState<RiskRecipient[]>(() => {
+  const [recipients, setRecipients] = useState<RiskRecipient[]>(() => getRiskRecipients());
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(RECIPIENTS_LS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           setRiskRecipients(parsed);
-          return parsed;
+          setRecipients(parsed);
         }
       }
     } catch (e) {}
-    return getRiskRecipients();
-  });
+  }, []);
   useEffect(() => {
     try {
       localStorage.setItem(RECIPIENTS_LS_KEY, JSON.stringify(recipients));
@@ -179,23 +282,69 @@ export default function SettingsPage() {
     setRiskRecipients(recipients);
   }, [recipients]);
 
+  // 品牌 Logo 管理（localStorage 持久化）
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+  const logoFileRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    setLogoDataUrl(getStoredLogo());
+    const onChange = () => setLogoDataUrl(getStoredLogo());
+    window.addEventListener("risk-control:logo-changed", onChange);
+    window.addEventListener("storage", (e) => { if (e.key === "risk_control_logo_v1") onChange(); });
+    return () => {
+      window.removeEventListener("risk-control:logo-changed", onChange);
+      window.removeEventListener("storage", onChange as any);
+    };
+  }, []);
+  const handleLogoFile = (file: File) => {
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Logo 文件不能超过 2MB");
+      return;
+    }
+    if (!/^image\//.test(file.type)) {
+      toast.error("请上传图片格式的 Logo");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      setStoredLogo(dataUrl);
+      setLogoDataUrl(dataUrl);
+      setSaved("logo");
+      setTimeout(() => setSaved(null), 2400);
+      toast.success("品牌 Logo 已更新");
+    };
+    reader.onerror = () => toast.error("读取文件失败");
+    reader.readAsDataURL(file);
+  };
+  const onLogoInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) handleLogoFile(f);
+    e.target.value = "";
+  };
+  const resetLogo = () => {
+    setStoredLogo(null);
+    setLogoDataUrl(null);
+    toast.success("已恢复默认 Logo");
+  };
+
   // 新增/编辑收件人 Dialog
   const [dlgOpen, setDlgOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rForm, setRForm] = useState<RecipientFormState>(emptyForm());
   const [rErrors, setRErrors] = useState<Record<string, string>>({});
+  const [rWA, setRWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
 
   // 系统账号管理
-  const [users, setUsers] = useState<SystemAppUser[]>(() => {
+  const [users, setUsers] = useState<SystemAppUser[]>(() => []);
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(USERS_LS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) setUsers(parsed);
       }
     } catch (e) {}
-    return [];
-  });
+  }, []);
   useEffect(() => {
     try {
       localStorage.setItem(USERS_LS_KEY, JSON.stringify(users));
@@ -205,10 +354,13 @@ export default function SettingsPage() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [uForm, setUForm] = useState<UserFormState>(emptyUserForm());
   const [uErrors, setUErrors] = useState<Record<string, string>>({});
+  const [uWA, setUWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
+  const uAvatarFileRef = useRef<HTMLInputElement | null>(null);
 
   const openAddUser = () => {
     setEditingUserId(null);
     setUForm(emptyUserForm());
+    setUWA({ code: "+852", local: "", customRaw: "" });
     setUErrors({});
     setUserDlgOpen(true);
   };
@@ -221,10 +373,38 @@ export default function SettingsPage() {
       role: u.role,
       whatsapp: u.whatsapp ?? "",
       bdManagerFullName: u.bdManagerFullName ?? "",
+      avatarDataUrl: u.avatarDataUrl ?? "",
       enabled: u.enabled,
     });
+    const p = parseWhatsApp(u.whatsapp ?? "");
+    setUWA({ code: p.code, local: p.local, customRaw: p.customRaw ?? "" });
     setUErrors({});
     setUserDlgOpen(true);
+  };
+  const handleUAvatarFile = (file: File) => {
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("头像文件不能超过 2MB");
+      return;
+    }
+    if (!/^image\//.test(file.type)) {
+      toast.error("请上传图片格式的头像");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setUForm({ ...uForm, avatarDataUrl: String(reader.result || "") });
+      toast.success("头像已选择，保存后生效");
+    };
+    reader.onerror = () => toast.error("读取头像失败");
+    reader.readAsDataURL(file);
+  };
+  const onUAvatarInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) handleUAvatarFile(f);
+    e.target.value = "";
+  };
+  const resetUAvatar = () => {
+    setUForm({ ...uForm, avatarDataUrl: "" });
   };
   const validateUser = (): boolean => {
     const errs: Record<string, string> = {};
@@ -236,18 +416,22 @@ export default function SettingsPage() {
   };
   const saveUser = () => {
     if (!validateUser()) return;
+    const waFinal = buildWhatsApp(uWA.code, uWA.local, uWA.customRaw);
     const nameTrim = uForm.displayName.trim();
-    const initials = nameTrim
-      .split(/\s+/)
-      .map((s) => s[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
+    const initials = computeInitials(nameTrim, uForm.email);
+    const avatarDataUrl = uForm.avatarDataUrl || undefined;
     let nextList: SystemAppUser[];
     if (editingUserId) {
       nextList = users.map((u) =>
         u.id === editingUserId
-          ? { ...u, ...uForm, id: editingUserId, avatarInitials: initials || u.avatarInitials }
+          ? {
+              ...u,
+              ...uForm,
+              id: editingUserId,
+              avatarInitials: initials || u.avatarInitials,
+              avatarDataUrl,
+              whatsapp: waFinal || undefined,
+            }
           : u
       );
       setUsers(nextList);
@@ -257,9 +441,10 @@ export default function SettingsPage() {
         displayName: nameTrim,
         email: uForm.email.trim(),
         role: uForm.role,
-        whatsapp: uForm.whatsapp?.trim() || undefined,
+        whatsapp: waFinal || undefined,
         bdManagerFullName: uForm.bdManagerFullName?.trim() || undefined,
-        avatarInitials: initials || "US",
+        avatarInitials: initials,
+        avatarDataUrl,
         enabled: !!uForm.enabled,
         createdAt: new Date().toISOString(),
       };
@@ -291,12 +476,15 @@ export default function SettingsPage() {
   const openAdd = () => {
     setEditingId(null);
     setRForm(emptyForm());
+    setRWA({ code: "+852", local: "", customRaw: "" });
     setRErrors({});
     setDlgOpen(true);
   };
   const openEdit = (r: RiskRecipient) => {
     setEditingId(r.id);
     setRForm({ ...r });
+    const p = parseWhatsApp(r.whatsapp ?? "");
+    setRWA({ code: p.code, local: p.local, customRaw: p.customRaw ?? "" });
     setRErrors({});
     setDlgOpen(true);
   };
@@ -309,10 +497,11 @@ export default function SettingsPage() {
   };
   const saveRecipient = () => {
     if (!validateRecipient()) return;
+    const waFinal = buildWhatsApp(rWA.code, rWA.local, rWA.customRaw);
     let nextList: RiskRecipient[];
     if (editingId) {
       nextList = recipients.map(r =>
-        r.id === editingId ? ({ ...r, ...rForm, id: editingId } as RiskRecipient) : r
+        r.id === editingId ? ({ ...r, ...rForm, id: editingId, whatsapp: waFinal || undefined } as RiskRecipient) : r
       );
       setRecipients(nextList);
     } else {
@@ -321,7 +510,7 @@ export default function SettingsPage() {
         name: rForm.name.trim(),
         role: rForm.role,
         email: rForm.email.trim(),
-        whatsapp: rForm.whatsapp?.trim() || undefined,
+        whatsapp: waFinal || undefined,
         enabled: !!rForm.enabled,
       };
       nextList = [...recipients, newR];
@@ -348,13 +537,43 @@ export default function SettingsPage() {
   const Field = (props: any) => (
     <Input
       {...props}
-      onChange={(e: any) => setForm({ ...form, [props.name]: e.target.value })}
+      onChange={(e: any) => setForm({ ...form, [props.name as keyof SettingsFormState]: e.target.value } as any)}
       defaultValue={undefined}
-      value={form[props.name] ?? props.defaultValue ?? ""}
+      value={(form as any)[props.name] ?? props.defaultValue ?? ""}
     />
   );
 
   const enabledCount = recipients.filter(r => r.enabled).length;
+
+  const [testStatus, setTestStatus] = useState<{ email?: string; whatsapp?: string }>({});
+  const [sendingTest, setSendingTest] = useState<"email" | "whatsapp" | null>(null);
+  const handleSendTest = async (channel: "email" | "whatsapp") => {
+    setSendingTest(channel);
+    setTestStatus((s) => ({ ...s, [channel]: undefined }));
+    try {
+      const targets = channel === "email" ? [form.defaultRiskEmail] : [form.emergencyPhone];
+      if (!targets[0]) {
+        throw new Error(channel === "email" ? "请先填写默认风控收件人" : "请先填写紧急联系人电话");
+      }
+      const overrideWebhook = channel === "email" ? form.emailWebhook : form.whatsappWebhook;
+      const r = await sendTestNotification(channel, targets, overrideWebhook || undefined);
+      const sentTo = r.channels[channel]?.sentTo?.join(", ");
+      if (r.channels[channel]?.success) {
+        setTestStatus((s) => ({ ...s, [channel]: `OK → ${sentTo || targets[0]}` }));
+        toast.success(
+          channel === "email" ? `测试邮件已发送到 ${sentTo || targets[0]}` : `测试 WhatsApp 已发送到 ${sentTo || targets[0]}`
+        );
+      } else {
+        throw new Error(r.channels[channel]?.error || (channel === "email" ? "发送测试邮件失败" : "发送测试 WhatsApp 失败"));
+      }
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      setTestStatus((s) => ({ ...s, [channel]: `ERR: ${msg.slice(0, 80)}` }));
+      toast.error(msg);
+    } finally {
+      setSendingTest(null);
+    }
+  };
 
   return (
     <AuthGuard route="/settings" allowed={[APP_ROLES.RISK_MANAGER]}>
@@ -625,12 +844,19 @@ export default function SettingsPage() {
                 </p>
               </div>
             </div>
-            <Badge variant="success" className="gap-1 text-[10px]">
-              <CheckCircle2 className="h-2.5 w-2.5" />
-              已配置
-            </Badge>
+            {hydrated && form.emailWebhook ? (
+              <Badge variant="success" className="gap-1 text-[10px]">
+                <CheckCircle2 className="h-2.5 w-2.5" />
+                已配置
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="gap-1 text-[10px]">
+                <Info className="h-2.5 w-2.5" />
+                待配置
+              </Badge>
+            )}
           </div>
-          <Field name="emailWebhook" placeholder="https://api.example.com/email-webhook" className="font-mono text-xs" />
+          <Field name="emailWebhook" placeholder="https://hook.make.com/xxx 或留空用 env.RESEND_API_KEY" className="font-mono text-xs" />
         </div>
 
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
@@ -646,12 +872,19 @@ export default function SettingsPage() {
                 </p>
               </div>
             </div>
-            <Badge variant="secondary" className="gap-1 text-[10px]">
-              <Info className="h-2.5 w-2.5" />
-              待配置
-            </Badge>
+            {hydrated && form.whatsappWebhook ? (
+              <Badge variant="success" className="gap-1 text-[10px]">
+                <CheckCircle2 className="h-2.5 w-2.5" />
+                已配置
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="gap-1 text-[10px]">
+                <Info className="h-2.5 w-2.5" />
+                待配置
+              </Badge>
+            )}
           </div>
-          <Field name="whatsappWebhook" placeholder="https://api.whatsapp.com/send..." className="font-mono text-xs" />
+          <Field name="whatsappWebhook" placeholder="https://graph.facebook.com/xxx 或留空用 env.TWILIO 凭证" className="font-mono text-xs" />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -665,12 +898,47 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="pt-3 border-t border-border/40 flex items-center gap-3">
-          <Button className="gap-1.5" onClick={() => save("notify")}>
-            <Save className="h-4 w-4" />
-            保存通知配置
-          </Button>
-          {saved === "notify" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存到本地</Badge>}
+        <div className="pt-3 border-t border-border/40 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button className="gap-1.5" onClick={() => save("notify")}>
+              <Save className="h-4 w-4" />
+              保存通知配置
+            </Button>
+            {saved === "notify" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存到本地</Badge>}
+            <div className="h-6 w-px bg-border/50 mx-1 hidden sm:block" />
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => handleSendTest("email")}
+              disabled={sendingTest === "email"}
+            >
+              <Mail className="h-3.5 w-3.5" />
+              {sendingTest === "email" ? "发送中…" : "发送测试邮件"}
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => handleSendTest("whatsapp")}
+              disabled={sendingTest === "whatsapp"}
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              {sendingTest === "whatsapp" ? "发送中…" : "发送测试 WhatsApp"}
+            </Button>
+          </div>
+          {(testStatus.email || testStatus.whatsapp) && (
+            <div className="space-y-1 text-[11px] font-mono">
+              {testStatus.email && (
+                <div className={cn(testStatus.email.startsWith("OK") ? "text-success" : "text-danger")}>
+                  Email: {testStatus.email}
+                </div>
+              )}
+              {testStatus.whatsapp && (
+                <div className={cn(testStatus.whatsapp.startsWith("OK") ? "text-success" : "text-danger")}>
+                  WhatsApp: {testStatus.whatsapp}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -737,7 +1005,7 @@ export default function SettingsPage() {
                   </span>
                   {r.whatsapp && (
                     <span className="inline-flex items-center gap-1">
-                      <MessageCircle className="h-3 w-3" />{r.whatsapp}
+                      <MessageCircle className="h-3 w-3" />{displayWhatsApp(r.whatsapp)}
                     </span>
                   )}
                 </div>
@@ -871,6 +1139,74 @@ export default function SettingsPage() {
   </div>
 
   <div className="space-y-6">
+    {/* Branding Logo */}
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2">
+          <Palette className="h-4 w-4 text-primary" />
+          品牌外观 · Logo
+        </CardTitle>
+        <p className="text-[11px] text-muted-foreground mt-0.5">
+          仅风控总监可修改，保存后全局生效（本地持久化）
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        <div className="flex items-center gap-4 p-4 rounded-xl border border-border/50 bg-secondary/30">
+          <div className="flex shrink-0 items-center justify-center">
+            <Logo size={56} />
+          </div>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="text-sm font-semibold truncate">当前预览</p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {logoDataUrl ? "✅ 自定义 Logo 已启用" : "使用系统默认渐变 Logo"}
+            </p>
+            {logoDataUrl && (
+              <p className="text-[10.5px] text-primary/80 font-mono truncate">
+                {(logoDataUrl.length / 1024).toFixed(1)} KB · data URL
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            className="gap-1.5 h-9"
+            onClick={() => logoFileRef.current?.click()}
+          >
+            <Upload className="h-4 w-4" />
+            上传 Logo 图片
+          </Button>
+          <input
+            ref={logoFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+            className="hidden"
+            onChange={onLogoInput}
+          />
+          <Button
+            variant="ghost"
+            className="gap-1.5 h-9 text-muted-foreground hover:text-foreground"
+            onClick={resetLogo}
+          >
+            <RotateCcw className="h-4 w-4" />
+            恢复默认
+          </Button>
+        </div>
+        <div className="rounded-lg border border-dashed border-border/70 bg-background/30 p-3">
+          <div className="flex items-start gap-2">
+            <ImagePlus className="h-4 w-4 shrink-0 mt-0.5 text-primary/80" />
+            <div className="min-w-0 space-y-0.5 text-[11px] text-muted-foreground">
+              <p className="font-medium text-foreground/90">上传规范</p>
+              <p>• 支持 PNG / JPG / WebP / SVG / GIF，最大 2MB</p>
+              <p>• 建议尺寸 256×256 或更大的正方形图标</p>
+              <p>• 透明背景 PNG 效果最佳，会自动应用阴影和圆角</p>
+            </div>
+          </div>
+        </div>
+        {saved === "logo" && <Badge variant="success" className="gap-1 text-[10px] w-fit"><CheckCircle2 className="h-2.5 w-2.5" />Logo 已保存</Badge>}
+      </CardContent>
+    </Card>
+
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -902,17 +1238,27 @@ export default function SettingsPage() {
                 )}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-9 w-9 rounded-lg gradient-primary shrink-0 flex items-center justify-center shadow-sm shadow-primary/20">
-                    <span className="text-[11px] font-bold text-primary-foreground">
-                      {u.avatarInitials}
-                    </span>
-                  </div>
+                  {hydrated && u.avatarDataUrl ? (
+                    <img
+                      src={u.avatarDataUrl}
+                      alt={u.displayName}
+                      className="h-9 w-9 rounded-lg object-cover border border-border/60 shrink-0 shadow-sm"
+                    />
+                  ) : (
+                    <div className="h-9 w-9 rounded-lg gradient-primary shrink-0 flex items-center justify-center shadow-sm shadow-primary/20">
+                      <span className="text-[11px] font-bold text-primary-foreground">
+                        {u.avatarInitials}
+                      </span>
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 text-sm font-semibold">
                       {u.displayName}
                       <Badge
                         variant={
-                          u.role === "RISK_MANAGER"
+                          u.role === "ADMIN"
+                            ? "danger"
+                            : u.role === "RISK_MANAGER"
                             ? "primary"
                             : u.role === "BD_MANAGER"
                             ? "warning"
@@ -930,7 +1276,7 @@ export default function SettingsPage() {
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-[10.5px] text-muted-foreground font-mono truncate max-w-[400px]">
                       <span>{u.email}</span>
-                      {u.whatsapp && <span>· {u.whatsapp}</span>}
+                      {u.whatsapp && <span>· {displayWhatsApp(u.whatsapp)}</span>}
                       {u.bdManagerFullName && <span className="truncate">· {u.bdManagerFullName}</span>}
                     </div>
                   </div>
@@ -1146,12 +1492,42 @@ export default function SettingsPage() {
         <Label className="text-xs flex items-center gap-1">
           <MessageCircle className="h-3 w-3" /> WhatsApp（选填）
         </Label>
-        <Input
-          placeholder="+852-9123-4567"
-          value={rForm.whatsapp ?? ""}
-          onChange={(e) => setRForm({ ...rForm, whatsapp: e.target.value })}
-          className="font-mono text-xs"
-        />
+        <div className="grid grid-cols-[160px_1fr] gap-2">
+          <Select value={rWA.code} onValueChange={(v) => setRWA({ ...rWA, code: v })}>
+            <SelectTrigger className="h-9 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COUNTRY_CODES.map((c) => (
+                <SelectItem key={c.code} value={c.code} className="text-xs">
+                  {c.code === "CUSTOM" ? c.label : `${c.label} (${c.code})`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {rWA.code !== "CUSTOM" ? (
+            <Input
+              placeholder="本地号码，如 91234567"
+              value={rWA.local}
+              onChange={(e) => setRWA({ ...rWA, local: e.target.value.replace(/[^\d]/g, "") })}
+              className="font-mono text-xs h-9"
+              maxLength={20}
+            />
+          ) : (
+            <Input
+              placeholder="手动输入完整号码，如 +000-000000"
+              value={rWA.customRaw}
+              onChange={(e) => setRWA({ ...rWA, customRaw: e.target.value })}
+              className="font-mono text-xs h-9"
+              maxLength={40}
+            />
+          )}
+        </div>
+        {rWA.code !== "CUSTOM" && rWA.local && (
+          <p className="text-[10.5px] text-muted-foreground">
+            预览：<span className="font-mono text-foreground">{rWA.code}-{rWA.local}</span>
+          </p>
+        )}
       </div>
     </div>
     <DialogFooter className="gap-2 sm:gap-2">
@@ -1208,6 +1584,61 @@ export default function SettingsPage() {
           {uErrors.email && <p className="text-[11px] text-danger">{uErrors.email}</p>}
         </div>
       </div>
+      {/* 头像上传 */}
+      <div className="flex items-center gap-4 rounded-xl border border-border/40 bg-secondary/20 px-4 py-3">
+        <div className="shrink-0 relative">
+          {hydrated && uForm.avatarDataUrl ? (
+            <img
+              src={uForm.avatarDataUrl}
+              alt="头像预览"
+              className="h-14 w-14 rounded-xl object-cover border border-border/60 shadow-sm"
+            />
+          ) : (
+            <div className="h-14 w-14 rounded-xl gradient-primary flex items-center justify-center shadow shadow-primary/20">
+              <span className="text-sm font-bold text-primary-foreground leading-none">
+                {uForm.displayName ? computeInitials(uForm.displayName, uForm.email) : '??'}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0 space-y-1">
+          <Label className="text-xs flex items-center gap-1">
+            <ImagePlus className="h-3 w-3" /> 账户头像
+          </Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 text-[11px]"
+              onClick={() => uAvatarFileRef.current?.click()}
+            >
+              <Upload className="h-3.5 w-3.5" /> 上传图片
+            </Button>
+            {uForm.avatarDataUrl && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={resetUAvatar}
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> 恢复默认
+              </Button>
+            )}
+            <input
+              ref={uAvatarFileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+              onChange={onUAvatarInput}
+              className="hidden"
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            支持 PNG / JPG / WebP / SVG / GIF，最大 2MB；不上传则自动使用姓名首字母作为默认头像。
+          </p>
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">角色</Label>
@@ -1219,6 +1650,7 @@ export default function SettingsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="ADMIN" className="text-danger">⚡ 系统管理员（最高权限）</SelectItem>
               <SelectItem value="RISK_MANAGER">风控总监（全局权限）</SelectItem>
               <SelectItem value="BD_MANAGER">BD经理（仅管辖客户）</SelectItem>
               <SelectItem value="OPERATIONS">运营（只读/录入）</SelectItem>
@@ -1243,12 +1675,42 @@ export default function SettingsPage() {
         <Label className="text-xs flex items-center gap-1">
           <MessageCircle className="h-3 w-3" /> WhatsApp（选填）
         </Label>
-        <Input
-          placeholder="+852-9123-4567"
-          value={uForm.whatsapp ?? ""}
-          onChange={(e) => setUForm({ ...uForm, whatsapp: e.target.value })}
-          className="font-mono text-xs"
-        />
+        <div className="grid grid-cols-[160px_1fr] gap-2">
+          <Select value={uWA.code} onValueChange={(v) => setUWA({ ...uWA, code: v })}>
+            <SelectTrigger className="h-9 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {COUNTRY_CODES.map((c) => (
+                <SelectItem key={c.code} value={c.code} className="text-xs">
+                  {c.code === "CUSTOM" ? c.label : `${c.label} (${c.code})`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {uWA.code !== "CUSTOM" ? (
+            <Input
+              placeholder="本地号码，如 91234567"
+              value={uWA.local}
+              onChange={(e) => setUWA({ ...uWA, local: e.target.value.replace(/[^\d]/g, "") })}
+              className="font-mono text-xs h-9"
+              maxLength={20}
+            />
+          ) : (
+            <Input
+              placeholder="手动输入完整号码，如 +000-000000"
+              value={uWA.customRaw}
+              onChange={(e) => setUWA({ ...uWA, customRaw: e.target.value })}
+              className="font-mono text-xs h-9"
+              maxLength={40}
+            />
+          )}
+        </div>
+        {uWA.code !== "CUSTOM" && uWA.local && (
+          <p className="text-[10.5px] text-muted-foreground">
+            预览：<span className="font-mono text-foreground">{uWA.code}-{uWA.local}</span>
+          </p>
+        )}
       </div>
       {uForm.role === "BD_MANAGER" && (
         <div className="space-y-1.5">

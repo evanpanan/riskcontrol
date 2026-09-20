@@ -75,11 +75,13 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
   const isCritical = batch.riskLevel === RiskLevel.CRITICAL;
   const isWarning = batch.riskLevel === RiskLevel.WARNING;
 
+  const [hydrated, setHydrated] = React.useState(false);
   const [localClients, setLocalClients] = useState<Client[]>(() =>
-    mergeClientStatusesOnClientList((batch.clients ?? []) as Client[])
+    (batch.clients ?? []) as Client[]
   );
 
   React.useEffect(() => {
+    setHydrated(true);
     setLocalClients(mergeClientStatusesOnClientList((batch.clients ?? []) as Client[]));
     const onStoreChange = () => {
       setLocalClients(mergeClientStatusesOnClientList((batch.clients ?? []) as Client[]));
@@ -354,8 +356,8 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
       </div>
 
       {/* ===== Footer ===== */}
-      <div className="mt-auto px-5 pb-5 pt-2 flex items-center justify-between gap-2 border-t border-border/40">
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground min-w-0">
+      <div className="mt-auto px-5 pb-5 pt-2 flex items-center gap-3 border-t border-border/40">
+        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground min-w-0 shrink-0 flex-wrap">
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
             <Building2 className="h-3 w-3 shrink-0" />
             {formatDate(batch.signDate).slice(5)} → {formatDate(batch.maturityDate).slice(5)}
@@ -363,7 +365,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
           {(batch.cumulativeMarginCalls ?? 0) > 0 && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex items-center gap-1 text-warning whitespace-nowrap">
+                <span className="inline-flex items-center gap-1 text-warning whitespace-nowrap shrink-0">
                   <Wallet className="h-3 w-3 shrink-0" />
                   补仓 {formatCompactNumber(batch.cumulativeMarginCalls ?? 0)}
                 </span>
@@ -374,7 +376,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
         </div>
 
         {isCritical ? (
-          <div className="flex items-center gap-1.5" onClick={(e) => e.preventDefault()}>
+          <div className="flex items-center gap-1 ml-auto shrink-0" onClick={(e) => e.preventDefault()}>
             <RoleGate
               allowed={[APP_ROLES.RISK_MANAGER]}
               auditResource={`batch:notify_email:${batch.id}`}
@@ -435,7 +437,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
             </Tooltip>
             </RoleGate>
             <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER]}
+              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:fulfill_mc:${batch.id}`}
               auditAction="ui_component_denied"
             >
@@ -503,7 +505,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
             </RoleGate>
           </div>
         ) : (
-          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground group-hover:text-primary transition-colors">
+          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground group-hover:text-primary transition-colors ml-auto shrink-0">
             查看详情
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-0.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
           </div>

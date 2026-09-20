@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { Inter as FontSans } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import { AppSidebar } from "@/components/layout/AppSidebar";
-import { TopBar } from "@/components/layout/TopBar";
+import { AppShell } from "@/components/layout/AppShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth/authProvider";
 import { Toaster } from "sonner";
@@ -47,15 +46,7 @@ export default function RootLayout({
       >
         <AuthProvider>
           <TooltipProvider delayDuration={150}>
-            <div className="flex min-h-screen w-full bg-background">
-              <AppSidebar />
-              <div className="flex flex-1 flex-col min-w-0">
-                <TopBar />
-                <main className="flex-1 overflow-y-auto scrollbar-thin p-6">
-                  {children}
-                </main>
-              </div>
-            </div>
+            <AppShell>{children}</AppShell>
             <Toaster richColors position="top-right" closeButton toastOptions={{ className: 'rounded-xl border border-border/60' }} />
           </TooltipProvider>
         </AuthProvider>

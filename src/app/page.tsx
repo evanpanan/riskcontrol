@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { Suspense, useMemo, useState, useEffect, useRef } from "react";
 import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
 import { calculatePortfolioSummary, calculateBatchRiskMetrics } from "@/lib/riskEngine";
 import { KPICard } from "@/components/dashboard/KPICard";
@@ -10,6 +10,7 @@ import { RiskAlertDialog, RiskAlertItem } from "@/components/dashboard/RiskAlert
 import { Batch, RiskLevel } from "@prisma/client";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import type { AppSessionUser, AppRole } from "@/types/auth";
+import { filterBatchesForUser } from "@/lib/auth";
 import {
   Building2,
   TrendingUp,
@@ -40,7 +41,8 @@ export default function DashboardPage() {
   const { user, role } = useCurrentUser();
   const mockDataRef = useRef(getMockData());
   const [tick, setTick] = useState(0);
-  const batches = useMemo(() => mockDataRef.current.batches, [tick]);
+  const rawBatches = useMemo(() => mockDataRef.current.batches, [tick]);
+  const batches = useMemo(() => filterBatchesForUser(rawBatches, user ?? null), [rawBatches, user]);
   const stockHistory = useMemo(() => mockDataRef.current.stockHistory, [tick]);
   const summary = calculatePortfolioSummary(batches);
   const lockedCount = batches.filter((b) => b.status === "LOCKED").length;
@@ -51,6 +53,7 @@ export default function DashboardPage() {
   );
 
   const [stockFilter, setStockFilter] = useState<string>("ALL");
+  const [yearFilter, setYearFilter] = useState<string>("ALL");
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
 
   const pad = (n: number) => n.toString().padStart(2, "0");
@@ -70,10 +73,20 @@ export default function DashboardPage() {
 
   // ===== 风险预警弹窗 ACK & 构建alert列表 =====
   const [alerts, setAlerts] = useState<RiskAlertItem[]>([]);
-  const [webAlertSettings, setWebAlertSettings] = useState(() => getWebAlertSettings());
-  const acksRef = useRef(getAlertAcks());
+  const [hydrated, setHydrated] = useState(false);
+  const [webAlertSettings, setWebAlertSettings] = useState<ReturnType<typeof getWebAlertSettings>>({
+    webAlertEnabled: true,
+    webAlertSound: true,
+    webAlertCriticalOnly: false,
+    realtimeTickEnabled: true,
+    realtimeTickIntervalSec: 8,
+  });
+  const acksRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
+    setHydrated(true);
+    acksRef.current = getAlertAcks();
+    setWebAlertSettings(getWebAlertSettings());
     const onStorage = () => {
       acksRef.current = getAlertAcks();
       setWebAlertSettings(getWebAlertSettings());
@@ -137,22 +150,41 @@ export default function DashboardPage() {
   };
 
   // 构建月份Tab列表（按签约月份聚合）
-  const monthGroups = useMemo(() => {
-    const map: Record<string, { key: string; label: string; batches: typeof batches }> = {};
+  const { yearGroups, monthGroups } = useMemo(() => {
+    const mMap: Record<string, { key: string; label: string; year: string; batches: typeof batches }> = {};
     for (const b of batches) {
       const sign = new Date(b.signDate);
       const k = toMonthKey(sign);
-      if (!map[k]) {
-        map[k] = {
+      if (!mMap[k]) {
+        mMap[k] = {
           key: k,
           label: `${sign.getFullYear()}年${pad(sign.getMonth() + 1)}月`,
+          year: sign.getFullYear().toString(),
           batches: [],
         };
       }
-      map[k].batches.push(b);
+      mMap[k].batches.push(b);
     }
-    return Object.values(map).sort((a, b) => (a.key < b.key ? 1 : -1));
+    const months = Object.values(mMap).sort((a, b) => (a.key < b.key ? 1 : -1));
+    const yMap: Record<string, { year: string; count: number }> = {};
+    for (const m of months) {
+      if (!yMap[m.year]) yMap[m.year] = { year: m.year, count: 0 };
+      yMap[m.year].count += m.batches.length;
+    }
+    const years = Object.values(yMap).sort((a, b) => (a.year < b.year ? 1 : -1));
+    return { monthGroups: months, yearGroups: years };
   }, [batches]);
+  const yearOptions = useMemo(
+    () => [{ value: "ALL", label: "全部年份", count: batches.length }, ...yearGroups.map((y) => ({ value: y.year, label: `${y.year}年`, count: y.count }))],
+    [yearGroups, batches.length]
+  );
+  const shownMonthGroups = useMemo(
+    () => (yearFilter === "ALL" ? monthGroups : monthGroups.filter((m) => m.year === yearFilter)),
+    [monthGroups, yearFilter]
+  );
+  const yearMonthFilterActive = yearFilter !== "ALL" || monthFilter !== "ALL";
+  const resetStockFilter = () => setStockFilter("ALL");
+  const resetYearMonth = () => { setYearFilter("ALL"); setMonthFilter("ALL"); };
 
   // 构建股票Tab列表（按股票聚合批次）
   const stockGroups = useMemo(() => {
@@ -177,10 +209,16 @@ export default function DashboardPage() {
   const visibleBatches = useMemo(() => {
     const stockFiltered =
       stockFilter === "ALL" ? batches : batches.filter((b) => b.stockSymbol === stockFilter);
+    const yearFiltered =
+      yearFilter === "ALL"
+        ? stockFiltered
+        : stockFiltered.filter(
+            (b) => new Date(b.signDate).getFullYear().toString() === yearFilter
+          );
     const list =
       monthFilter === "ALL"
-        ? stockFiltered
-        : stockFiltered.filter((b) => toMonthKey(new Date(b.signDate)) === monthFilter);
+        ? yearFiltered
+        : yearFiltered.filter((b) => toMonthKey(new Date(b.signDate)) === monthFilter);
     const weight: Record<string, number> = {
       [RiskLevel.CRITICAL]: 3,
       [RiskLevel.WARNING]: 2,
@@ -197,7 +235,7 @@ export default function DashboardPage() {
       return aDrop - bDrop;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batches, stockFilter, monthFilter, tick]);
+  }, [batches, stockFilter, yearFilter, monthFilter, tick]);
 
   const ladderSummary = {
     profitableCount: summary.profitableCount,
@@ -231,13 +269,12 @@ export default function DashboardPage() {
       </div>
 
       {/* ===== 顶部：极简风控核心 KPI ===== */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         <KPICard
           title="总管理资产 AUM"
           value={summary.totalAUM}
           icon={Building2}
           iconVariant="primary"
-          compact
           footer={
             <div className="flex items-center justify-between text-[10.5px]">
               <span className="text-muted-foreground flex items-center gap-1">
@@ -260,7 +297,6 @@ export default function DashboardPage() {
           value={summary.currentMarketValueTotal}
           icon={Layers}
           iconVariant="secondary"
-          compact
           trend={{
             value: summary.currentMarketValueTotal - summary.totalAUM,
             label: "vs AUM",
@@ -272,7 +308,6 @@ export default function DashboardPage() {
           value={summary.totalMarginCalls}
           icon={Wallet}
           iconVariant="warning"
-          compact
           footer={
             <div className="flex items-center justify-between text-[10.5px]">
               <span className="text-muted-foreground">客户</span>
@@ -290,7 +325,6 @@ export default function DashboardPage() {
           formatter="percent"
           icon={summary.totalPnL >= 0 ? TrendingUp : AlertTriangle}
           iconVariant={summary.totalPnL >= 0 ? "success" : "warning"}
-          compact
           trend={{ value: summary.totalPnL, formatter: "currency" }}
         />
         <KPICard
@@ -299,7 +333,6 @@ export default function DashboardPage() {
           formatter="percent"
           icon={Landmark}
           iconVariant={summary.institutionPnL >= 0 ? "success" : "danger"}
-          compact
           trend={{ value: summary.institutionPnL, formatter: "currency" }}
         />
         <KPICard
@@ -308,13 +341,19 @@ export default function DashboardPage() {
           formatter="percent"
           icon={UserCheck}
           iconVariant={summary.allClientsPnL >= 0 ? "success" : "warning"}
-          compact
           trend={{ value: summary.allClientsPnL, formatter: "currency" }}
         />
       </div>
 
       {/* ===== 中部：风险阶梯状态分布条 ===== */}
-      <RiskLadderBar batches={batches as any} summary={ladderSummary} />
+      <Suspense fallback={
+        <div className="rounded-2xl border border-border/50 bg-card/40 p-5 opacity-60">
+          <div className="h-8 w-56 bg-secondary/60 rounded animate-pulse mb-3" />
+          <div className="h-16 w-full rounded-xl bg-secondary/40 animate-pulse" />
+        </div>
+      }>
+        <RiskLadderBar batches={batches as any} summary={ladderSummary} />
+      </Suspense>
 
       {/* ===== 下部：股票分组选项卡 + 风险排序网格 ===== */}
       <div className="space-y-3">
@@ -388,22 +427,49 @@ export default function DashboardPage() {
           })}
         </div>
 
-        {/* ===== 月份选项卡 ===== */}
+        {/* ===== 年份选项卡 + 月份选项卡 ===== */}
         <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1 pt-1">
           <StockTab
-            active={monthFilter === "ALL"}
-            onClick={() => setMonthFilter("ALL")}
+            active={!yearMonthFilterActive}
+            onClick={resetYearMonth}
             left={<Calendar className="h-3.5 w-3.5" />}
-            label="全部月份"
+            label="全部时间"
             right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{batches.length}</Badge>}
           />
-          {monthGroups.map((mg) => (
+          {yearGroups.length > 1 && yearOptions.slice(1).map((y) => (
+            <StockTab
+              key={`y-${y.value}`}
+              active={yearFilter === y.value && monthFilter === "ALL"}
+              onClick={() => { setYearFilter(y.value); setMonthFilter("ALL"); }}
+              left={<Calendar className="h-3.5 w-3.5 text-muted-foreground" />}
+              label={y.label}
+              right={
+                <Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">
+                  {y.count}
+                </Badge>
+              }
+            />
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1 pt-1">
+          <StockTab
+            active={yearFilter !== "ALL" && monthFilter === "ALL"}
+            onClick={() => setMonthFilter("ALL")}
+            left={<Calendar className="h-3.5 w-3.5" />}
+            label={yearFilter === "ALL" ? "全部月份" : `${yearFilter}年全部月份`}
+            right={
+              <Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">
+                {yearFilter === "ALL" ? batches.length : shownMonthGroups.reduce((s, m) => s + m.batches.length, 0)}
+              </Badge>
+            }
+          />
+          {shownMonthGroups.map((mg) => (
             <StockTab
               key={mg.key}
               active={monthFilter === mg.key}
               onClick={() => setMonthFilter(mg.key)}
               left={<Calendar className="h-3.5 w-3.5 text-muted-foreground" />}
-              label={mg.label}
+              label={yearFilter !== "ALL" ? mg.label.replace(/^\d{4}年/, "") : mg.label}
               right={
                 <Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">
                   {mg.batches.length}
@@ -435,8 +501,11 @@ export default function DashboardPage() {
                   viewerUser={user ?? undefined}
                 />
               );
-              if (!anchor) return card;
-              return <div key={`a-${b.id}`} id={anchor}>{card}</div>;
+              return (
+                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24">
+                  {anchor ? <div id={anchor}>{card}</div> : card}
+                </div>
+              );
             });
           })()}
         </div>

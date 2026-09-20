@@ -34,17 +34,24 @@ interface AuthContextValue {
   isLoading: boolean;
   switchToMockRole: (key: MockUserKey) => Promise<void>;
   forceLogout: () => void;
+  logoutToLogin: () => void;
+  loginAsCustom: (user: AppSessionUser) => void;
+  updateCurrentUser: (patch: Partial<AppSessionUser>) => void;
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: readonly AppRole[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function resolveInitial(): AppSessionUser {
+function resolveInitial(): AppSessionUser | null {
   const existing = getStoredSession();
   if (existing) {
     if (isAllowedRole(existing.role)) return existing;
     clearSession();
+  }
+  // On /login route, allow null session so login page shows
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/login')) {
+    return null;
   }
   const def = createDefaultRiskManagerSession();
   saveSession(def);
@@ -52,10 +59,20 @@ function resolveInitial(): AppSessionUser {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AppSessionUser | null>(() =>
-    typeof window === 'undefined' ? null : resolveInitial()
-  );
-  const [isLoading, setIsLoading] = useState(typeof window === 'undefined');
+  const [user, setUser] = useState<AppSessionUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // SSR/Client Hydrate 一致性：组件挂载后才从 localStorage 恢复 session
+  useEffect(() => {
+    const existing = getStoredSession();
+    if (existing && isAllowedRole(existing.role)) {
+      setUser(existing);
+    } else {
+      clearSession();
+      setUser(null);
+    }
+    setIsLoading(false);
+  }, []);
 
   // 监听其它 tab / 其它组件 dispatch SESSION_UPDATED_EVENT 同步
   useEffect(() => {
@@ -63,11 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const handler = () => {
       const s = getStoredSession();
       if (s) setUser(s);
-      else {
-        const def = createDefaultRiskManagerSession();
-        saveSession(def);
-        setUser(def);
-      }
+      else setUser(null);
     };
     window.addEventListener(SESSION_UPDATED_EVENT, handler);
     window.addEventListener('storage', handler);
@@ -102,6 +115,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(def);
   }, [user?.id, user?.role]);
 
+  const logoutToLogin = useCallback(() => {
+    clearSession();
+    setUser(null);
+    try {
+      window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: null }));
+    } catch (e) {
+      /* ignore */
+    }
+    const nextUrl = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const qs = nextUrl && nextUrl !== '/' && !nextUrl.startsWith('/login')
+      ? `?next=${encodeURIComponent(nextUrl)}`
+      : '';
+    const dest = `/login${qs}`;
+    if (typeof window !== 'undefined') {
+      try { window.location.replace(dest); } catch { window.location.href = dest; }
+    }
+  }, []);
+
+  const loginAsCustom = useCallback((nextUser: AppSessionUser) => {
+    if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return;
+    saveSession(nextUser);
+    setUser(nextUser);
+    try {
+      window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: nextUser }));
+    } catch (e) {
+      /* ignore */
+    }
+  }, []);
+
+  const updateCurrentUser = useCallback((patch: Partial<AppSessionUser>) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next: AppSessionUser = { ...prev, ...patch };
+      saveSession(next);
+      try {
+        window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
+      } catch (e) {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
   const hasRole = useCallback(
     (r: AppRole) => !!user && user.role === r,
     [user]
@@ -117,13 +173,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
-    role: user?.role ?? APP_ROLES.RISK_MANAGER,
+    role: user?.role ?? APP_ROLES.OPERATIONS,
     isLoading,
     switchToMockRole,
     forceLogout,
+    logoutToLogin,
+    loginAsCustom,
+    updateCurrentUser,
     hasRole,
     hasAnyRole,
-  }), [user, isLoading, switchToMockRole, forceLogout, hasRole, hasAnyRole]);
+  }), [user, isLoading, switchToMockRole, forceLogout, logoutToLogin, loginAsCustom, updateCurrentUser, hasRole, hasAnyRole]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    (window as any).__RC_DEBUG__ = {
+      getSession: () => getStoredSession(),
+      clearSession,
+      logoutToLogin,
+      switchToMockRole,
+      loginAsCustom,
+      updateCurrentUser,
+    };
+  }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

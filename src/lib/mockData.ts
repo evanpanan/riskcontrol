@@ -33,7 +33,7 @@ const STOCKS = [
   { symbol: "AMD", name: "Advanced Micro Devices, Inc.", basePrice: 151.64 },
 ];
 
-const BD_MANAGERS = ["李晓明 (Evan Li)", "王思远 (Sylvia Wang)", "张志强 (Jack Zhang)", "刘佳 (Jennifer Liu)"];
+export const BD_MANAGERS = ["李晓明 (Evan Li)", "王思远 (Sylvia Wang)", "张志强 (Jack Zhang)", "刘佳 (Jennifer Liu)"];
 
 const CLIENT_FIRST_NAMES = [
   "伟", "芳", "娜", "敏", "静", "秀英", "丽", "强", "磊", "军",
@@ -113,6 +113,9 @@ export function generateMockData(): MockDataSet {
 
       const triggerDate = new Date(signDate);
       triggerDate.setMonth(triggerDate.getMonth() + randomInt(4, 12));
+      // 补仓触发时的股价：按 22% 跌幅计算（即 stockPriceAtStart * 0.78）
+      const mcEntryPrice1 = Number((stockPriceAtStart * (1 - 0.22)).toFixed(2));
+      const rescueShares1 = fulfilled > 0 && mcEntryPrice1 > 0 ? fulfilled / mcEntryPrice1 : 0;
 
       marginCalls.push({
         id: `mc-${i}-1`,
@@ -127,13 +130,18 @@ export function generateMockData(): MockDataSet {
         note: fulfilled === 0 ? "等待机构补仓资金到账" : "部分补仓已完成，请关注剩余额度",
         notifiedEmails: "risk-control@institution.com,head-of-risk@institution.com",
         notifiedWhatsApps: "+852-9123-4567",
+        averageEntryPrice: mcEntryPrice1,
+        rescueShares: rescueShares1,
         createdAt: triggerDate,
-      });
+      } as any);
 
       if (i === 3) {
         const triggerDate2 = new Date(triggerDate);
         triggerDate2.setMonth(triggerDate2.getMonth() + 2);
         const required2 = initialTotalAmount * 0.05;
+        // 第二次补仓时股价 = initial * 0.75（再跌 5%）
+        const mcEntryPrice2 = Number((stockPriceAtStart * 0.75).toFixed(2));
+        const rescueShares2 = mcEntryPrice2 > 0 ? required2 / mcEntryPrice2 : 0;
         marginCalls.push({
           id: `mc-${i}-2`,
           batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
@@ -147,8 +155,10 @@ export function generateMockData(): MockDataSet {
           note: "二次补仓已完成，市值回归至安全区域",
           notifiedEmails: "risk-control@institution.com",
           notifiedWhatsApps: "+852-9123-4567",
+          averageEntryPrice: mcEntryPrice2,
+          rescueShares: rescueShares2,
           createdAt: triggerDate2,
-        });
+        } as any);
         cumulativeMarginCalls += required2;
       }
     }
@@ -180,6 +190,7 @@ export function generateMockData(): MockDataSet {
         investmentAmount = priorityPool * 0.25;
       } else if (c === numClients - 1) {
         investmentAmount = priorityPool - clients.reduce((sum, cl) => sum + cl.investmentAmount, 0);
+        investmentAmount = Math.max(10000, Number(investmentAmount.toFixed(2)));
       } else {
         const isBig = Math.random() < 0.3;
         investmentAmount = isBig

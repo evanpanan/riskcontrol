@@ -23,6 +23,8 @@ import {
 import { useState, useMemo } from "react";
 import { MarginCallStatus } from "@prisma/client";
 import Link from "next/link";
+import { RoleGate } from "@/components/auth/RoleGate";
+import { APP_ROLES } from "@/types/auth";
 
 export default function MarginCallsPage() {
   const { batches } = getMockData();
@@ -313,23 +315,29 @@ export default function MarginCallsPage() {
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
                         {mc.status === "PENDING" && (
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            className="gap-1 h-8 text-xs"
-                            onClick={() => {
-                              mc.status = MarginCallStatus.FULLFILLED;
-                              mc.fulfilledAmount = mc.requiredAmount;
-                              mc.fulfilledDate = new Date();
-                              const mock = getMockData();
-                              const b = mock.batches.find((x) => x.id === mc.batchId);
-                              if (b) b.cumulativeMarginCalls = (b.cumulativeMarginCalls || 0) + mc.requiredAmount;
-                              window.location.reload();
-                            }}
+                          <RoleGate
+                            allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
+                            auditResource={`margin_call:fulfill:${mc.id}`}
+                            auditAction="button_hidden"
                           >
-                            <Zap className="h-3 w-3" />
-                            处理补仓
-                          </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              className="gap-1 h-8 text-xs"
+                              onClick={() => {
+                                mc.status = MarginCallStatus.FULLFILLED;
+                                mc.fulfilledAmount = mc.requiredAmount;
+                                mc.fulfilledDate = new Date();
+                                const mock = getMockData();
+                                const b = mock.batches.find((x) => x.id === mc.batchId);
+                                if (b) b.cumulativeMarginCalls = (b.cumulativeMarginCalls || 0) + mc.requiredAmount;
+                                window.location.reload();
+                              }}
+                            >
+                              <Zap className="h-3 w-3" />
+                              处理补仓
+                            </Button>
+                          </RoleGate>
                         )}
                       </div>
                     </div>

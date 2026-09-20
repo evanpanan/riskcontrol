@@ -5,6 +5,33 @@ import {
   getRiskRecipients,
 } from "./riskRecipients";
 
+const SETTINGS_LS_KEY = "risk_control_settings";
+
+export interface RuntimeNotificationConfig {
+  emailWebhook?: string;
+  whatsappWebhook?: string;
+  defaultRiskEmail?: string;
+  emergencyPhone?: string;
+}
+
+export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
+  const empty: RuntimeNotificationConfig = {};
+  if (typeof window === "undefined") return empty;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_LS_KEY);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw) as any;
+    return {
+      emailWebhook: typeof parsed?.emailWebhook === "string" ? parsed.emailWebhook : undefined,
+      whatsappWebhook: typeof parsed.whatsappWebhook === "string" ? parsed.whatsappWebhook : undefined,
+      defaultRiskEmail: typeof parsed.defaultRiskEmail === "string" ? parsed.defaultRiskEmail : undefined,
+      emergencyPhone: typeof parsed.emergencyPhone === "string" ? parsed.emergencyPhone : undefined,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 export interface NotificationPayload {
   type: "MARGIN_CALL" | "SETTLEMENT" | "WARNING" | "INFO" | "CLIENT_ADDED";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -198,8 +225,11 @@ export function buildClientAddedNotification(
 }
 
 export async function sendNotification(
-  payload: NotificationPayload
+  payload: NotificationPayload,
+  overrideConfig?: Partial<RuntimeNotificationConfig>
 ): Promise<NotificationResult> {
+  const runtime = getRuntimeNotificationConfig();
+  const config = { ...runtime, ...(overrideConfig || {}) };
   const result: NotificationResult = {
     success: true,
     sentAt: new Date(),
@@ -214,49 +244,100 @@ export async function sendNotification(
     },
   };
 
-  const emailWebhook = process.env.EMAIL_WEBHOOK_URL;
-  if (emailWebhook && payload.recipients.emails.length) {
+  if (payload.recipients.emails.length) {
     try {
-      await fetch(emailWebhook, {
+      const resp = await fetch("/api/notify/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: payload.recipients.emails,
-          subject: payload.title,
-          body: payload.message,
-          severity: payload.severity,
-          details: payload.details,
+          channel: "email",
+          payload,
+          webhookOverride: config.emailWebhook,
         }),
       });
-    } catch (error) {
+      const data = (await resp.json().catch(() => null)) as any;
+      if (!resp.ok) {
+        throw new Error(data?.error || `HTTP ${resp.status}`);
+      }
       result.channels.email = {
-        success: false,
-        sentTo: [],
-        error: error instanceof Error ? error.message : "Unknown error",
+        success: true,
+        sentTo: data?.sentTo || payload.recipients.emails,
+        error: data?.error || undefined,
       };
-      result.success = false;
+    } catch (error) {
+      // 后端不可用时，降级直接请求 webhook
+      try {
+        const hook = config.emailWebhook || process.env.EMAIL_WEBHOOK_URL;
+        if (hook) {
+          await fetch(hook, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              to: payload.recipients.emails,
+              subject: payload.title,
+              body: payload.message,
+              severity: payload.severity,
+              details: payload.details,
+            }),
+          });
+        } else {
+          throw new Error(error instanceof Error ? error.message : "未配置 Email Webhook");
+        }
+      } catch (fallbackErr) {
+        result.channels.email = {
+          success: false,
+          sentTo: [],
+          error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown error",
+        };
+        result.success = false;
+      }
     }
   }
 
-  const whatsappWebhook = process.env.WHATSAPP_WEBHOOK_URL;
-  if (whatsappWebhook && payload.recipients.whatsapps.length) {
+  if (payload.recipients.whatsapps.length) {
     try {
-      await fetch(whatsappWebhook, {
+      const resp = await fetch("/api/notify/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          to: payload.recipients.whatsapps,
-          message: `*${payload.title}*\n\n${payload.message}`,
-          severity: payload.severity,
+          channel: "whatsapp",
+          payload,
+          webhookOverride: config.whatsappWebhook,
         }),
       });
-    } catch (error) {
+      const data = (await resp.json().catch(() => null)) as any;
+      if (!resp.ok) {
+        throw new Error(data?.error || `HTTP ${resp.status}`);
+      }
       result.channels.whatsapp = {
-        success: false,
-        sentTo: [],
-        error: error instanceof Error ? error.message : "Unknown error",
+        success: true,
+        sentTo: data?.sentTo || payload.recipients.whatsapps,
+        error: data?.error || undefined,
       };
-      result.success = false;
+    } catch (error) {
+      try {
+        const hook = config.whatsappWebhook || process.env.WHATSAPP_WEBHOOK_URL;
+        if (hook) {
+          await fetch(hook, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              to: payload.recipients.whatsapps,
+              message: `*${payload.title}*\n\n${payload.message}`,
+              severity: payload.severity,
+            }),
+          });
+        } else {
+          throw new Error(error instanceof Error ? error.message : "未配置 WhatsApp Webhook");
+        }
+      } catch (fallbackErr) {
+        result.channels.whatsapp = {
+          success: false,
+          sentTo: [],
+          error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown error",
+        };
+        result.success = false;
+      }
     }
   }
 
@@ -277,6 +358,28 @@ export async function sendNotification(
   });
 
   return result;
+}
+
+export async function sendTestNotification(
+  channel: "email" | "whatsapp",
+  targets: string[],
+  overrideWebhook?: string
+): Promise<NotificationResult> {
+  const isEmail = channel === "email";
+  const basePayload: NotificationPayload = {
+    type: "INFO",
+    severity: "LOW",
+    title: isEmail ? "【测试】邮箱通道连通测试" : "【测试】WhatsApp 通道连通测试",
+    message: isEmail
+      ? `这是 RiskControl 风控系统通过 Email Webhook 发出的一封测试邮件。\n发送时间：${new Date().toLocaleString()}。\n如果您收到了本邮件，说明通知通道配置成功。`
+      : `这是 RiskControl 风控系统通过 WhatsApp Webhook 发出的一条测试短信。\n发送时间：${new Date().toLocaleString()}。\n如您收到本条消息，说明 WhatsApp 通道已打通。`,
+    recipients: {
+      emails: isEmail ? targets : [],
+      whatsapps: isEmail ? [] : targets,
+    },
+    timestamp: new Date(),
+  };
+  return sendNotification(basePayload, isEmail ? { emailWebhook: overrideWebhook } : { whatsappWebhook: overrideWebhook });
 }
 
 export async function triggerMarginCallAlert(

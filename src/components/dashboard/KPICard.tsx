@@ -15,7 +15,7 @@ export interface KPICardProps {
     label?: string;
     formatter?: "currency" | "percent" | "number";
   };
-  formatter?: "currency" | "percent" | "number";
+  formatter?: "currency" | "percent" | "number" | "currencyCompact";
   footer?: React.ReactNode;
   className?: string;
   compact?: boolean;
@@ -28,6 +28,21 @@ const iconVariants = {
   danger: "bg-danger/15 text-danger border-danger/20",
   secondary: "bg-secondary text-secondary-foreground border-transparent",
 };
+
+export function formatCurrencyCompact(value: number, currency: string = "USD"): string {
+  const ABS = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  const SYMBOL = currency === "USD" ? "$" : "¥";
+  if (ABS >= 1e9) return `${sign}${SYMBOL}${(ABS / 1e9).toFixed(2)}B`;
+  if (ABS >= 1e6) return `${sign}${SYMBOL}${(ABS / 1e6).toFixed(2)}M`;
+  if (ABS >= 1e3) return `${sign}${SYMBOL}${(ABS / 1e3).toFixed(2)}K`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
 
 export function KPICard({
   title,
@@ -45,6 +60,8 @@ export function KPICard({
     switch (formatter) {
       case "currency":
         return formatCurrency(v);
+      case "currencyCompact":
+        return formatCurrencyCompact(v);
       case "percent":
         return formatPercent(v);
       case "number":

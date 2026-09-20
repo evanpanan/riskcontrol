@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { FlashNumber } from "@/components/ui/FlashNumber";
 import { cn } from "@/lib/utils";
@@ -15,8 +16,24 @@ import {
   TrendingUp as TrendingUpIcon,
   MousePointerClick,
 } from "lucide-react";
+import { useEffect } from "react";
 
 export type LadderAnchorTarget = "profit" | "normal" | "warning" | "critical";
+
+export function jumpToId(id: string, withRing: boolean = true) {
+  if (typeof document === "undefined") return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  if (withRing) {
+    try {
+      el.classList.add("ring-2", "ring-primary/70", "rounded-xl", "ring-offset-2", "ring-offset-background");
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-primary/70", "rounded-xl", "ring-offset-2", "ring-offset-background");
+      }, 1800);
+    } catch {}
+  }
+}
 
 interface RiskLadderBarProps {
   batches: Batch[];
@@ -43,17 +60,21 @@ function jumpTo(target: LadderAnchorTarget) {
     critical: "anchor-critical",
   };
   const id = map[target];
-  const el = document.getElementById(id);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
-    try {
-      el.classList.add("ring-2", "ring-primary/60", "rounded-xl");
-      setTimeout(() => el.classList.remove("ring-2", "ring-primary/60", "rounded-xl"), 1600);
-    } catch {}
-  }
+  jumpToId(id);
 }
 
 export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const batchAnchor = searchParams?.get("focus_batch");
+    if (batchAnchor) {
+      const t = setTimeout(() => jumpToId(`batch-${batchAnchor}`), 120);
+      return () => clearTimeout(t);
+    }
+  }, [searchParams]);
+
   const total = Math.max(1, summary.totalBatches);
   const profitCount = Math.max(0, summary.profitableCount);
   const normalCount = Math.max(0, summary.normalCount - profitCount);
@@ -138,16 +159,16 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
         <div className="mb-5">
           <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2">
-              <Gauge className="h-4 w-4 text-muted-foreground" />
-              <p className="text-xs font-semibold tracking-wide text-foreground/90">
+              <Gauge className="h-4 w-4 text-foreground/90" />
+              <p className="text-xs font-semibold tracking-wide text-foreground">
                 风险阶梯分布
               </p>
-              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/80 font-mono">
-                <MousePointerClick className="h-3 w-3 opacity-70" />
+              <span className="inline-flex items-center gap-1 text-[10px] text-foreground/90 font-mono">
+                <MousePointerClick className="h-3 w-3 opacity-80" />
                 点击分段直达批次
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground font-mono">
+            <p className="text-[11px] text-foreground/95 font-mono">
               击穿{">"}20% · 预警15-20% · 正常{"<"}15% · 盈利≥0%
             </p>
           </div>
@@ -157,11 +178,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("critical")}
-                className="group relative flex items-center justify-start px-4 text-danger-foreground bg-gradient-to-r from-danger/75 via-danger/60 to-danger/45 hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer border-r border-foreground/5"
+                className="group relative flex items-center justify-start px-4 text-white bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${critW}%` }}
                 aria-label={`击穿批次 ${critCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-semibold min-w-0 truncate">
+                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
                   <Flame className="h-3.5 w-3.5 shrink-0" />
                   击穿 {critCount}
                 </div>
@@ -169,11 +190,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("warning")}
-                className="group relative flex items-center justify-center px-3 text-warning-foreground bg-gradient-to-r from-warning/55 via-warning/45 to-warning/35 hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer border-r border-foreground/5"
+                className="group relative flex items-center justify-center px-3 text-white bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${warnW}%` }}
                 aria-label={`预警批次 ${warnCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-semibold min-w-0 truncate">
+                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   预警 {warnCount}
                 </div>
@@ -181,11 +202,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("normal")}
-                className="group relative flex items-center justify-center px-3 text-primary-foreground bg-gradient-to-r from-primary/60 via-primary/48 to-primary/35 hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer border-r border-foreground/5"
+                className="group relative flex items-center justify-center px-3 text-white bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${normalW}%` }}
                 aria-label={`正常批次 ${normalCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-semibold min-w-0 truncate">
+                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
                   <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                   正常 {normalCount}
                 </div>
@@ -193,24 +214,21 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("profit")}
-                className="group relative flex items-center justify-end px-4 text-emerald-50 bg-gradient-to-r from-emerald-500/40 via-emerald-600/50 to-emerald-500/70 hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-end px-4 text-white bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${profitW}%` }}
                 aria-label={`盈利批次 ${profitCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-semibold min-w-0 truncate drop-shadow-sm">
+                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-md">
                   盈利 {profitCount}
                   <TrendingUpIcon className="h-3.5 w-3.5 shrink-0" />
                 </div>
               </button>
             </div>
 
-            {/* marker lines at 15% & 20% */}
-            <div className="absolute top-0 bottom-0 w-px bg-foreground/10 pointer-events-none" style={{ left: "50%" }} />
-            <div className="absolute top-0 bottom-0 w-px bg-foreground/10 pointer-events-none" style={{ left: "75%" }} />
-            <div className="absolute -bottom-0 left-0 right-0 flex text-[10px] font-mono text-muted-foreground/80 px-3 pb-1 pointer-events-none">
-              <span>0%</span>
-              <span className="ml-auto mr-[25%]">15%</span>
-              <span className="ml-auto">20%</span>
+            <div className="absolute -bottom-0 left-0 right-0 flex text-[10px] font-mono text-foreground/95 px-3 pb-1 pointer-events-none">
+              <span className="drop-shadow-sm">0%</span>
+              <span className="ml-auto mr-[25%] drop-shadow-sm">15%</span>
+              <span className="ml-auto drop-shadow-sm">20%</span>
             </div>
           </div>
         </div>
@@ -223,6 +241,9 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
             accent="danger"
             count={summary.criticalCount}
             batches={critBatches}
+            router={router}
+            pathname={pathname}
+            searchParams={searchParams}
           />
           <FocusPanel
             title="接近预警线"
@@ -230,6 +251,9 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
             accent="warning"
             count={summary.warningCount}
             batches={warnBatches}
+            router={router}
+            pathname={pathname}
+            searchParams={searchParams}
           />
         </div>
       </CardContent>
@@ -299,8 +323,14 @@ function FocusPanel(props: {
   accent: "warning" | "danger";
   count: number;
   batches: Batch[];
+  router: ReturnType<typeof useRouter>;
+  pathname: string;
+  searchParams: ReturnType<typeof useSearchParams>;
 }) {
   const Icon = props.icon;
+  const router = props.router;
+  const pathname = props.pathname;
+  const searchParams = props.searchParams;
   const accentClass =
     props.accent === "danger"
       ? "text-danger border-danger/30 bg-danger/[0.04]"
@@ -329,23 +359,35 @@ function FocusPanel(props: {
             return (
               <li
                 key={b.id}
-                className="group flex items-center justify-between text-[12px] px-2.5 py-1.5 rounded-md hover:bg-background/50 transition-colors"
+                className="group flex items-center justify-between text-[12px] rounded-md cursor-pointer"
               >
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[10px] text-muted-foreground w-16 shrink-0">
-                    {b.batchNumber}
-                  </span>
-                  <span className="font-semibold tracking-tight">{b.stockSymbol}</span>
-                  <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
-                    {b.stockName}
-                  </span>
-                </div>
-                <FlashNumber
-                  value={drop}
-                  formatter="percent"
-                  digits={2}
-                  className="text-[11px] font-bold font-mono"
-                />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const next = new URLSearchParams(searchParams?.toString() ?? "");
+                    next.set("focus_batch", b.id);
+                    router.replace(`${pathname}?${next.toString()}#batch-${b.id}`, { scroll: false });
+                    setTimeout(() => jumpToId(`batch-${b.id}`), 10);
+                  }}
+                  className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-background/60 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] text-muted-foreground w-16 shrink-0">
+                      {b.batchNumber}
+                    </span>
+                    <span className="font-semibold tracking-tight">{b.stockSymbol}</span>
+                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                      {b.stockName}
+                    </span>
+                  </div>
+                  <FlashNumber
+                    value={drop}
+                    formatter="percent"
+                    digits={2}
+                    className="text-[11px] font-bold font-mono"
+                  />
+                </button>
               </li>
             );
           })}

@@ -1,8 +1,10 @@
 "use client";
 
+import { useMemo } from "react";
 import { Client, ClientStatus } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import {
   Tooltip,
   TooltipContent,
@@ -21,7 +23,6 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  Building2,
   CheckCircle,
   Hourglass,
   Landmark,
@@ -53,6 +54,23 @@ export interface EnrichedClient extends Omit<Client, 'realtimePnL' | 'estimatedE
   requiredMarginCall?: number;
 }
 
+const AVATAR_GRADIENTS = [
+  "bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600",
+  "bg-gradient-to-br from-sky-500 via-blue-500 to-indigo-600",
+  "bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600",
+  "bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600",
+  "bg-gradient-to-br from-amber-500 via-orange-500 to-red-500",
+  "bg-gradient-to-br from-fuchsia-500 via-purple-500 to-violet-600",
+  "bg-gradient-to-br from-lime-500 via-green-500 to-emerald-600",
+  "bg-gradient-to-br from-orange-400 via-rose-500 to-red-600",
+];
+
+function pickGradientForName(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
+}
+
 interface ClientTableProps {
   clients: EnrichedClient[];
   batchInitialAmount: number;
@@ -76,7 +94,7 @@ export function ClientTable({
 
   const isBd = viewerRole === APP_ROLES.BD_MANAGER;
   const bdFullName = viewerUser?.bdManagerFullName;
-  const showMarginCallCol = batchRequiredMarginCall > 0;
+  const institutionRole = !isBd;
   const nonRedactedClients = clients.filter(c => !(c as any).__redacted);
   const shouldMergeProfitCols = nonRedactedClients.every(c => {
     const rt = c.realtimePnL ?? 0;
@@ -125,6 +143,35 @@ export function ClientTable({
     }
   };
 
+
+
+  const showMarginCallCol = batchRequiredMarginCall > 0;
+  const anyRescueAllocation = clients.some(
+    (c) => typeof (c as any).rescueAllocation === "number" && (c as any).rescueAllocation > 0.01
+  );
+  const showRescueCol = showMarginCallCol || anyRescueAllocation;
+
+  const sortedClients = useMemo(() => {
+    const statusRank = (c: EnrichedClient): number => {
+      switch (c.status as ClientStatus) {
+        case ClientStatus.EXIT_REQUESTED: return 0;
+        case ClientStatus.ACTIVE: return 1;
+        case ClientStatus.SETTLED: return 99;
+        default: return 50;
+      }
+    };
+    return [...clients].sort((a, b) => {
+      const sa = statusRank(a);
+      const sb = statusRank(b);
+      if (sa !== sb) return sa - sb;
+      const isAVip = (a as any).splitTier === "VIP" || a.investmentAmount >= 100000;
+      const isBVip = (b as any).splitTier === "VIP" || b.investmentAmount >= 100000;
+      if (isAVip !== isBVip) return isAVip ? -1 : 1;
+      if (b.investmentAmount !== a.investmentAmount) return b.investmentAmount - a.investmentAmount;
+      return (a.name ?? "").localeCompare(b.name ?? "", "zh-Hans-CN");
+    });
+  }, [clients]);
+
   if (!clients.length) {
     return (
       <div className="text-center py-16 border border-dashed border-border/50 rounded-xl">
@@ -137,6 +184,8 @@ export function ClientTable({
     );
   }
 
+  const sortedClientsFinal = sortedClients;
+
   return (
     <div className="border border-border/50 rounded-xl overflow-hidden">
       <Table>
@@ -144,8 +193,7 @@ export function ClientTable({
           <TableRow className="hover:bg-secondary/30 border-border/50">
             <TableHead className="w-[180px]">客户信息</TableHead>
             <TableHead>
-              <div className="flex items-center gap-1">
-                <Building2 className="h-3.5 w-3.5" />
+              <div className="flex items-center">
                 BD 经理
               </div>
             </TableHead>
@@ -155,7 +203,7 @@ export function ClientTable({
               <TableHead className="text-right">
                 <div className="flex items-center gap-1 justify-end">
                   <Landmark className="h-3.5 w-3.5 text-primary" />
-                  盈利 / 分成
+                  客户最终盈利
                 </div>
               </TableHead>
             ) : (
@@ -175,20 +223,28 @@ export function ClientTable({
                       </div>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p className="text-xs w-[240px]">
-                        按「补仓先归还→本金保底→VIP档40%/普通档30%」分成规则计算的 <span className="font-semibold">客户最终实际可分配盈利</span>
-                      </p>
+                      <p className="text-xs w-[260px]">
+                        仅当 <span className="font-semibold">当前股价超过买入价</span> 时客户才有客户PnL，否则保本不显示任何盈利数字；机构补仓不改变客户盈亏，本金独立核算归机构</p>
                     </TooltipContent>
                   </Tooltip>
                 </TableHead>
               </>
             )}
-            {showMarginCallCol && (
+            {showRescueCol && (
               <TableHead className="text-right">
-                <div className="flex items-center gap-1 justify-end">
-                  <Archive className="h-3.5 w-3.5 text-danger" />
-                  <span className="whitespace-nowrap text-danger font-semibold">客户级补仓</span>
-                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 justify-end cursor-help">
+                      <Archive className="h-3.5 w-3.5 text-warning" />
+                      <span className="whitespace-nowrap text-warning font-semibold">机构补仓分摊</span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs w-[220px]">
+                      机构补仓救援金（独立核算：本金及盈利全归机构，客户不参与。本列仅显示该客户按出资比例对应的名义救援分摊金额
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
               </TableHead>
             )}
             <TableHead className="text-right">
@@ -202,7 +258,7 @@ export function ClientTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {clients.map((client) => {
+          {sortedClientsFinal.map((client) => {
             const isRedacted = !!(client as any).__redacted;
             const statusConfig = getStatusConfig(client.status as ClientStatus);
             const StatusIcon = statusConfig.Icon;
@@ -247,40 +303,17 @@ export function ClientTable({
                     </div>
                   ) : (
                     <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-xl gradient-primary flex items-center justify-center shrink-0 shadow-sm shadow-primary/20">
-                        <span className="text-xs font-bold text-primary-foreground">
+                      <div className={cn(
+                        "h-9 w-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm",
+                        pickGradientForName(client.name)
+                      )}>
+                        <span className="text-xs font-bold text-white">
                           {client.name.charAt(0)}
                         </span>
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm truncate">{client.name}</p>
-                        <p className="text-[10px] text-muted-foreground font-mono truncate">
-                          占优先池 {clientRatio.toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {isRedacted ? (
-                    <span className="text-sm text-muted-foreground italic">—</span>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                      <span className="text-sm truncate">{client.bdManager}</span>
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell className="text-right">
-                  {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
-                  ) : (
-                    <div>
-                      <p className="font-mono font-bold text-sm">
-                        {formatCurrency(client.investmentAmount)}
-                      </p>
-                      <div className="flex justify-end gap-0.5 mt-0.5">
-                        <div className="flex gap-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-semibold text-sm truncate">{client.name}</p>
                           {split.client >= 0.4 && (
                             <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">
                               VIP
@@ -292,7 +325,34 @@ export function ClientTable({
                             </Badge>
                           )}
                         </div>
+                        <p className="text-[10px] text-muted-foreground font-mono truncate">
+                          占优先池 {clientRatio.toFixed(1)}%
+                        </p>
                       </div>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {isRedacted ? (
+                    <span className="text-sm text-muted-foreground italic">—</span>
+                  ) : (
+                    <Link
+                      href={`/bd/${encodeURIComponent(client.bdManager)}`}
+                      className="text-sm truncate text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
+                      title={`查看 ${client.bdManager} 的所有客户`}
+                    >
+                      {client.bdManager}
+                    </Link>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="text-muted-foreground italic">—</span>
+                  ) : (
+                    <div>
+                      <p className="font-mono font-bold text-sm">
+                        {formatCurrency(client.investmentAmount)}
+                      </p>
                     </div>
                   )}
                 </TableCell>
@@ -335,7 +395,7 @@ export function ClientTable({
                     {isRedacted ? (
                       <span className="text-muted-foreground italic">—</span>
                     ) : (
-                      <div>
+                      <div className="w-[140px] ml-auto">
                         <p
                           className={cn(
                             "font-mono font-bold text-sm",
@@ -349,20 +409,46 @@ export function ClientTable({
                               +{formatCurrency(actualPnL)}
                             </span>
                           ) : (
-                            <span className="flex items-center gap-0.5 justify-end text-muted-foreground">
-                              <ShieldCheck className="h-3 w-3" /> 保本
+                            <span className="flex items-center gap-0.5 justify-end text-primary/80">
+                              <ShieldCheck className="h-3 w-3" /> 保本中
                             </span>
                           )}
                         </p>
-                        {actualPnL > 0 && (
-                          <p className="text-[10px] font-mono mt-0.5 text-success/80">
+                        {actualPnL > 0 ? (
+                          <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
                             +{formatPercent(actualPnLPct)}
                           </p>
-                        )}
-                        {actualPnL === 0 && (
-                          <p className="text-[9px] text-muted-foreground mt-0.5">
-                            实时/分成一致
-                          </p>
+                        ) : (
+                          (() => {
+                            const mv = (client.marketValueShare ?? 0);
+                            const inv = client.investmentAmount || 0;
+                            const progress = inv > 0
+                              ? Math.max(0, Math.min(100, (mv / inv) * 100))
+                              : 100;
+                            return (
+                              <div className="mt-1.5">
+                                <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
+                                  <span>回本进度</span>
+                                  <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
+                                </div>
+                                <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
+                                  <div
+                                    className={cn(
+                                      "h-full rounded-full transition-all duration-700",
+                                      progress >= 100
+                                        ? "bg-gradient-to-r from-success to-success/70"
+                                        : progress >= 90
+                                        ? "bg-gradient-to-r from-primary to-primary/70"
+                                        : progress >= 75
+                                        ? "bg-gradient-to-r from-warning/90 to-warning/60"
+                                        : "bg-gradient-to-r from-danger/80 to-danger/50"
+                                    )}
+                                    style={{ width: `${progress}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })()
                         )}
                       </div>
                     )}
@@ -373,7 +459,7 @@ export function ClientTable({
                       {isRedacted ? (
                         <span className="text-muted-foreground italic">—</span>
                       ) : (
-                        <div>
+                        <div className="w-[140px] ml-auto">
                           <p
                             className={cn(
                               "font-mono font-bold text-sm",
@@ -393,21 +479,50 @@ export function ClientTable({
                                 {formatCurrency(realtimePnL)}
                               </span>
                             ) : (
-                              <span className="flex items-center gap-0.5 justify-end text-muted-foreground">
+                              <span className="flex items-center gap-0.5 justify-end text-primary/80">
                                 <ShieldCheck className="h-3 w-3" /> 保本
                               </span>
                             )}
                           </p>
-                          {realtimePnL !== 0 && (
-                            <p className={cn(
-                              "text-[10px] font-mono mt-0.5",
-                              realtimePnL > 0 ? "text-success/80" : "text-danger/80"
-                            )}>
-                              {realtimePnL > 0 ? "+" : ""}
-                            {formatPercent(
-                              (realtimePnL / (client.investmentAmount || 0)) * 100
-                            )}
+                          {realtimePnL > 0 ? (
+                            <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
+                              +{formatPercent((realtimePnL / (client.investmentAmount || 1)) * 100)}
                             </p>
+                          ) : realtimePnL < 0 ? (
+                            <p className="text-[10px] font-mono mt-0.5 text-danger/80 text-right">
+                              {formatPercent((realtimePnL / (client.investmentAmount || 1)) * 100)}
+                            </p>
+                          ) : (
+                            (() => {
+                              const mv = (client.marketValueShare ?? 0);
+                              const inv = client.investmentAmount || 0;
+                              const progress = inv > 0
+                                ? Math.max(0, Math.min(100, (mv / inv) * 100))
+                                : 100;
+                              return (
+                                <div className="mt-1.5">
+                                  <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
+                                    <span>回本进度</span>
+                                    <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
+                                  </div>
+                                  <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
+                                    <div
+                                      className={cn(
+                                        "h-full rounded-full transition-all duration-700",
+                                        progress >= 100
+                                          ? "bg-gradient-to-r from-success to-success/70"
+                                          : progress >= 90
+                                          ? "bg-gradient-to-r from-primary to-primary/70"
+                                          : progress >= 75
+                                          ? "bg-gradient-to-r from-warning/90 to-warning/60"
+                                          : "bg-gradient-to-r from-danger/80 to-danger/50"
+                                      )}
+                                      style={{ width: `${progress}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })()
                           )}
                         </div>
                       )}
@@ -416,7 +531,7 @@ export function ClientTable({
                       {isRedacted ? (
                         <span className="text-muted-foreground italic">—</span>
                       ) : (
-                        <div>
+                        <div className="w-[140px] ml-auto">
                           <p
                             className={cn(
                               "font-mono font-bold text-sm",
@@ -430,34 +545,110 @@ export function ClientTable({
                                 +{formatCurrency(actualPnL)}
                               </span>
                             ) : (
-                              <span className="flex items-center gap-0.5 justify-end text-muted-foreground">
-                                <ShieldCheck className="h-3 w-3" /> 保本中
+                              <span className="flex items-center gap-0.5 justify-end text-primary/80">
+                                <ShieldCheck className="h-3 w-3" /> 保本
                               </span>
                             )}
                           </p>
-                          {actualPnL > 0 && (
-                            <p className="text-[10px] font-mono mt-0.5 text-success/80">
+                          {actualPnL > 0 ? (
+                            <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
                               +{formatPercent(actualPnLPct)}
                             </p>
+                          ) : (
+                            (() => {
+                              const mv = (client.marketValueShare ?? 0);
+                              const inv = client.investmentAmount || 0;
+                              const progress = inv > 0
+                                ? Math.max(0, Math.min(100, (mv / inv) * 100))
+                                : 100;
+                              return (
+                                <div className="mt-1.5">
+                                  <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
+                                    <span>回本进度</span>
+                                    <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
+                                  </div>
+                                  <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
+                                    <div
+                                      className={cn(
+                                        "h-full rounded-full transition-all duration-700",
+                                        progress >= 100
+                                          ? "bg-gradient-to-r from-success to-success/70"
+                                          : progress >= 90
+                                          ? "bg-gradient-to-r from-primary to-primary/70"
+                                          : progress >= 75
+                                          ? "bg-gradient-to-r from-warning/90 to-warning/60"
+                                          : "bg-gradient-to-r from-danger/80 to-danger/50"
+                                      )}
+                                      style={{ width: `${progress}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })()
                           )}
                         </div>
                       )}
                     </TableCell>
                   </>
                 )}
-                {showMarginCallCol && (
+                {showRescueCol && (
                   <TableCell className="text-right">
                     {isRedacted ? (
                       <span className="text-muted-foreground italic">—</span>
                     ) : (
-                      <div>
-                        <p className="font-mono font-bold text-sm text-danger">
-                          {formatCurrency(client.requiredMarginCall ?? 0)}
-                        </p>
-                        <p className="text-[10px] font-mono text-danger/80 mt-0.5">
-                          占 {clientRatio.toFixed(1)}%
-                        </p>
-                      </div>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="cursor-help w-[120px] ml-auto">
+                            <p className={cn(
+                              "font-mono font-bold text-sm",
+                              ((client as any).rescueAllocation ?? 0) > 0
+                                ? "text-warning"
+                                : (client.requiredMarginCall ?? 0) > 0
+                                ? "text-danger"
+                                : "text-muted-foreground"
+                            )}>
+                              {((client as any).rescueAllocation ?? 0) > 0 ? (
+                                <span className="flex items-center gap-0.5 justify-end">
+                                  <Archive className="h-3 w-3" />
+                                  {formatCurrency((client as any).rescueAllocation ?? 0)}
+                                </span>
+                              ) : (client.requiredMarginCall ?? 0) > 0 ? (
+                                <span className="flex items-center gap-0.5 justify-end">
+                                  <AlertCircle className="h-3 w-3" />
+                                  {formatCurrency(client.requiredMarginCall ?? 0)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground/60">—</span>
+                              )}
+                            </p>
+                            <p className="text-[10px] font-mono mt-0.5 text-right text-warning/80">
+                              占 {clientRatio.toFixed(1)}%
+                            </p>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" align="end">
+                          <div className="text-xs w-[240px] space-y-1">
+                            {((client as any).rescueAllocation ?? 0) > 0 ? (
+                              <>
+                                <p className="font-semibold text-warning">机构补仓救援（名义分摊）</p>
+                                <p className="text-muted-foreground">
+                                  机构已出资救援补仓，本客户按出资比例名义分摊对应救援金 {formatCurrency((client as any).rescueAllocation ?? 0)}
+                                </p>
+                                <p className="pt-1 text-[10px] text-primary">
+                                  * 救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底
+                                </p>
+                              </>
+                            ) : (client.requiredMarginCall ?? 0) > 0 ? (
+                              <>
+                                <p className="font-semibold text-danger">需机构补仓（待处理）</p>
+                                <p className="text-muted-foreground">
+                                  当前批次需补仓 {formatCurrency(client.requiredMarginCall ?? 0)}，该客户按出资比例占 {clientRatio.toFixed(1)}%
+                                </p>
+                              </>
+                            ) : null}
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
                     )}
                   </TableCell>
                 )}
@@ -467,10 +658,10 @@ export function ClientTable({
                   ) : (
                     <div>
                       <p className="font-mono font-bold text-sm text-gradient-primary">
-                        {formatCurrency(estExit + actualPnL - realtimePnL * 0)}
+                        {formatCurrency((client.investmentAmount || 0) + actualPnL)}
                       </p>
                       <p className="text-[10px] text-muted-foreground mt-0.5">
-                        本金 + 分成 {formatCurrency((client.investmentAmount || 0) + actualPnL)}
+                        本金 + 真实盈利
                       </p>
                     </div>
                   )}
@@ -501,7 +692,7 @@ export function ClientTable({
                 <TableCell className="text-center">
                   {!isRedacted && (
                     <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                      {client.status === ClientStatus.ACTIVE && (
+                      {client.status === ClientStatus.ACTIVE && institutionRole && (
                         <>
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -545,7 +736,7 @@ export function ClientTable({
                           </Tooltip>
                         </>
                       )}
-                      {client.status === ClientStatus.EXIT_REQUESTED && (
+                      {client.status === ClientStatus.EXIT_REQUESTED && institutionRole && (
                         <>
                           <Tooltip>
                             <TooltipTrigger asChild>

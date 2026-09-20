@@ -138,6 +138,14 @@ function isMarketOpen(now = new Date()) {
   return (h >= 9 && h < 12) || (h >= 13 && h < 16) || (h >= 21 && h <= 23);
 }
 
+const DEFAULT_WEB_ALERT_SETTINGS = {
+  webAlertEnabled: true,
+  webAlertSound: true,
+  webAlertCriticalOnly: false,
+  realtimeTickEnabled: true,
+  realtimeTickIntervalSec: 8,
+};
+
 export default function MarketPage() {
   const mockDataRef = useRef(getMockData());
   const [tick, setTick] = useState(0);
@@ -146,9 +154,18 @@ export default function MarketPage() {
   const batches = useMemo(() => mockDataRef.current.batches, [tick]);
   const stockHistory = useMemo(() => mockDataRef.current.stockHistory, [tick]);
 
-  const settings = useMemo(() => {
-    try { return getWebAlertSettings(); } catch { return null; }
-  }, [tick]);
+  const [settings, setSettings] = useState(DEFAULT_WEB_ALERT_SETTINGS);
+
+  useEffect(() => {
+    try { setSettings(getWebAlertSettings()); } catch {}
+    const onStorage = () => { try { setSettings(getWebAlertSettings()); } catch {} };
+    window.addEventListener("storage", onStorage);
+    const id = setInterval(onStorage, 4000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      clearInterval(id);
+    };
+  }, []);
 
   // 实时行情刷新（开盘时段加密）
   useEffect(() => {

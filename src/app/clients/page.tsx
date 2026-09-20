@@ -28,21 +28,41 @@ import {
   Landmark,
   Layers,
 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { ClientStatus } from "@prisma/client";
+import { mergeClientStatusesOnClientList } from "@/lib/clientStatusStore";
 
 export default function ClientsPage() {
   const { batches } = getMockData();
   const [search, setSearch] = useState("");
   const [bdFilter, setBdFilter] = useState("ALL");
   const [batchFilter, setBatchFilter] = useState<string>("ALL");
+  const [hydrated, setHydrated] = useState(false);
+  const [tick, setTick] = useState(0);
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
+
+  useEffect(() => {
+    setHydrated(true);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "risk_control_client_status_v1") setTick((t) => t + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    const onCustom = () => setTick((t) => t + 1);
+    window.addEventListener("risk-control:client-status-changed", onCustom);
+    const id = window.setInterval(onCustom, 3500);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("risk-control:client-status-changed", onCustom);
+      window.clearInterval(id);
+    };
+  }, []);
 
   const rawAllClients = useMemo(() => {
     const list: any[] = [];
     batches.forEach((b) => {
-      b.clients?.forEach((c) => {
+      const mergedClients = hydrated ? mergeClientStatusesOnClientList((b.clients || []) as any[]) : (b.clients || []) as any[];
+      mergedClients.forEach((c) => {
         list.push({
           ...c,
           batchNumber: b.batchNumber,
@@ -53,7 +73,7 @@ export default function ClientsPage() {
       });
     });
     return list;
-  }, [batches]);
+  }, [batches, hydrated, tick]);
 
   const scopeUser = (user ?? {
     id: 'fallback_risk',
@@ -81,16 +101,24 @@ export default function ClientsPage() {
   const batchTabs = useMemo(() => {
     return batches
       .slice()
+      .filter((b) => {
+        if (!isBdManager || !bdManagerFullName) return true;
+        return (b.clients || []).some((c) => (c as any).bdManager === bdManagerFullName);
+      })
       .sort((a, b) => (a.batchNumber ?? "").localeCompare(b.batchNumber ?? ""))
       .map((b) => ({
         batchId: b.id,
         batchNumber: b.batchNumber,
         symbol: b.stockSymbol,
         stockName: b.stockName,
-        clientCount: b.clients?.length ?? 0,
+        clientCount: (b.clients || []).filter((c) =>
+          isBdManager && bdManagerFullName
+            ? (c as any).bdManager === bdManagerFullName
+            : true
+        ).length,
         riskLevel: b.riskLevel,
       }));
-  }, [batches]);
+  }, [batches, isBdManager, bdManagerFullName]);
 
   const allClients = useMemo(() => {
     let result = roleFilteredClients as any[];
@@ -160,14 +188,18 @@ export default function ClientsPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5">
-            <Download className="h-3.5 w-3.5" />
-            导出客户表
-          </Button>
-          <Button size="sm" className="gap-1.5">
-            <UserPlus className="h-3.5 w-3.5" />
-            批量新增客户
-          </Button>
+          {!isBdManager && (
+            <>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Download className="h-3.5 w-3.5" />
+                导出客户表
+              </Button>
+              <Button size="sm" className="gap-1.5">
+                <UserPlus className="h-3.5 w-3.5" />
+                批量新增客户
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
