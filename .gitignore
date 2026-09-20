@@ -42,3 +42,8 @@ next-env.d.ts
 # supabase
 /supabase/.temp
 /supabase/volumes
+
+# commit message temp files
+.git_commit_msg.txt
+.git_commit_msg
+.tmp_*
