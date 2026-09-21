@@ -16,7 +16,9 @@ import {
   executeInstitutionTopup,
   settleClientPosition,
   calculateClientSettlement,
+  isTopupBlockedByLegacyLedger,
 } from "@/lib/riskEngine";
+import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
 import { commitBatchFinance, getMockData } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
@@ -129,6 +131,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [settleTarget, setSettleTarget] = useState<string | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [bdFilter, setBdFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState<ClientStatus | "ALL">("ALL");
@@ -280,7 +283,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     );
   };
 
-  const handleFulfill = () => setFulfillOpen(true);
+  const handleFulfill = () => {
+    if (isTopupBlockedByLegacyLedger(batch as any)) { setRecoveryOpen(true); return; }
+    setFulfillOpen(true);
+  };
   const handleNotify = async (channel: "email" | "whatsapp") => {
     if (user?.role !== APP_ROLES.ADMIN && user?.role !== APP_ROLES.RISK_MANAGER) {
       toast.error("仅管理员和风控总监可发送机构通知。");
@@ -312,6 +318,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     const target = batch.clients.find((c: any) => c.id === clientId);
     if (!target) return;
     if (newStatus === ClientStatus.SETTLED) {
+      if ((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings.length) {
+        setRecoveryOpen(true);
+        return;
+      }
       setSettleTarget(clientId);
       return;
     }
@@ -342,11 +352,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   return (
     <div className={cn("space-y-6", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
-      {((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings ?? []).map((warning) => (
-        <p key={warning} role="alert" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
-          待核对：{warning} 当前估值仅供核对，不作为付款凭证。
-        </p>
-      ))}
+      <LedgerRecovery batch={batch as any} open={recoveryOpen} onOpenChange={setRecoveryOpen} />
       {/* Breadcrumb & Back */}
       {!compact ? (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1048,6 +1054,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 batchRequiredMarginCall={lockedBatchRequiredMargin > 0 ? lockedBatchRequiredMargin : metrics.requiredMarginCall}
                 onClientStatusChange={handleClientStatusChange}
                 batch={batch as any}
+                onLedgerRecovery={() => setRecoveryOpen(true)}
                 onBatchMutated={() => {
                   onChange?.();
                   setTick((t) => t + 1);

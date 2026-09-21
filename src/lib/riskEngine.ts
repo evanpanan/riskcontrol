@@ -352,6 +352,11 @@ export function summarizeBatchMarginFromClients(batch: BatchLike) {
   };
 }
 
+export function isTopupBlockedByLegacyLedger(batch: BatchLike): boolean {
+  return (batch.finance?.legacyWarnings ?? []).some(warning =>
+    warning.includes("历史结算") || warning.includes("客户分配"));
+}
+
 export function executeInstitutionTopup(batch: BatchLike, options: {
   amount: number; clientId?: string; operatorName?: string; expectedRoundId?: string;
 }): number {
@@ -359,8 +364,8 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   const round = activeRound(batch);
   if (!round || (options.expectedRoundId && options.expectedRoundId !== round.id)) return 0;
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
-  if (batch.finance!.legacyWarnings.some((warning) => warning.includes("历史结算") || warning.includes("客户分配"))) {
-    throw new Error("历史结算或补仓分配尚未核对，暂不能继续补仓，避免重复划款。");
+  if (isTopupBlockedByLegacyLedger(batch)) {
+    throw new Error("历史结算或补仓分配尚未核对，本次未记账。请进入批次详情，点击「重新检查账本」或「查看处理方法」。");
   }
   if (!Number.isFinite(price) || price <= 0) throw new Error("当前成交价无效，无法记录机构补仓。");
   if (!Number.isFinite(options.amount) || options.amount <= 0) return 0;

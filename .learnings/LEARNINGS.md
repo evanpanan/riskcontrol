@@ -64,3 +64,33 @@ Keep external delivery tests simulated unless real credentials and recipients ar
 ### Resolution
 - Included src/lib in Tailwind scanning, fixed footer layout, unified profile totals,
   added channel-specific tests, and synchronized the renamed RBAC placeholder assertion.
+
+## [LRN-20260921-003] correction
+
+**Logged**: 2026-09-21
+**Priority**: high
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Clearing storage cannot fix invalid historical records recreated by a fixture generator.
+
+### Details
+The old generator created settled clients without settlement snapshots and partial
+institution receipts without client allocations. Independent random client amounts
+could also exceed the priority pool. The user authorized a fresh local test dataset.
+
+### Suggested Action
+Start test fixtures with active clients and zero historical receipts. Allocate the
+pool exactly in cents and let the risk engine create pending rounds. Explicit resets
+must back up only affected business keys, preserve credentials and settings, and
+invalidate stale-tab revisions. Never reset on ordinary application startup.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/lib/mockData.ts, scripts/check-test-data.ts
+- Tags: fixtures, reset, finance
+
+### Resolution
+- Rebuilt the local preview with 8 batches and 78 clients; removed the temporary reset page.
+- Added tests for clean fixtures, topups, settlement, backup, storage failure and stale tabs.

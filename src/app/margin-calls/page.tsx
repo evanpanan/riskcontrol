@@ -30,6 +30,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   summarizeBatchMarginFromClients,
   executeInstitutionTopup,
+  isTopupBlockedByLegacyLedger,
   getLockedBatchRequiredMargin,
   type BatchLike,
 } from "@/lib/riskEngine";
@@ -396,6 +397,10 @@ export default function MarginCallsPage() {
                               disabled={mc.adjustedPending <= 0.01}
                               onClick={() => {
                                 const b: any = batches.find((x: any) => x.id === mc.batchId);
+                                if (b && isTopupBlockedByLegacyLedger(b)) {
+                                  window.location.assign(`/batch/${encodeURIComponent(b.id)}`);
+                                  return;
+                                }
                                 const batchTotalRequired = (mc.batchTotalRequired ?? mc.requiredAmount) as number;
                                 const target: FullfillTarget = {
                                   mcId: mc.id,

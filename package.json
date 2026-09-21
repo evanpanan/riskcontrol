@@ -12,6 +12,7 @@
     "lint": "next lint",
     "verify:preview": "node scripts/check-preview.mjs",
     "verify:finance": "tsx scripts/check-finance.ts",
+    "verify:test-data": "tsx scripts/check-test-data.ts",
     "verify:notifications": "tsx scripts/check-notifications.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",

@@ -9,6 +9,7 @@ import {
   calculateTotalShares,
   summarizeBatchMarginFromClients,
   executeInstitutionTopup,
+  isTopupBlockedByLegacyLedger,
   getLockedBatchRequiredMargin,
   type BatchLike as RiskEngineBatchLike,
 } from "@/lib/riskEngine";
@@ -476,11 +477,15 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if (isTopupBlockedByLegacyLedger(batch as any)) {
+                  window.location.assign(`/batch/${encodeURIComponent(batch.id)}`);
+                  return;
+                }
                 setShowFulfillDialog(true);
               }}
             >
               <Zap className="h-3.5 w-3.5" />
-              处理补仓
+              {isTopupBlockedByLegacyLedger(batch as any) ? "查看核对与处理" : "处理补仓"}
             </Button>
             </RoleGate>
           </div>

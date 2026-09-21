@@ -51,6 +51,7 @@ import {
   isVipClient,
   allocateClientMarginRequirements,
   executeInstitutionTopup,
+  isTopupBlockedByLegacyLedger,
   summarizeBatchMarginFromClients,
   getLockedBatchRequiredMargin,
   type BatchLike,
@@ -85,6 +86,7 @@ interface ClientTableProps {
     totalAddedCumulative: number;
   }) => void;
   onClientInvestmentRefresh?: () => void;
+  onLedgerRecovery?: () => void;
 }
 
 export function ClientTable({
@@ -96,6 +98,7 @@ export function ClientTable({
   onClientStatusChange,
   batch,
   onBatchMutated,
+  onLedgerRecovery,
 }: ClientTableProps) {
   const totalInvestment = clients
     .filter((c) => !(c as any).__redacted)
@@ -841,6 +844,11 @@ export function ClientTable({
                               className="h-7 gap-1.5 px-2.5 text-[11px]"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (batch && isTopupBlockedByLegacyLedger(batch)) {
+                                  if (onLedgerRecovery) onLedgerRecovery();
+                                  else window.location.assign(`/batch/${encodeURIComponent(batch.id)}`);
+                                  return;
+                                }
                                 setMarginDialogClientId(client.id);
                                 setMarginInputValue(clientPending.toFixed(2));
                                 setMarginDialogOpen(true);

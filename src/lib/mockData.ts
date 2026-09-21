@@ -6,7 +6,6 @@ import {
   RiskLevel,
   BatchStatus,
   ClientStatus,
-  MarginCallStatus,
 } from "@prisma/client";
 import {
   calculateBatchRiskMetrics,
@@ -56,7 +55,7 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-const MOCK_BASE_SEED = 20260306;
+const MOCK_BASE_SEED = 20260922;
 
 function createSeededRandom(seedOffset: number) {
   const rand = mulberry32(MOCK_BASE_SEED + seedOffset);
@@ -76,8 +75,6 @@ export function generateMockData(): MockDataSet {
   const now = new Date();
   const batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[] = [];
   const stockHistory: StockHistory[] = [];
-
-  const globalRng = createSeededRandom(0);
 
   const BASE_SIGN_DATE = new Date("2025-03-06T00:00:00.000Z");
 
@@ -118,63 +115,8 @@ export function generateMockData(): MockDataSet {
 
     const metrics = calculateBatchRiskMetrics(initialTotalAmount, currentMarketValue, 0);
 
-    let cumulativeMarginCalls = 0;
+    const cumulativeMarginCalls = 0;
     const marginCalls: MarginCall[] = [];
-
-    if (metrics.riskLevel === RiskLevel.CRITICAL || (i === 3 || i === 7)) {
-      const required = initialTotalAmount * 0.2;
-      const fulfilled = i === 7 ? 0 : required * 0.8;
-      cumulativeMarginCalls = fulfilled;
-
-      const triggerDate = new Date(signDate);
-      triggerDate.setUTCMonth(triggerDate.getUTCMonth() + batchRng.int(4, 12));
-      const mcEntryPrice1 = Number((stockPriceAtStart * (1 - 0.22)).toFixed(2));
-      const rescueShares1 = fulfilled > 0 && mcEntryPrice1 > 0 ? fulfilled / mcEntryPrice1 : 0;
-
-      marginCalls.push({
-        id: `mc-${i}-1`,
-        batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
-        triggerDate,
-        triggerMarketValue: Number((initialTotalAmount * 0.78).toFixed(2)),
-        dropPercent: 0.22,
-        requiredAmount: required,
-        fulfilledAmount: fulfilled > 0 ? fulfilled : null,
-        fulfilledDate: fulfilled > 0 ? new Date(triggerDate.getTime() + 2 * 24 * 60 * 60 * 1000) : null,
-        status: fulfilled === 0 ? MarginCallStatus.PENDING : (fulfilled >= required ? MarginCallStatus.FULLFILLED : MarginCallStatus.PENDING),
-        note: fulfilled === 0 ? "等待机构补仓资金到账" : "部分补仓已完成，请关注剩余额度",
-        notifiedEmails: "risk-control@institution.com,head-of-risk@institution.com",
-        notifiedWhatsApps: "+852-9123-4567",
-        averageEntryPrice: mcEntryPrice1,
-        rescueShares: rescueShares1,
-        createdAt: triggerDate,
-      } as any);
-
-      if (i === 3) {
-        const triggerDate2 = new Date(triggerDate);
-        triggerDate2.setUTCMonth(triggerDate2.getUTCMonth() + 2);
-        const required2 = initialTotalAmount * 0.05;
-        const mcEntryPrice2 = Number((stockPriceAtStart * 0.75).toFixed(2));
-        const rescueShares2 = mcEntryPrice2 > 0 ? required2 / mcEntryPrice2 : 0;
-        marginCalls.push({
-          id: `mc-${i}-2`,
-          batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
-          triggerDate: triggerDate2,
-          triggerMarketValue: Number((initialTotalAmount * 0.75 - fulfilled).toFixed(2)),
-          dropPercent: 0.05,
-          requiredAmount: required2,
-          fulfilledAmount: required2,
-          fulfilledDate: new Date(triggerDate2.getTime() + 1 * 24 * 60 * 60 * 1000),
-          status: MarginCallStatus.FULLFILLED,
-          note: "二次补仓已完成，市值回归至安全区域",
-          notifiedEmails: "risk-control@institution.com",
-          notifiedWhatsApps: "+852-9123-4567",
-          averageEntryPrice: mcEntryPrice2,
-          rescueShares: rescueShares2,
-          createdAt: triggerDate2,
-        } as any);
-        cumulativeMarginCalls += required2;
-      }
-    }
 
     const metricsWithMargin = calculateBatchRiskMetrics(
       initialTotalAmount,
@@ -197,39 +139,29 @@ export function generateMockData(): MockDataSet {
     const numClients = clientCounts[i];
     const priorityPool = split.priorityAmount;
 
+    const weights = Array.from({ length: numClients }, () => batchRng.int(1, 12));
+    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+    let remainingCents = Math.round(priorityPool * 100);
     for (let c = 0; c < numClients; c++) {
       const clientRng = createSeededRandom(100000 + i * 1000 + c);
-      let investmentAmount: number;
-      if (c === 0) {
-        investmentAmount = priorityPool * 0.25;
-      } else if (c === numClients - 1) {
-        investmentAmount = priorityPool - clients.reduce((sum, cl) => sum + cl.investmentAmount, 0);
-        investmentAmount = Math.max(10000, Number(investmentAmount.toFixed(2)));
-      } else {
-        const isBig = clientRng.rand() < 0.3;
-        investmentAmount = isBig
-          ? clientRng.int(100000, 300000)
-          : clientRng.int(20000, 80000);
-      }
-      investmentAmount = Number(investmentAmount.toFixed(2));
+      // Allocate in cents; the last client receives the exact remainder.
+      const cents = c === numClients - 1 ? remainingCents
+        : Math.floor(Math.round(priorityPool * 100) * weights[c] / totalWeight);
+      remainingCents -= cents;
+      const investmentAmount = cents / 100;
 
       const profitSplit = calculateProfitSplitRatio(investmentAmount, true);
 
       const clientSignDate = deterministicOffsetDate(signDate, clientRng.int(0, 3), clientRng.rand() * 24);
 
-      let clientStatus: ClientStatus = ClientStatus.ACTIVE;
-      if (i === 4 && c < 2) {
-        clientStatus = ClientStatus.SETTLED;
-      } else if (i === 1 && c === 3) {
-        clientStatus = ClientStatus.EXIT_REQUESTED;
-      }
+      const clientStatus = ClientStatus.ACTIVE;
 
       const lastName = CLIENT_LAST_NAMES[clientRng.int(0, CLIENT_LAST_NAMES.length - 1)];
       const firstName = CLIENT_FIRST_NAMES[clientRng.int(0, CLIENT_FIRST_NAMES.length - 1)];
       const clientName = `${lastName}${firstName}`;
 
       clients.push({
-        id: `client-${i}-${c}`,
+        id: `client-${MOCK_BASE_SEED}-${i}-${c}`,
         batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
         name: clientName,
         investmentAmount,
@@ -241,10 +173,8 @@ export function generateMockData(): MockDataSet {
         realtimePnL: 0,
         estimatedExitAmount: 0,
         status: clientStatus,
-        settledAt: clientStatus === ClientStatus.SETTLED
-          ? deterministicOffsetDate(clientSignDate, clientRng.int(30, 180), clientRng.rand() * 24)
-          : null,
-        settlementNote: clientStatus === ClientStatus.SETTLED ? "客户申请退出，已按结算规则完成清算" : null,
+        settledAt: null,
+        settlementNote: null,
         createdAt: clientSignDate,
         updatedAt: now,
       });
@@ -486,6 +416,39 @@ export const FINANCE_STORE_KEY = "risk_control_finance_v2";
 type FinanceRecord = { fingerprint: string; clientFingerprints?: Record<string, string>; batch: BatchLike };
 type FinanceStore = Record<string, FinanceRecord>;
 
+/** Explicit local-development operation; never invoked by normal data loading. */
+export function resetMockTestData(): { batches: number; clients: number; backupKey: string } {
+  if (process.env.NODE_ENV !== "development" || typeof window === "undefined") {
+    throw new Error("仅允许在本地开发预览中重置测试数据。");
+  }
+  const keys = [FINANCE_STORE_KEY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
+    "risk_control_last_notifications", "risk_control_alert_ack_v1"];
+  const storage = window.localStorage;
+  const backup = Object.fromEntries(keys.map((key) => [key, storage.getItem(key)]));
+  const backupKey = `risk_control_test_backup_${Date.now()}`;
+  const fresh = generateMockData();
+  const store: FinanceStore = {};
+  const previous = readFinanceStore();
+  for (const batch of fresh.batches) {
+    initializeBatchFinance(batch);
+    const finance = (batch as BatchLike).finance!;
+    if (finance.legacyWarnings.length) throw new Error("新测试数据校验失败，旧账本未修改。");
+    // Old tabs must fail the revision check rather than reintroduce the old ledger.
+    finance.revision = Math.max(Date.now(), (previous[batch.id]?.batch.finance?.revision ?? 0) + 1);
+    reviveBatch(batch);
+    store[batch.id] = financeRecord(batch);
+  }
+  // Both writes precede removal. A quota failure cannot destroy the old active ledger.
+  storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+  storage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+  for (const key of keys.slice(1)) storage.removeItem(key);
+  cachedMockData = fresh;
+  window.dispatchEvent(new CustomEvent("risk-control:finance-changed"));
+  window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
+  return { batches: fresh.batches.length,
+    clients: fresh.batches.reduce((sum, batch) => sum + batch.clients.length, 0), backupKey };
+}
+
 function batchFingerprint(batch: BatchLike): string {
   return `${batch.id}|${batch.stockSymbol}|${batch.stockPriceAtStart}`;
 }
@@ -598,11 +561,20 @@ export function getMockData(): MockDataSet {
       for (const batch of loaded.batches) {
         if (!store[batch.id]) store[batch.id] = financeRecord(batch);
       }
-      window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+      const serialized = JSON.stringify(store);
+      if (window.localStorage.getItem(FINANCE_STORE_KEY) !== serialized) {
+        window.localStorage.setItem(FINANCE_STORE_KEY, serialized);
+      }
     }
     cachedMockData = loaded;
   }
   return cachedMockData;
+}
+
+/** Re-read the persisted ledger after explicit refresh or a cross-tab storage event. */
+export function reloadMockData(): MockDataSet {
+  cachedMockData = null;
+  return getMockData();
 }
 
 export function refreshMockDataPrices(): MockDataSet {
