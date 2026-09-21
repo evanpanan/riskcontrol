@@ -130,7 +130,7 @@ test('T3.2 AMD CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅自己客�
   assert(visibleRealRows.every(c => c.bdManager === userLiujia.bdManagerFullName), '可见行 bdManager=刘佳');
   assert(redactedRows.length === 18 - realLiujiaCount, `脱敏行数=M`);
   assert(redactedRows.every(row => row.__placeholder === true), '脱敏行 __placeholder=true');
-  assert(redactedRows.every(row => row.name === '— 其他 BD 客户（已脱敏）—'), `脱敏行 name=固定占位字符串`);
+  assert(redactedRows.every(row => row.name === '— 其他商务经理 客户（已脱敏）—'), `脱敏行 name=固定占位字符串`);
   assert(redactedRows.every(row => row.bdManager === '（已隐藏）'), `脱敏行 bdManager=（已隐藏）`);
   assert(redactedRows.every(row => row.investmentAmount === null), `脱敏行 investmentAmount=null`);
   const redactedIds = new Set(redactedRows.map(r => r.id));

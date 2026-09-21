@@ -26,7 +26,10 @@ import {
 } from "@/components/ui/select";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { APP_ROLES } from "@/types/auth";
+import { INSTITUTION_ROLES } from "@/lib/auth";
 import { toast } from "sonner";
+import { getProfitSettings, validProfitSettings } from "@/lib/profitSettings";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Settings,
   Shield,
@@ -57,13 +60,15 @@ import {
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import {
   DEFAULT_RISK_RECIPIENTS,
   RiskRecipient,
   getRiskRecipients,
   setRiskRecipients,
 } from "@/lib/riskRecipients";
-import { sendTestNotification } from "@/lib/notifier";
+import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
+import type { notificationReadiness } from "@/lib/server/notificationDelivery";
 
 const LS_KEY = "risk_control_settings";
 const RECIPIENTS_LS_KEY = "risk_control_recipients";
@@ -153,7 +158,7 @@ const emptyUserForm = (): UserFormState => ({
 const SYSTEM_ROLE_LABELS: Record<SystemAppUser["role"], string> = {
   ADMIN: "系统管理员",
   RISK_MANAGER: "风控总监",
-  BD_MANAGER: "BD经理",
+  BD_MANAGER: "商务经理",
   OPERATIONS: "运营",
 };
 
@@ -169,7 +174,7 @@ const ROLE_LABELS: Record<RiskRecipient["role"], string> = {
   RISK_MANAGER: "风控经理",
   RISK_ANALYST: "风控分析师",
   RISK_DIRECTOR: "风控总监",
-  BD_MANAGER: "BD经理",
+  BD_MANAGER: "商务经理",
   OPERATIONS: "运营",
   DIRECTOR: "总监",
   CUSTOM: "自定义",
@@ -223,10 +228,10 @@ const DEFAULT_FORM: SettingsFormState = {
   marginThreshold: 20,
   priorityRatio: 70,
   subordinateRatio: 30,
-  emailWebhook: "https://api.example.com/email-webhook",
+  emailWebhook: "",
   whatsappWebhook: "",
-  defaultRiskEmail: "risk-control@institution.com",
-  emergencyPhone: "+852-9123-4567",
+  defaultRiskEmail: "",
+  emergencyPhone: "",
   dataSource: "Yahoo Finance (免费)",
   apiKey: "",
   vipThreshold: 100000,
@@ -243,6 +248,7 @@ const DEFAULT_FORM: SettingsFormState = {
 
 export default function SettingsPage() {
   const [saved, setSaved] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<{ title: string; run: () => void } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [form, setForm] = useState<SettingsFormState>(() => DEFAULT_FORM);
   useEffect(() => {
@@ -251,36 +257,39 @@ export default function SettingsPage() {
       const raw = localStorage.getItem(LS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<SettingsFormState>;
-        setForm((prev) => ({ ...prev, ...parsed }));
+        setForm((prev) => ({ ...prev, ...parsed,
+          emailWebhook: /example\.com/.test(parsed.emailWebhook ?? "") ? "" : parsed.emailWebhook ?? "",
+          defaultRiskEmail: parsed.defaultRiskEmail === "risk-control@institution.com" ? "" : parsed.defaultRiskEmail ?? "",
+          emergencyPhone: parsed.emergencyPhone === "+852-9123-4567" ? "" : parsed.emergencyPhone ?? "",
+        }));
       }
     } catch (e) {}
   }, []);
   useEffect(() => {
+    if (!hydrated) return;
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(form));
+      const rates = getProfitSettings();
+      const stored = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
+        emailWebhook: stored.emailWebhook ?? "", whatsappWebhook: stored.whatsappWebhook ?? "",
+        defaultRiskEmail: stored.defaultRiskEmail ?? "", emergencyPhone: stored.emergencyPhone ?? "",
+      }));
     } catch (e) {}
-  }, [form]);
+  }, [form, hydrated]);
 
   // 收件人：持久化 + 联动 riskRecipients global
   const [recipients, setRecipients] = useState<RiskRecipient[]>(() => getRiskRecipients());
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(RECIPIENTS_LS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setRiskRecipients(parsed);
-          setRecipients(parsed);
-        }
-      }
+      setRecipients(getRiskRecipients());
     } catch (e) {}
   }, []);
   useEffect(() => {
-    try {
-      localStorage.setItem(RECIPIENTS_LS_KEY, JSON.stringify(recipients));
-    } catch (e) {}
-    setRiskRecipients(recipients);
-  }, [recipients]);
+    if (!hydrated) return;
+    try { setRiskRecipients(recipients); }
+    catch { toast.error("收件人保存失败，请检查浏览器存储。"); }
+  }, [recipients, hydrated]);
 
   // 品牌 Logo 管理（localStorage 持久化）
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
@@ -381,31 +390,6 @@ export default function SettingsPage() {
     setUErrors({});
     setUserDlgOpen(true);
   };
-  const handleUAvatarFile = (file: File) => {
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error("头像文件不能超过 2MB");
-      return;
-    }
-    if (!/^image\//.test(file.type)) {
-      toast.error("请上传图片格式的头像");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setUForm({ ...uForm, avatarDataUrl: String(reader.result || "") });
-      toast.success("头像已选择，保存后生效");
-    };
-    reader.onerror = () => toast.error("读取头像失败");
-    reader.readAsDataURL(file);
-  };
-  const onUAvatarInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) handleUAvatarFile(f);
-    e.target.value = "";
-  };
-  const resetUAvatar = () => {
-    setUForm({ ...uForm, avatarDataUrl: "" });
-  };
   const validateUser = (): boolean => {
     const errs: Record<string, string> = {};
     if (!uForm.displayName.trim()) errs.displayName = "请填写姓名";
@@ -458,17 +442,43 @@ export default function SettingsPage() {
     setUserDlgOpen(false);
   };
   const removeUser = (id: string) => {
-    if (!confirm("确认删除该账号？")) return;
-    setUsers((list) => list.filter((u) => u.id !== id));
+    setConfirmation({ title: "确认删除该账号？", run: () => setUsers((list) => list.filter((u) => u.id !== id)) });
   };
   const toggleUserEnabled = (id: string, enabled: boolean) => {
     setUsers((list) => list.map((u) => (u.id === id ? { ...u, enabled } : u)));
   };
 
   const save = (label: string) => {
+    if (label === "notify") {
+      if (form.defaultRiskEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.defaultRiskEmail)) {
+        toast.error("请填写有效收件邮箱。"); return;
+      }
+      if (form.emergencyPhone && !/^\+[1-9]\d{7,14}$/.test(form.emergencyPhone.replace(/[\s()-]/g, ""))) {
+        toast.error("WhatsApp 号码须包含国家区号，例如 +85291234567。"); return;
+      }
+    }
+    const rates = label === "分成配置" ? {
+      vipThreshold: Number(form.vipThreshold), vipClient: Number(form.vipClient), normalClient: Number(form.normalClient),
+    } : getProfitSettings();
+    if (!validProfitSettings(rates)) {
+      toast.error("档位门槛须大于 0，客户利润比例须在 0% 至 100% 之间。");
+      return;
+    }
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(form));
-    } catch (e) {}
+      const stored = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+      const notificationFields = Object.fromEntries(
+        (["emailWebhook", "whatsappWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
+          .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
+      );
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
+        ...notificationFields,
+      }));
+    } catch {
+      toast.error("配置保存失败，请检查浏览器存储后重试。");
+      return;
+    }
+    if (label === "分成配置") toast.success("分成配置已保存，仅对新签约客户生效。");
     setSaved(label);
     setTimeout(() => setSaved(null), 2200);
   };
@@ -523,15 +533,13 @@ export default function SettingsPage() {
     setDlgOpen(false);
   };
   const removeRecipient = (id: string) => {
-    if (!confirm("确认删除该收件人？")) return;
-    setRecipients((list) => list.filter(r => r.id !== id));
+    setConfirmation({ title: "确认删除该收件人？", run: () => setRecipients((list) => list.filter(r => r.id !== id)) });
   };
   const toggleEnabled = (id: string, enabled: boolean) => {
     setRecipients((list) => list.map(r => r.id === id ? { ...r, enabled } : r));
   };
   const resetRecipients = () => {
-    if (!confirm("确认恢复为默认 8 位收件人？当前配置将丢失。")) return;
-    setRecipients([...DEFAULT_RISK_RECIPIENTS]);
+    setConfirmation({ title: "确认清空收件人？通知将暂停发送给名单中的人员。", run: () => setRecipients([]) });
   };
 
   const Field = (props: any) => (
@@ -546,8 +554,20 @@ export default function SettingsPage() {
   const enabledCount = recipients.filter(r => r.enabled).length;
 
   const [testStatus, setTestStatus] = useState<{ email?: string; whatsapp?: string }>({});
+  const [channelStatus, setChannelStatus] = useState<ReturnType<typeof notificationReadiness> | null>(null);
+  const [sendToken, setSendToken] = useState("");
+  const [tokenReady, setTokenReady] = useState(false);
+  const checkChannels = async () => {
+    try {
+      const response = await fetch("/api/notify/send", { cache: "no-store" });
+      if (!response.ok) throw new Error("无法读取通知服务配置。");
+      setChannelStatus(await response.json());
+    } catch (err) { toast.error(err instanceof Error ? err.message : "配置检查失败"); }
+  };
+  useEffect(() => { void checkChannels(); setTokenReady(hasNotificationSendToken()); }, []);
   const [sendingTest, setSendingTest] = useState<"email" | "whatsapp" | null>(null);
   const handleSendTest = async (channel: "email" | "whatsapp") => {
+    if (sendingTest) return;
     setSendingTest(channel);
     setTestStatus((s) => ({ ...s, [channel]: undefined }));
     try {
@@ -560,9 +580,8 @@ export default function SettingsPage() {
       const sentTo = r.channels[channel]?.sentTo?.join(", ");
       if (r.channels[channel]?.success) {
         setTestStatus((s) => ({ ...s, [channel]: `OK → ${sentTo || targets[0]}` }));
-        toast.success(
-          channel === "email" ? `测试邮件已发送到 ${sentTo || targets[0]}` : `测试 WhatsApp 已发送到 ${sentTo || targets[0]}`
-        );
+        toast.success(`服务商已受理，请核对 ${sentTo || targets[0]} 是否实际收到。`);
+        if (r.logError) toast.warning(r.logError);
       } else {
         throw new Error(r.channels[channel]?.error || (channel === "email" ? "发送测试邮件失败" : "发送测试 WhatsApp 失败"));
       }
@@ -576,7 +595,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <AuthGuard route="/settings" allowed={[APP_ROLES.RISK_MANAGER]}>
+    <AuthGuard route="/settings" allowed={[...INSTITUTION_ROLES]}>
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="space-y-1.5">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -831,6 +850,29 @@ export default function SettingsPage() {
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0 space-y-5">
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3 text-xs">
+          <p className="font-semibold">1. 配置服务商 → 2. 添加真实收件人 → 3. 点击测试并核对收件</p>
+          <p className="text-muted-foreground">邮件推荐 Resend：管理员配置 API Key 和已验证发件域名。WhatsApp 推荐 Twilio：配置企业号码、收件人授权及审核通过的消息模板。密钥只放服务器，不填入 Webhook 地址。</p>
+          <p className="text-muted-foreground">当前为按钮手动发送；网页风险弹窗不等于已发送外部通知。“已受理”不代表已送达，需查看收件箱或服务商回执。</p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Input type="password" aria-label="通知发送授权码" autoComplete="off" value={sendToken}
+              onChange={(e) => setSendToken(e.target.value)} placeholder="管理员提供的发送授权码，仅当前页面会话保留"
+              className="max-w-md text-xs" />
+            <Button variant="outline" size="sm" onClick={() => {
+              if (sendToken.trim().length < 32) { toast.error("授权码至少32位。"); return; }
+              setNotificationSendToken(sendToken); setSendToken(""); setTokenReady(true);
+              toast.success("发送授权码已暂存，本页刷新后需重新输入。");
+            }}>{tokenReady ? "更新发送授权码" : "启用本次发送授权"}</Button>
+            <Button variant="outline" size="sm" onClick={checkChannels}>检查服务配置</Button>
+          </div>
+          {channelStatus && (["email", "whatsapp"] as const).map((channel) => (
+            <p key={channel} className={channelStatus[channel].ready ? "text-success" : "text-warning"}>
+              {channel === "email" ? "邮件" : "WhatsApp"}：{channelStatus[channel].ready
+                ? `${channelStatus[channel].provider} 配置已就绪，待实发验证`
+                : channelStatus[channel].issues.join("；")}
+            </p>
+          ))}
+        </div>
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
           <div className="flex items-start justify-between gap-4 mb-3">
             <div className="flex items-start gap-3">
@@ -840,14 +882,14 @@ export default function SettingsPage() {
               <div>
                 <p className="font-semibold text-sm">Email Webhook</p>
                 <p className="text-[11px] text-muted-foreground">
-                  用于触发补仓警报时，通知风控人员与 BD 经理
+                  用于触发补仓警报时，通知风控人员与 商务经理
                 </p>
               </div>
             </div>
             {hydrated && form.emailWebhook ? (
               <Badge variant="success" className="gap-1 text-[10px]">
                 <CheckCircle2 className="h-2.5 w-2.5" />
-                已配置
+                已填地址，待验证
               </Badge>
             ) : (
               <Badge variant="secondary" className="gap-1 text-[10px]">
@@ -856,7 +898,7 @@ export default function SettingsPage() {
               </Badge>
             )}
           </div>
-          <Field name="emailWebhook" placeholder="https://hook.make.com/xxx 或留空用 env.RESEND_API_KEY" className="font-mono text-xs" />
+          <Field name="emailWebhook" placeholder="可选：留空使用服务端配置；自定义地址须由管理员在服务端授权" className="font-mono text-xs" />
         </div>
 
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
@@ -875,7 +917,7 @@ export default function SettingsPage() {
             {hydrated && form.whatsappWebhook ? (
               <Badge variant="success" className="gap-1 text-[10px]">
                 <CheckCircle2 className="h-2.5 w-2.5" />
-                已配置
+                已填地址，待验证
               </Badge>
             ) : (
               <Badge variant="secondary" className="gap-1 text-[10px]">
@@ -884,7 +926,7 @@ export default function SettingsPage() {
               </Badge>
             )}
           </div>
-          <Field name="whatsappWebhook" placeholder="https://graph.facebook.com/xxx 或留空用 env.TWILIO 凭证" className="font-mono text-xs" />
+          <Field name="whatsappWebhook" placeholder="可选：Make / n8n Webhook，不能直接填 Meta API 地址" className="font-mono text-xs" />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -910,7 +952,7 @@ export default function SettingsPage() {
               variant="outline"
               className="gap-1.5"
               onClick={() => handleSendTest("email")}
-              disabled={sendingTest === "email"}
+              disabled={!!sendingTest}
             >
               <Mail className="h-3.5 w-3.5" />
               {sendingTest === "email" ? "发送中…" : "发送测试邮件"}
@@ -919,7 +961,7 @@ export default function SettingsPage() {
               variant="outline"
               className="gap-1.5"
               onClick={() => handleSendTest("whatsapp")}
-              disabled={sendingTest === "whatsapp"}
+              disabled={!!sendingTest}
             >
               <MessageCircle className="h-3.5 w-3.5" />
               {sendingTest === "whatsapp" ? "发送中…" : "发送测试 WhatsApp"}
@@ -958,7 +1000,7 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={resetRecipients}>
-              恢复默认
+              清空收件人
             </Button>
             <Button size="sm" className="gap-1.5 h-8" onClick={openAdd}>
               <Plus className="h-3.5 w-3.5" />
@@ -1048,9 +1090,12 @@ export default function SettingsPage() {
         ))}
         <div className="pt-2 flex items-center gap-3 flex-wrap">
           <Button className="gap-1.5" onClick={() => {
-            try { localStorage.setItem(RECIPIENTS_LS_KEY, JSON.stringify(recipients)); } catch(e){}
-            setRiskRecipients(recipients);
-            save("recipient");
+            try {
+              setRiskRecipients(recipients);
+              save("recipient");
+            } catch {
+              toast.error("收件人保存失败，请检查浏览器存储后重试。");
+            }
           }}>
             <Save className="h-4 w-4" />
             保存收件人配置
@@ -1238,19 +1283,7 @@ export default function SettingsPage() {
                 )}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  {hydrated && u.avatarDataUrl ? (
-                    <img
-                      src={u.avatarDataUrl}
-                      alt={u.displayName}
-                      className="h-9 w-9 rounded-lg object-cover border border-border/60 shrink-0 shadow-sm"
-                    />
-                  ) : (
-                    <div className="h-9 w-9 rounded-lg gradient-primary shrink-0 flex items-center justify-center shadow-sm shadow-primary/20">
-                      <span className="text-[11px] font-bold text-primary-foreground">
-                        {u.avatarInitials}
-                      </span>
-                    </div>
-                  )}
+                  <ClientAvatar name={u.bdManagerFullName || u.displayName} role={u.role} />
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5 text-sm font-semibold">
                       {u.displayName}
@@ -1333,9 +1366,16 @@ export default function SettingsPage() {
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0 space-y-3">
+        <p className="text-xs text-muted-foreground">仅对保存后新签约的客户生效。老客户沿用签约比例，已结算金额保持冻结。</p>
+        <label className="block text-xs text-muted-foreground">
+          VIP 本金门槛（美元，含等于）
+          <Input type="number" min="0.01" step="0.01" value={Number.isFinite(form.vipThreshold) ? form.vipThreshold : ""}
+            onChange={(e) => setForm({ ...form, vipThreshold: e.target.value === "" ? NaN : Number(e.target.value) })}
+            className="mt-1 font-mono tabular-nums" />
+        </label>
         {[
-          { threshold: 100000, client: 40, inst: 60, label: "VIP 档位" },
-          { threshold: 0, client: 30, inst: 70, label: "普通档位" },
+          { threshold: form.vipThreshold, client: form.vipClient, inst: 100 - form.vipClient, label: "VIP 档位" },
+          { threshold: 0, client: form.normalClient, inst: 100 - form.normalClient, label: "普通档位" },
         ].map((tier, idx) => (
           <div
             key={idx}
@@ -1354,7 +1394,7 @@ export default function SettingsPage() {
                 {tier.label}
               </Badge>
               <span className="text-[11px] font-mono text-muted-foreground">
-                ≥ ${tier.threshold.toLocaleString()}
+                {idx === 0 ? "≥" : "<"} ${Number(form.vipThreshold).toLocaleString()}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1363,7 +1403,9 @@ export default function SettingsPage() {
                 <div className="relative">
                   <Input
                     type="number"
-                    defaultValue={tier.client}
+                    min="0" max="100" step="0.01"
+                    value={Number.isFinite(tier.client) ? tier.client : ""}
+                    onChange={(e) => setForm({ ...form, [idx === 0 ? "vipClient" : "normalClient"]: e.target.value === "" ? NaN : Number(e.target.value) })}
                     className="h-9 font-mono font-bold text-xs pr-8"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
@@ -1376,7 +1418,8 @@ export default function SettingsPage() {
                 <div className="relative">
                   <Input
                     type="number"
-                    defaultValue={tier.inst}
+                    value={Number.isFinite(tier.inst) ? tier.inst : ""}
+                    readOnly
                     className="h-9 font-mono font-bold text-xs pr-8"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
@@ -1387,7 +1430,7 @@ export default function SettingsPage() {
             </div>
           </div>
         ))}
-        <Button variant="outline" size="sm" className="w-full gap-1.5">
+        <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => save("分成配置")}>
           <Save className="h-3.5 w-3.5" />
           保存分成配置
         </Button>
@@ -1584,58 +1627,15 @@ export default function SettingsPage() {
           {uErrors.email && <p className="text-[11px] text-danger">{uErrors.email}</p>}
         </div>
       </div>
-      {/* 头像上传 */}
+      {/* 统一默认头像 */}
       <div className="flex items-center gap-4 rounded-xl border border-border/40 bg-secondary/20 px-4 py-3">
-        <div className="shrink-0 relative">
-          {hydrated && uForm.avatarDataUrl ? (
-            <img
-              src={uForm.avatarDataUrl}
-              alt="头像预览"
-              className="h-14 w-14 rounded-xl object-cover border border-border/60 shadow-sm"
-            />
-          ) : (
-            <div className="h-14 w-14 rounded-xl gradient-primary flex items-center justify-center shadow shadow-primary/20">
-              <span className="text-sm font-bold text-primary-foreground leading-none">
-                {uForm.displayName ? computeInitials(uForm.displayName, uForm.email) : '??'}
-              </span>
-            </div>
-          )}
-        </div>
+        <ClientAvatar name={uForm.bdManagerFullName || uForm.displayName || "用户"} role={uForm.role} size="xl" />
         <div className="flex-1 min-w-0 space-y-1">
           <Label className="text-xs flex items-center gap-1">
-            <ImagePlus className="h-3 w-3" /> 账户头像
+            账户默认头像
           </Label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1.5 text-[11px]"
-              onClick={() => uAvatarFileRef.current?.click()}
-            >
-              <Upload className="h-3.5 w-3.5" /> 上传图片
-            </Button>
-            {uForm.avatarDataUrl && (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-8 gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-                onClick={resetUAvatar}
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> 恢复默认
-              </Button>
-            )}
-            <input
-              ref={uAvatarFileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
-              onChange={onUAvatarInput}
-              className="hidden"
-            />
-          </div>
           <p className="text-[10px] text-muted-foreground leading-relaxed">
-            支持 PNG / JPG / WebP / SVG / GIF，最大 2MB；不上传则自动使用姓名首字母作为默认头像。
+            根据姓名自动生成，全站风格一致，无需上传。
           </p>
         </div>
       </div>
@@ -1652,7 +1652,7 @@ export default function SettingsPage() {
             <SelectContent>
               <SelectItem value="ADMIN" className="text-danger">⚡ 系统管理员（最高权限）</SelectItem>
               <SelectItem value="RISK_MANAGER">风控总监（全局权限）</SelectItem>
-              <SelectItem value="BD_MANAGER">BD经理（仅管辖客户）</SelectItem>
+              <SelectItem value="BD_MANAGER">商务经理（仅管辖客户）</SelectItem>
               <SelectItem value="OPERATIONS">运营（只读/录入）</SelectItem>
             </SelectContent>
           </Select>
@@ -1715,7 +1715,7 @@ export default function SettingsPage() {
       {uForm.role === "BD_MANAGER" && (
         <div className="space-y-1.5">
           <Label className="text-xs flex items-center gap-1">
-            <UserPlus className="h-3 w-3" /> BD 归属全称（选填）
+            <UserPlus className="h-3 w-3" /> 商务经理归属全称（选填）
           </Label>
           <Input
             placeholder="如：王思远 (Sylvia Wang) — 用于客户表单自动归属"
@@ -1725,10 +1725,6 @@ export default function SettingsPage() {
           />
         </div>
       )}
-      <div className="rounded-lg bg-secondary/30 border border-border/40 px-3 py-2 text-[10.5px] text-muted-foreground/90 leading-relaxed">
-        <Info className="h-3 w-3 inline-block mr-1 -mt-0.5" />
-        账号将保存至本地 localStorage（mock 模式），生产环境需接入 Supabase Auth。
-      </div>
     </div>
     <DialogFooter className="gap-2 sm:gap-2">
       <Button variant="outline" onClick={() => setUserDlgOpen(false)}>
@@ -1741,6 +1737,12 @@ export default function SettingsPage() {
     </DialogFooter>
   </DialogContent>
 </Dialog>
+<ConfirmDialog
+  open={!!confirmation}
+  onOpenChange={(open) => { if (!open) setConfirmation(null); }}
+  title={confirmation?.title}
+  onConfirm={() => confirmation?.run()}
+/>
 </div>
   </AuthGuard>
   );

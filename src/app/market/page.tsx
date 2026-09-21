@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FlashNumber } from "@/components/ui/FlashNumber";
 import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
+import { toast } from "sonner";
 import {
   cn,
   formatCurrency,
@@ -12,7 +13,7 @@ import {
   formatCompactNumber,
 } from "@/lib/utils";
 import {
-  calculateBatchRiskMetrics,
+  getBatchMetrics,
   calculateBatchPnLSplit,
   calculatePortfolioSummary,
 } from "@/lib/riskEngine";
@@ -151,7 +152,7 @@ export default function MarketPage() {
   const [tick, setTick] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedStock, setSelectedStock] = useState<string | null>(null);
-  const batches = useMemo(() => mockDataRef.current.batches, [tick]);
+  const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
   const stockHistory = useMemo(() => mockDataRef.current.stockHistory, [tick]);
 
   const [settings, setSettings] = useState(DEFAULT_WEB_ALERT_SETTINGS);
@@ -173,7 +174,11 @@ export default function MarketPage() {
     if (!s.realtimeTickEnabled) return;
     const sec = Math.max(2, s.realtimeTickIntervalSec);
     const interval = setInterval(() => {
-      refreshMockDataPrices();
+      try { refreshMockDataPrices(); } catch (err) {
+        toast.error(err instanceof Error ? err.message : "行情更新失败");
+        clearInterval(interval);
+        return;
+      }
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
     }, sec * 1000);
@@ -183,10 +188,15 @@ export default function MarketPage() {
   const handleRefresh = () => {
     setRefreshing(true);
     setTimeout(() => {
-      refreshMockDataPrices();
-      mockDataRef.current = getMockData();
-      setTick((t) => t + 1);
-      setRefreshing(false);
+      try {
+        refreshMockDataPrices();
+        mockDataRef.current = getMockData();
+        setTick((t) => t + 1);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "行情更新失败");
+      } finally {
+        setRefreshing(false);
+      }
     }, 900);
   };
 
@@ -209,18 +219,11 @@ export default function MarketPage() {
     let worstExposure = 0;
     for (const b of batches) {
       const mv = b.currentMarketValue || b.initialTotalAmount;
-      const metrics = calculateBatchRiskMetrics(
-        b.initialTotalAmount,
-        mv,
-        b.cumulativeMarginCalls || 0
-      );
+      const metrics = getBatchMetrics(b);
       const split = calculateBatchPnLSplit(b, mv);
       totalInjected += b.subordinateAmount + (b.cumulativeMarginCalls || 0);
-      if (metrics.dropPercent <= -20) {
-        totalRecovered += 0; // 击穿还没回收
-      } else if (metrics.dropPercent > -20 && (b.cumulativeMarginCalls || 0) > 0) {
-        totalRecovered += (b.cumulativeMarginCalls || 0) * 0.4;
-      }
+      totalRecovered += Object.values((b as import("@/lib/riskEngine").BatchLike).finance?.settlements ?? {})
+        .reduce((sum, snapshot) => sum + snapshot.marginCallReturned, 0);
       worstExposure = Math.max(worstExposure, metrics.requiredMarginCall);
     }
     return {
@@ -914,11 +917,7 @@ export default function MarketPage() {
                 const change = b.currentDayChange || 0;
                 const mv = b.currentMarketValue || b.initialTotalAmount;
                 const split = calculateBatchPnLSplit(b, mv);
-                const metrics = calculateBatchRiskMetrics(
-                  b.initialTotalAmount,
-                  mv,
-                  b.cumulativeMarginCalls || 0
-                );
+                const metrics = getBatchMetrics(b);
                 return (
                   <div
                     key={b.id}

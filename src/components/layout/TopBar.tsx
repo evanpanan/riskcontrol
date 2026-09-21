@@ -1,7 +1,7 @@
 "use client";
 
-import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, Shield, LogOut, ImagePlus } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, LogOut, ImagePlus, AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,9 +20,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import type { AppSessionUser, AppRole } from "@/types/auth";
 import { APP_ROLES } from "@/types/auth";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
+import { Logo } from "@/components/branding/Logo";
+import Link from "next/link";
+import { getNotificationLogs, type NotificationLogEntry, type NotificationPayload } from "@/lib/notifier";
 import { toast } from "sonner";
 
 export function TopBar() {
@@ -33,8 +46,9 @@ export function TopBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number>(0);
   const [secondsAgo, setSecondsAgo] = useState(0);
-  const { user, role, switchToMockRole, logoutToLogin, updateCurrentUser } = useCurrentUser();
-  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifTick, setNotifTick] = useState(0);
+  const { user, role, logoutToLogin } = useCurrentUser();
 
   useEffect(() => {
     setHydrated(true);
@@ -42,31 +56,6 @@ export function TopBar() {
     setNow(new Date(t));
     setLastUpdated(t);
   }, []);
-
-  const handleAvatarFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      toast.error('请上传图片文件');
-      return;
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error('图片大小不能超过 2MB');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result ?? '');
-      updateCurrentUser({ avatarDataUrl: dataUrl });
-      toast.success('头像已更新');
-    };
-    reader.onerror = () => toast.error('图片读取失败');
-    reader.readAsDataURL(file);
-  };
-
-  const handleAvatarInput: React.ChangeEventHandler<HTMLInputElement> = (e) => {
-    const f = e.target.files?.[0];
-    if (f) handleAvatarFile(f);
-    e.target.value = '';
-  };
 
   // 移除自动聚焦：页面刷新时如果 Chrome 自动聚焦到搜索框，强制 blur
   useEffect(() => {
@@ -125,7 +114,7 @@ export function TopBar() {
       case APP_ROLES.RISK_MANAGER:
         return "风控总监";
       case APP_ROLES.BD_MANAGER:
-        return "BD经理";
+        return "商务经理";
       case APP_ROLES.OPERATIONS:
         return "运营";
       default:
@@ -136,6 +125,7 @@ export function TopBar() {
   return (
     <header className="sticky top-0 z-40 h-14 shrink-0 border-b border-border/50 bg-background/70 backdrop-blur-2xl supports-[backdrop-filter]:bg-background/40">
       <div className="flex h-full items-center gap-3 px-5 lg:px-6">
+        <Link href="/" aria-label="RiskControl 首页" className="lg:hidden shrink-0"><Logo size={32} /></Link>
         <Button
           variant="ghost"
           size="icon"
@@ -154,7 +144,7 @@ export function TopBar() {
         >
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="搜索批次号 / 客户姓名 / 股票代码 / BD经理..."
+            placeholder="搜索批次号 / 客户姓名 / 股票代码 / 商务经理..."
             className="pl-10 h-9 bg-secondary/40 border-transparent focus:border-primary/40 focus:bg-background/80"
             autoComplete="off"
             autoCorrect="off"
@@ -209,19 +199,33 @@ export function TopBar() {
             </span>
           </div>
 
-          <div className="relative">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="relative">
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-danger" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>通知中心 (3 条未读)</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
+          <Dialog open={notifOpen} onOpenChange={setNotifOpen}>
+            <div className="relative">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="relative"
+                    onClick={() => {
+                      setNotifTick((t) => t + 1);
+                      setNotifOpen(true);
+                    }}
+                  >
+                    <Bell className="h-4 w-4" />
+                    <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-danger" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>通知中心</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <NotificationDialogContent
+              notifTick={notifTick}
+              onRefresh={() => setNotifTick((t) => t + 1)}
+            />
+          </Dialog>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -235,15 +239,12 @@ export function TopBar() {
                 }}
                 title="单击打开个人菜单，双击直接退出登录"
               >
-                {hydrated && user?.avatarDataUrl ? (
-                  <img src={user.avatarDataUrl} alt={user?.displayName ?? 'avatar'} className="h-8 w-8 shrink-0 rounded-xl object-cover border border-border/60 shadow-md shadow-primary/10" />
-                ) : (
-                  <div className="h-8 w-8 shrink-0 rounded-xl gradient-primary flex items-center justify-center shadow-md shadow-primary/20">
-                    <span className="text-[11px] font-bold text-primary-foreground">
-                      {user?.avatarInitials ?? 'EP'}
-                    </span>
-                  </div>
-                )}
+                  <ClientAvatar
+                    name={user?.bdManagerFullName || user?.displayName || "用户"}
+                    role={role}
+                    size="sm"
+                    rounded="xl"
+                  />
                 <div className="hidden md:flex flex-col text-left leading-tight">
                   <span className="text-xs font-semibold truncate max-w-[170px]">
                     {user?.displayName ?? 'Evan Pan'}
@@ -260,15 +261,12 @@ export function TopBar() {
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[340px]">
               <div className="px-2.5 py-2.5 flex items-center gap-3 border-b border-border/50 mb-1">
-                {hydrated && user?.avatarDataUrl ? (
-                  <img src={user.avatarDataUrl} alt={user?.displayName ?? 'avatar'} className="h-11 w-11 rounded-xl object-cover border border-border/60 shrink-0 shadow-md shadow-primary/10" />
-                ) : (
-                  <div className="h-11 w-11 rounded-xl gradient-primary flex items-center justify-center shadow-md shadow-primary/20 shrink-0">
-                    <span className="text-xs font-bold text-primary-foreground">
-                      {user?.avatarInitials ?? 'EP'}
-                    </span>
-                  </div>
-                )}
+                  <ClientAvatar
+                    name={user?.bdManagerFullName || user?.displayName || "用户"}
+                    role={role}
+                    size="xl"
+                    rounded="xl"
+                  />
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold text-sm truncate">
                     {user?.displayName ?? 'Evan Pan'}
@@ -288,35 +286,6 @@ export function TopBar() {
                   </div>
                 </div>
               </div>
-
-              <div className="px-2.5 py-2 rounded-lg bg-secondary/30 border border-border/40 mx-1 mb-1 mt-1.5">
-                <p className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1.5">
-                  <Shield className="h-3 w-3" />
-                  <span>生产模式扩展点（当前 mock）</span>
-                </p>
-                <p className="text-[10px] text-muted-foreground/80 mt-1 leading-relaxed">
-                  设置 <code className="font-mono text-[9px] bg-background rounded px-1 py-0.5 border border-border/50">
-                    NEXT_PUBLIC_AUTH_PROVIDER=supabase
-                  </code> 即可接入真实 Supabase Auth。
-                </p>
-              </div>
-
-              <DropdownMenuSeparator />
-
-              <DropdownMenuItem
-                onClick={() => avatarFileInputRef.current?.click()}
-                className="text-xs gap-2"
-              >
-                <ImagePlus className="h-3.5 w-3.5" />
-                修改个人头像
-              </DropdownMenuItem>
-              <input
-                ref={avatarFileInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
-                onChange={handleAvatarInput}
-                className="hidden"
-              />
 
               <DropdownMenuSeparator />
 
@@ -343,5 +312,123 @@ export function TopBar() {
         </div>
       )}
     </header>
+  );
+}
+
+function NotificationDialogContent({
+  notifTick,
+  onRefresh,
+}: {
+  notifTick: number;
+  onRefresh: () => void;
+}) {
+  const logs = useMemo<NotificationLogEntry[]>(() => {
+    try {
+      const all = getNotificationLogs();
+      return Array.isArray(all) ? all.filter((entry) => !entry.id.startsWith("n_demo")).slice(0, 15) : [];
+    } catch {}
+    return [];
+  }, [notifTick]);
+
+  return (
+    <DialogContent
+      className="sm:max-w-[560px] p-0 overflow-hidden"
+      onInteractOutside={(e) => { e.preventDefault(); }}
+    >
+      <DialogHeader className="p-4 border-b border-border/50 flex flex-row items-center justify-between space-y-0">
+        <div>
+          <DialogTitle className="text-sm flex items-center gap-2">
+            <Bell className="h-4 w-4 text-primary" />
+            通知中心
+            <Badge variant="outline" className="ml-1 text-[10px] h-4 font-mono">{logs.length}</Badge>
+          </DialogTitle>
+          <DialogDescription className="text-[11px] mt-1 text-muted-foreground">
+            通知 · 补仓预警 · 系统消息（最近 15 条）
+          </DialogDescription>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={onRefresh} title="刷新">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+          <DialogClose asChild>
+            <Button variant="ghost" size="icon">
+              <XCircle className="h-4 w-4" />
+            </Button>
+          </DialogClose>
+        </div>
+      </DialogHeader>
+      <div className="max-h-[60vh] overflow-y-auto px-1 py-2">
+        {logs.length === 0 ? (
+          <div className="px-4 py-14 text-center text-muted-foreground text-xs">
+            <CheckCircle2 className="h-10 w-10 mx-auto mb-2 opacity-40" />
+            暂无通知
+          </div>
+        ) : (
+          <ul className="space-y-1 px-2 py-1">
+            {logs.map((log) => {
+              const type = String(log.payload?.type ?? "INFO");
+              const priority = String(log.payload?.severity ?? "INFO");
+              const isHigh = priority === "HIGH" || priority === "CRITICAL" || type === "MARGIN_CALL";
+              const success = log.result?.success;
+              const Icon = isHigh ? AlertTriangle : (success ? CheckCircle2 : Info);
+              const accent = isHigh
+                ? "text-danger"
+                : success ? "text-success" : "text-primary";
+              return (
+                <li
+                  key={log.id}
+                  className="rounded-lg border border-border/40 bg-card/40 hover:bg-accent/30 transition-colors p-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={cn(
+                      "h-8 w-8 shrink-0 rounded-lg flex items-center justify-center",
+                      isHigh ? "bg-danger/10" : success ? "bg-success/10" : "bg-primary/10"
+                    )}>
+                      <Icon className={cn("h-4 w-4", accent)} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-xs truncate">{log.payload?.title || "通知"}</p>
+                        <Badge variant={isHigh ? "danger" : success ? "success" : "outline"} className="text-[9px] h-4 shrink-0">
+                          {type === "MARGIN_CALL" ? "补仓预警" : priority || type}
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2">
+                        {log.payload?.message || log.payload?.batchNumber
+                          ? `${log.payload.batchNumber || ""} · ${log.payload.stockSymbol || ""} ${log.payload?.message || ""}`.trim()
+                          : "系统消息"}
+                      </p>
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="secondary" className="text-[9px] h-4">
+                            Email {log.payload.recipients.emails.length === 0 ? "未请求" : log.result.channels?.email?.success ? "已受理" : "失败/部分失败"}
+                          </Badge>
+                          <Badge variant="secondary" className="text-[9px] h-4">
+                            WhatsApp {log.payload.recipients.whatsapps.length === 0 ? "未请求" : log.result.channels?.whatsapp?.success ? "已受理" : "失败/部分失败"}
+                          </Badge>
+                        </div>
+                        <span className="text-[10px] font-mono text-muted-foreground">
+                          {formatDateTime(new Date(log.result?.sentAt || Date.now()))}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      <DialogFooter className="p-3 border-t border-border/50 flex flex-row justify-between items-center">
+        <p className="text-[10px] text-muted-foreground">
+          点击「系统设置 → 通知测试」可发送真实邮件 / WhatsApp
+        </p>
+        <DialogClose asChild>
+          <Button variant="default" size="sm" className="text-xs px-3">
+            关闭
+          </Button>
+        </DialogClose>
+      </DialogFooter>
+    </DialogContent>
   );
 }

@@ -17,7 +17,7 @@ export const ALLOWED_ROLES: readonly AppRole[] = [
 export const ROLE_LABELS: Record<AppRole, string> = {
   ADMIN: '系统管理员',
   RISK_MANAGER: '风控总监',
-  BD_MANAGER: 'BD经理',
+  BD_MANAGER: '商务经理',
   OPERATIONS: '运营',
 };
 
@@ -87,7 +87,7 @@ export const MOCK_USER_META: Record<
     displayName: '李晓明 (Evan Li)',
     avatarInitials: 'LXM',
     bdManagerFullName: '李晓明 (Evan Li)',
-    menuLabel: 'BD经理 · 李晓明',
+    menuLabel: '商务经理 · 李晓明',
   },
   bd_wangsy: {
     id: 'user_bd_wangsy_demo_03',
@@ -96,7 +96,7 @@ export const MOCK_USER_META: Record<
     displayName: '王思远 (Sylvia Wang)',
     avatarInitials: 'WSY',
     bdManagerFullName: '王思远 (Sylvia Wang)',
-    menuLabel: 'BD经理 · 王思远',
+    menuLabel: '商务经理 · 王思远',
   },
   bd_zhangzhiq: {
     id: 'user_bd_zhangzhiq_demo_04',
@@ -105,7 +105,7 @@ export const MOCK_USER_META: Record<
     displayName: '张志强 (Jack Zhang)',
     avatarInitials: 'ZZQ',
     bdManagerFullName: '张志强 (Jack Zhang)',
-    menuLabel: 'BD经理 · 张志强',
+    menuLabel: '商务经理 · 张志强',
   },
   bd_liujia: {
     id: 'user_bd_liujia_demo_05',
@@ -114,6 +114,6 @@ export const MOCK_USER_META: Record<
     displayName: '刘佳 (Jennifer Liu)',
     avatarInitials: 'LJ',
     bdManagerFullName: '刘佳 (Jennifer Liu)',
-    menuLabel: 'BD经理 · 刘佳',
+    menuLabel: '商务经理 · 刘佳',
   },
 };

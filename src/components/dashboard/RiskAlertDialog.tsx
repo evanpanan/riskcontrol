@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 export interface RiskAlertItem {
+  alertKey: string;
   batchId: string;
   batchNumber: string;
   stockSymbol: string;
@@ -78,8 +79,8 @@ export function RiskAlertDialog({
   useEffect(() => {
     if (!settingsEnabled || alerts.length === 0) return;
     for (const a of alerts) {
-      if (!beepedIdsRef.current.has(a.batchId)) {
-        beepedIdsRef.current.add(a.batchId);
+      if (!beepedIdsRef.current.has(a.alertKey)) {
+        beepedIdsRef.current.add(a.alertKey);
         if (a.riskLevel === RiskLevel.CRITICAL) {
           beep(!muted);
         }
@@ -166,7 +167,7 @@ export function RiskAlertDialog({
                       <p className="text-muted-foreground">跌幅</p>
                       <p className={cn(
                         "font-mono font-bold",
-                        a.dropPercent <= -20 ? "text-danger" : "text-warning"
+                          a.dropPercent >= 20 ? "text-danger" : "text-warning"
                       )}>
                         {formatPercent(a.dropPercent)}
                       </p>
@@ -199,7 +200,7 @@ export function RiskAlertDialog({
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
-                  <Link href={`/batch/${a.batchId}`} className="w-full">
+                  <Link href={`/batch/${a.batchId}`} className="w-full" onClick={() => onDismissOne(a.batchId)}>
                     <Button size="sm" className="gap-1 w-full">
                       <ExternalLink className="h-3.5 w-3.5" />
                       查看批次
@@ -228,7 +229,7 @@ export function RiskAlertDialog({
             <Button variant="outline" size="sm" onClick={onDismissAll}>
               全部知晓
             </Button>
-            <Link href="/batch/0">
+            <Link href="/margin-calls" onClick={onDismissAll}>
               <Button size="sm" className="gap-1" variant="danger">
                 <Flame className="h-3.5 w-3.5" />
                 处理击穿批次

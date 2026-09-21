@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { getMockData } from "@/lib/mockData";
 import { BatchDetailContent } from "@/components/batch/BatchDetailContent";
@@ -12,11 +12,13 @@ interface BatchDetailPageProps {
 }
 
 export default function BatchDetailPage({ params }: BatchDetailPageProps) {
-  const { batches } = getMockData();
-  const batch = batches.find((b) => b.id === params.id);
+  const [stableBatch] = useState(() => {
+    const { batches } = getMockData();
+    return batches.find((b) => b.id === params.id) ?? null;
+  });
+  const batchRef = useRef(stableBatch);
+  const batch = batchRef.current;
   const [, setTick] = useState(0);
-
-  const b = useMemo(() => batch as any, [batch]);
 
   if (!batch) {
     return (
@@ -36,7 +38,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
 
   return (
     <div className="px-0 lg:px-4 py-4 lg:py-6">
-      <BatchDetailContent batch={b} onChange={() => setTick((x) => x + 1)} />
+      <BatchDetailContent batch={batch as any} onChange={() => setTick((x) => x + 1)} />
     </div>
   );
 }

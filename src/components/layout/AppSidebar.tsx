@@ -56,7 +56,7 @@ const NAV_ITEMS: NavItem[] = [
     title: "客户管理",
     icon: Users,
     href: "/clients",
-    description: "客户名录 & BD 分配",
+    description: "客户名录 & 商务经理分配",
     scope: "all",
   },
   {
@@ -110,7 +110,7 @@ export function AppSidebar() {
           <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 flex items-start gap-2">
             <Shield className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
             <div className="min-w-0">
-              <p className="text-[10.5px] font-semibold text-primary leading-tight">BD 专属工作台</p>
+              <p className="text-[10.5px] font-semibold text-primary leading-tight">商务经理专属工作台</p>
               <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
                 仅展示归属您的客户与批次数据
               </p>

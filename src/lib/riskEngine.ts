@@ -1,5 +1,6 @@
-import { Client, Batch, MarginCall, RiskLevel, BatchStatus } from "@prisma/client";
+import { Client, Batch, MarginCall, RiskLevel, BatchStatus, ClientStatus } from "@prisma/client";
 import { calculateTradingWindows } from "./utils";
+import { getProfitSettings, DEFAULT_PROFIT_SETTINGS } from "./profitSettings";
 
 export const PRIORITY_RATIO = 0.7;
 export const SUBORDINATE_RATIO = 0.3;
@@ -8,7 +9,99 @@ export const CRITICAL_DROP_THRESHOLD = 0.20;
 export const HIGH_INVESTMENT_THRESHOLD = 100000;
 export const HIGH_INVESTMENT_CLIENT_SPLIT = 0.4;
 export const LOW_INVESTMENT_CLIENT_SPLIT = 0.3;
+const money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
+const uid = () => `fin_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
+export interface ClientMarginCallEntry {
+  id: string;
+  clientId: string;
+  amount: number;
+  fulfilledAt: string;
+  source?: "batch_one_click" | "client_single" | "manual";
+  operatorName?: string;
+  notes?: string;
+  roundId?: string;
+}
+export interface ClientMarginState {
+  initialInvestment: number;
+  required: number;
+  fulfilled: number;
+  history: ClientMarginCallEntry[];
+  roundId?: string;
+}
+export interface SettlementResult {
+  clientReceives: number;
+  institutionReceives: number;
+  clientPnL: number;
+  institutionPnL: number;
+  splitRatioClient: number;
+  isLoss: boolean;
+  marginCallReturned: number;
+}
+export interface SettlementSnapshot extends SettlementResult {
+  id: string;
+  settledAt: string;
+  stockPrice: number;
+  principal: number;
+  originalAccountCapital: number;
+  institutionInitialCapital: number;
+  institutionRescueValue: number;
+  institutionInitialPnL: number;
+  institutionClientShare: number;
+  institutionRescuePnL: number;
+}
+export interface InstitutionTrade {
+  id: string;
+  roundId: string;
+  clientId?: string;
+  amount: number;
+  entryPrice: number | null;
+  shares: number;
+  remainingFraction: number;
+  createdAt: string;
+  source: "batch_one_click" | "client_single" | "legacy";
+  operatorName?: string;
+  needsReconciliation?: boolean;
+}
+export interface MarginRound {
+  id: string;
+  number: number;
+  requiredAmount: number;
+  fulfilledAmount: number;
+  triggerMarketValue: number;
+  triggerDate: string;
+  dropPercent: number;
+  status: "PENDING" | "FULLFILLED" | "EXPIRED";
+  allocations: Record<string, ClientMarginState>;
+}
+export interface BatchFinance {
+  version: 2;
+  legacyAllocationVersion?: 2;
+  originalCapital: number;
+  originalShares: number;
+  originalPriority: number;
+  remainingCapital: number;
+  remainingShares: number;
+  trades: InstitutionTrade[];
+  rounds: MarginRound[];
+  settlements: Record<string, SettlementSnapshot>;
+  revision: number;
+  legacyWarnings: string[];
+}
+export type ClientLike = Client & {
+  entryStockPrice?: number;
+  signedVipThreshold?: number;
+  initialInvestment?: number;
+  marginState?: ClientMarginState;
+  marginHistory?: ClientMarginCallEntry[];
+  settlement?: SettlementSnapshot;
+};
+export type BatchLike = Batch & {
+  clients?: ClientLike[];
+  marginCalls?: any[];
+  finance?: BatchFinance;
+  currentPrice?: number;
+};
 export interface BatchRiskMetrics {
   dropPercent: number;
   dropAmount: number;
@@ -19,7 +112,6 @@ export interface BatchRiskMetrics {
   totalPnL: number;
   totalPnLPercent: number;
 }
-
 export interface RescueStats {
   totalRescueAmount: number;
   totalRescueShares: number;
@@ -27,460 +119,466 @@ export interface RescueStats {
   rescueCurrentValue: number;
   rescuePnL: number;
   rescuePnLPercent: number;
-  perCall: Array<{
-    id: string;
-    amount: number;
-    entryPrice: number;
-    shares: number;
-    currentValue: number;
-    pnl: number;
-    pnlPercent: number;
-  }>;
-}
-
-export interface SettlementResult {
-  clientReceives: number;
-  institutionReceives: number;
-  clientPnL: number;
-  institutionPnL: number;
-  splitRatioClient: number;
-  isLoss: boolean;
-  marginCallReturned: number;
+  perCall: Array<{ id: string; amount: number; entryPrice: number; shares: number; currentValue: number; pnl: number; pnlPercent: number }>;
+  unpricedAmount?: number;
 }
 
 export function calculateInvestmentSplit(totalAmount: number) {
+  return { priorityAmount: totalAmount * PRIORITY_RATIO, subordinateAmount: totalAmount * SUBORDINATE_RATIO };
+}
+
+// Used only at signing. Existing clients always use their stored contract rates.
+export function calculateProfitSplitRatio(investmentAmount: number, defaultsOnly = false) {
+  const settings = defaultsOnly ? DEFAULT_PROFIT_SETTINGS : getProfitSettings();
+  const client = (investmentAmount >= settings.vipThreshold ? settings.vipClient : settings.normalClient) / 100;
+  return { client, institution: 1 - client, vipThreshold: settings.vipThreshold };
+}
+
+export function isVipClient(client: Pick<ClientLike, "investmentAmount" | "signedVipThreshold">): boolean {
+  return client.investmentAmount >= (client.signedVipThreshold ?? HIGH_INVESTMENT_THRESHOLD);
+}
+
+export function getClientProfitSplit(client: Pick<Client, "investmentAmount" | "profitSplitClient" | "profitSplitInstitution">) {
+  const pct = client.profitSplitClient;
+  if (typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100) {
+    return { client: pct / 100, institution: 1 - pct / 100 };
+  }
+  return calculateProfitSplitRatio(client.investmentAmount, true);
+}
+
+export function calculateBatchRiskMetrics(initialTotalAmount: number, currentMarketValue: number, activeInstitutionTopups = 0): BatchRiskMetrics {
+  const dropAmount = initialTotalAmount - currentMarketValue;
+  const drop = initialTotalAmount > 0 ? dropAmount / initialTotalAmount : 0;
+  const critical = initialTotalAmount > 0 && currentMarketValue <= initialTotalAmount * 0.8 + 0.005;
+  const totalPnL = currentMarketValue - initialTotalAmount - activeInstitutionTopups;
   return {
-    priorityAmount: totalAmount * PRIORITY_RATIO,
-    subordinateAmount: totalAmount * SUBORDINATE_RATIO,
+    dropPercent: Math.max(0, drop) * 100,
+    dropAmount: Math.max(0, dropAmount),
+    currentMarketValue,
+    safetyBufferPercent: (CRITICAL_DROP_THRESHOLD - drop) * 100,
+    requiredMarginCall: critical ? money(dropAmount) : 0,
+    riskLevel: critical ? RiskLevel.CRITICAL : drop >= WARNING_DROP_THRESHOLD ? RiskLevel.WARNING : RiskLevel.NORMAL,
+    totalPnL,
+    totalPnLPercent: initialTotalAmount > 0 ? totalPnL / initialTotalAmount * 100 : 0,
+  };
+}
+export function calculateCurrentMarketValue(stockPriceAtStart: number, currentStockPrice: number, totalShares: number) {
+  return stockPriceAtStart > 0 ? totalShares * currentStockPrice : 0;
+}
+export function calculateTotalShares(initialTotalAmount: number, stockPriceAtStart: number) {
+  return stockPriceAtStart > 0 ? initialTotalAmount / stockPriceAtStart : 0;
+}
+
+export function calculateRescueStats(batch: Batch & { marginCalls?: MarginCall[] }, currentStockPrice: number): RescueStats {
+  const finance = (batch as BatchLike).finance;
+  const trades: InstitutionTrade[] = finance?.trades ?? (batch.marginCalls ?? []).filter((m) => (m.fulfilledAmount ?? 0) > 0).map((m: any) => ({
+    id: m.id, roundId: m.id, amount: m.fulfilledAmount, entryPrice: m.averageEntryPrice || null,
+    shares: m.rescueShares || (m.averageEntryPrice > 0 ? m.fulfilledAmount / m.averageEntryPrice : 0),
+    remainingFraction: 1, createdAt: String(m.fulfilledDate), source: "legacy",
+  }));
+  const perCall = trades.map((t) => {
+    const amount = t.amount * t.remainingFraction;
+    const shares = t.shares * t.remainingFraction;
+    // Missing historical execution data is held at cost, never assigned a fabricated return.
+    const currentValue = t.needsReconciliation || !t.entryPrice ? amount : shares * currentStockPrice;
+    const pnl = currentValue - amount;
+    return { id: t.id, amount, entryPrice: t.entryPrice ?? 0, shares, currentValue, pnl, pnlPercent: amount > 0 ? pnl / amount * 100 : 0 };
+  });
+  const totalRescueAmount = perCall.reduce((s, t) => s + t.amount, 0);
+  const totalRescueShares = perCall.reduce((s, t) => s + t.shares, 0);
+  const rescueCurrentValue = perCall.reduce((s, t) => s + t.currentValue, 0);
+  const unpricedAmount = perCall.filter((t) => !t.entryPrice).reduce((s, t) => s + t.amount, 0);
+  const rescuePnL = rescueCurrentValue - totalRescueAmount;
+  return {
+    totalRescueAmount, totalRescueShares, rescueCurrentValue, rescuePnL, perCall, unpricedAmount,
+    weightedAverageEntryPrice: totalRescueShares > 0 ? (totalRescueAmount - unpricedAmount) / totalRescueShares : 0,
+    rescuePnLPercent: totalRescueAmount > 0 ? rescuePnL / totalRescueAmount * 100 : 0,
   };
 }
 
-export function calculateProfitSplitRatio(investmentAmount: number) {
-  if (investmentAmount >= HIGH_INVESTMENT_THRESHOLD) {
+export function getAccountMarketValue(batch: BatchLike, price = batch.currentStockPrice ?? batch.stockPriceAtStart): number {
+  const original = batch.finance
+    ? batch.finance.remainingShares * price
+    : batch.totalShares * price;
+  return original + calculateRescueStats(batch, price).rescueCurrentValue;
+}
+
+export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
+  const rescue = calculateRescueStats(batch, batch.currentStockPrice ?? batch.stockPriceAtStart);
+  return calculateBatchRiskMetrics(batch.finance?.remainingCapital ?? batch.initialTotalAmount, getAccountMarketValue(batch), rescue.totalRescueAmount);
+}
+
+function allocateRound(batch: BatchLike, amount: number, roundId: string): Record<string, ClientMarginState> {
+  const active = (batch.clients ?? []).filter((c) => c.status !== ClientStatus.SETTLED);
+  const pool = active.reduce((s, c) => s + c.investmentAmount, 0);
+  let remaining = money(amount);
+  return Object.fromEntries(active.map((c, index) => {
+    const required = index === active.length - 1 ? remaining : money(amount * c.investmentAmount / Math.max(pool, 0.01));
+    remaining = money(remaining - required);
+    return [c.id, { initialInvestment: c.investmentAmount, required, fulfilled: 0, history: [], roundId }];
+  }));
+}
+
+// Initialization and mutations are called at data-load / price-update / action boundaries, never during rendering.
+export function initializeBatchFinance(batch: BatchLike): void {
+  if (batch.finance) return;
+  const finance: BatchFinance = {
+    version: 2, originalCapital: batch.initialTotalAmount, originalShares: batch.totalShares,
+    originalPriority: batch.priorityAmount, remainingCapital: batch.initialTotalAmount,
+    remainingShares: batch.totalShares, trades: [], rounds: [], settlements: {}, revision: 0, legacyWarnings: [],
+    legacyAllocationVersion: 2,
+  };
+  batch.finance = finance;
+  const recordedPrincipal = (batch.clients ?? []).reduce((sum, c) => sum + c.investmentAmount, 0);
+  if (Math.abs(recordedPrincipal - batch.priorityAmount) > 0.02) {
+    finance.legacyWarnings.push("客户本金合计与优先资金池不一致，结算前需核对原始出资。");
+  }
+  if ((batch.clients ?? []).some((c) => c.status === ClientStatus.SETTLED)) {
+    finance.legacyWarnings.push("存在无成交快照的历史结算，账户剩余仓位需核对后才能继续结算。");
+  }
+  for (const mc of batch.marginCalls ?? []) {
+    const amount = Number(mc.fulfilledAmount ?? 0);
+    if (amount <= 0) continue;
+    const price = Number(mc.averageEntryPrice ?? 0);
+    finance.trades.push({
+      id: `legacy_${mc.id}`, roundId: mc.id, amount, entryPrice: price > 0 ? price : null,
+      shares: price > 0 ? amount / price : 0, remainingFraction: 1,
+      createdAt: new Date(mc.fulfilledDate ?? mc.triggerDate ?? batch.signDate).toISOString(),
+      source: "legacy", needsReconciliation: price <= 0,
+    });
+    finance.rounds.push({
+      id: mc.id, number: finance.rounds.length + 1, requiredAmount: amount, fulfilledAmount: amount,
+      triggerMarketValue: mc.triggerMarketValue ?? 0, triggerDate: new Date(mc.triggerDate ?? batch.signDate).toISOString(),
+      dropPercent: mc.dropPercent ?? 0, status: "FULLFILLED", allocations: {},
+    });
+  }
+  const known = finance.trades.reduce((s, t) => s + t.amount, 0);
+  const missing = money((batch.cumulativeMarginCalls ?? 0) - known);
+  if (missing > 0) {
+    finance.trades.push({ id: `legacy_unpriced_${batch.id}`, roundId: "legacy-unpriced", amount: missing,
+      entryPrice: null, shares: 0, remainingFraction: 1, createdAt: new Date().toISOString(), source: "legacy", needsReconciliation: true });
+    finance.legacyWarnings.push("旧补仓缺少成交价和份额：暂按出资成本列示，待核对后才能结算。");
+  }
+  if (finance.trades.some((t) => !t.entryPrice) && finance.legacyWarnings.length === 0) {
+    finance.legacyWarnings.push("历史补仓成交信息不完整，收益未计，结算前需核对。");
+  }
+  // Old batch-level receipts have no verified client allocation. Never spread them onto other clients.
+  const pending = (batch.marginCalls ?? []).find((m: any) => m.status === "PENDING" && m.requiredAmount > (m.fulfilledAmount ?? 0));
+  if (pending) {
+    const roundId = `obligation_${pending.id}`;
+    const allocations = allocateRound(batch, pending.requiredAmount, roundId);
+    let allocated = 0;
+    const entries = Object.entries(allocations);
+    for (const [id, state] of entries) {
+      const saved = batch.clients?.find((c) => c.id === id)?.marginState;
+      if (saved && saved.required > 0) {
+        Object.assign(state, saved, { roundId });
+      }
+      allocated = money(allocated + state.fulfilled);
+    }
+    const requiredAmount = entries.length
+      ? money(entries.reduce((sum, [, s]) => sum + s.required, 0))
+      : pending.requiredAmount;
+    finance.rounds.push({ id: roundId, number: finance.rounds.length + 1, requiredAmount,
+      fulfilledAmount: allocated,
+      triggerMarketValue: pending.triggerMarketValue ?? 0, triggerDate: new Date(pending.triggerDate ?? batch.signDate).toISOString(),
+      dropPercent: pending.dropPercent ?? 0.2, status: "PENDING", allocations });
+    const imported = finance.rounds[finance.rounds.length - 1];
+    imported.requiredAmount = requiredAmount;
+    if (allocated >= requiredAmount - 0.005) imported.status = "FULLFILLED";
+    if ((pending.fulfilledAmount ?? 0) > 0) {
+      finance.legacyWarnings.push("历史批次到账与客户分配缺少对应关系，已保留客户原有状态；本轮缺口需核对，禁止直接重复划款。");
+    }
+  }
+  syncBatchFinance(batch);
+}
+
+function activeRound(batch: BatchLike): MarginRound | undefined {
+  return batch.finance?.rounds.find((r) => r.status === "PENDING");
+}
+
+export function syncBatchFinance(batch: BatchLike): void {
+  if (!batch.finance) return;
+  const f = batch.finance;
+  batch.initialTotalAmount = money(f.remainingCapital);
+  batch.priorityAmount = money(f.remainingCapital * PRIORITY_RATIO);
+  batch.subordinateAmount = money(f.remainingCapital * SUBORDINATE_RATIO);
+  batch.totalShares = f.remainingShares;
+  batch.currentMarketValue = getAccountMarketValue(batch);
+  batch.cumulativeMarginCalls = money(f.trades.reduce((s, t) => s + t.amount, 0));
+  const metrics = getBatchMetrics(batch);
+  batch.riskLevel = metrics.riskLevel;
+  batch.totalPnL = metrics.totalPnL;
+  batch.totalPnLPercent = metrics.totalPnLPercent;
+  if (!activeRound(batch) && metrics.requiredMarginCall > 0 && (batch.clients ?? []).some((c) => c.status !== ClientStatus.SETTLED)) {
+    const id = uid();
+    f.rounds.push({ id, number: f.rounds.length + 1, requiredAmount: metrics.requiredMarginCall,
+      fulfilledAmount: 0, triggerMarketValue: batch.currentMarketValue,
+      triggerDate: new Date().toISOString(), dropPercent: metrics.dropPercent / 100, status: "PENDING",
+      allocations: allocateRound(batch, metrics.requiredMarginCall, id) });
+  }
+  const round = activeRound(batch) ?? f.rounds[f.rounds.length - 1];
+  for (const c of batch.clients ?? []) {
+    c.marginState = round?.allocations[c.id] ?? { initialInvestment: c.investmentAmount, required: 0, fulfilled: 0, history: [], roundId: round?.id };
+    if (f.settlements[c.id]) c.settlement = f.settlements[c.id];
+  }
+  batch.marginCalls = f.rounds.map((r) => ({
+    id: r.id, batchId: batch.id, triggerDate: new Date(r.triggerDate), createdAt: new Date(r.triggerDate),
+    triggerMarketValue: r.triggerMarketValue, dropPercent: r.dropPercent,
+    requiredAmount: r.requiredAmount, fulfilledAmount: r.fulfilledAmount, status: r.status,
+    fulfilledDate: r.status === "FULLFILLED" ? new Date(f.trades.filter((t) => t.roundId === r.id).at(-1)?.createdAt ?? r.triggerDate) : null,
+    note: `第 ${r.number} 轮 · 机构出资，补仓本金及收益全部归机构`,
+  }));
+}
+
+export function getLockedBatchRequiredMargin(batch: BatchLike): number {
+  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  return round?.requiredAmount ?? getBatchMetrics(batch).requiredMarginCall;
+}
+export function allocateClientMarginRequirements(batch: BatchLike, batchRequiredTotal: number, _cumulative = 0): Map<string, ClientMarginState> {
+  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  return new Map(Object.entries(round?.allocations ?? allocateRound(batch, batchRequiredTotal, "uninitialized")));
+}
+export function summarizeBatchMarginFromClients(batch: BatchLike) {
+  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  const perClient = allocateClientMarginRequirements(batch, round?.requiredAmount ?? 0);
+  const totalRequired = round?.requiredAmount ?? 0;
+  const totalFulfilled = round?.fulfilledAmount ?? 0;
+  return {
+    totalRequired, totalFulfilled, totalPending: round?.status === "PENDING" ? money(Math.max(0, totalRequired - totalFulfilled)) : 0,
+    perClient, roundId: round?.id, roundNumber: round?.number ?? 0,
+    clientCountWithSingleTopup: [...perClient.values()].filter((s) => s.history.some((h) => h.source === "client_single")).length,
+    pendingClientCount: [...perClient.values()].filter((s) => s.required - s.fulfilled > 0.005).length,
+  };
+}
+
+export function executeInstitutionTopup(batch: BatchLike, options: {
+  amount: number; clientId?: string; operatorName?: string; expectedRoundId?: string;
+}): number {
+  initializeBatchFinance(batch);
+  const round = activeRound(batch);
+  if (!round || (options.expectedRoundId && options.expectedRoundId !== round.id)) return 0;
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  if (batch.finance!.legacyWarnings.some((warning) => warning.includes("历史结算") || warning.includes("客户分配"))) {
+    throw new Error("历史结算或补仓分配尚未核对，暂不能继续补仓，避免重复划款。");
+  }
+  if (!Number.isFinite(price) || price <= 0) throw new Error("当前成交价无效，无法记录机构补仓。");
+  if (!Number.isFinite(options.amount) || options.amount <= 0) return 0;
+  const targets = Object.entries(round.allocations)
+    .filter(([id]) => !options.clientId || id === options.clientId)
+    .sort((a, b) => (b[1].required - b[1].fulfilled) - (a[1].required - a[1].fulfilled));
+  let remaining = money(Math.min(options.amount, round.requiredAmount - round.fulfilledAmount));
+  let applied = 0;
+  for (const [clientId, state] of targets) {
+    const client = batch.clients?.find((c) => c.id === clientId);
+    if (!client || client.status === ClientStatus.SETTLED || remaining <= 0) continue;
+    const pay = money(Math.min(remaining, Math.max(0, state.required - state.fulfilled)));
+    if (pay <= 0) continue;
+    const id = uid();
+    const source = options.clientId ? "client_single" : "batch_one_click";
+    const createdAt = new Date().toISOString();
+    batch.finance!.trades.push({ id, roundId: round.id, clientId, amount: pay, entryPrice: price,
+      shares: pay / price, remainingFraction: 1, createdAt, source, operatorName: options.operatorName });
+    state.fulfilled = money(state.fulfilled + pay);
+    state.history.push({ id, clientId, amount: pay, fulfilledAt: createdAt, source, roundId: round.id, operatorName: options.operatorName });
+    remaining = money(remaining - pay);
+    applied = money(applied + pay);
+  }
+  round.fulfilledAmount = money(round.fulfilledAmount + applied);
+  if (round.requiredAmount - round.fulfilledAmount < 0.005) round.status = "FULLFILLED";
+  batch.finance!.revision++;
+  syncBatchFinance(batch);
+  return applied;
+}
+export function applyBatchLevelMarginTopupRemainder(batch: BatchLike, amount: number, operatorName?: string): number {
+  return executeInstitutionTopup(batch, { amount, operatorName, expectedRoundId: activeRound(batch)?.id });
+}
+export function registerClientSingleMargin(client: ClientLike, amount: number, extra: Partial<ClientMarginCallEntry> & { fallbackRequired?: number } = {}): ClientMarginState {
+  throw new Error("请通过 executeInstitutionTopup 记录机构成交，禁止只修改客户补仓状态。");
+}
+
+export function calculateClientSettlement(client: Client, batch: BatchLike, _finalMarketValue: number, finalStockPrice: number): SettlementResult {
+  const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;
+  if (snapshot) return snapshot;
+  const weight = batch.priorityAmount > 0 ? client.investmentAmount / batch.priorityAmount : 0;
+  const split = getClientProfitSplit(client);
+  const entryPrice = (client as ClientLike).entryStockPrice ?? batch.stockPriceAtStart;
+  const shares = client.investmentAmount / entryPrice;
+  const initialPnL = shares * finalStockPrice - client.investmentAmount;
+  const clientPnL = money(Math.max(0, initialPnL) * split.client);
+  const rescue = calculateRescueStats(batch, finalStockPrice);
+  const accountSlice = shares / PRIORITY_RATIO * finalStockPrice + rescue.rescueCurrentValue * weight;
+  const clientReceives = money(client.investmentAmount + clientPnL);
+  const institutionReceives = money(accountSlice - clientReceives);
+  const marginCallReturned = money(rescue.totalRescueAmount * weight);
+  return { clientReceives, institutionReceives, clientPnL,
+    institutionPnL: money(institutionReceives - batch.subordinateAmount * weight - marginCallReturned),
+    splitRatioClient: split.client * 100, isLoss: initialPnL < 0, marginCallReturned };
+}
+
+export function settleClientPosition(batch: BatchLike, clientId: string): SettlementSnapshot {
+  initializeBatchFinance(batch);
+  const f = batch.finance!;
+  if (f.settlements[clientId]) return f.settlements[clientId];
+  const client = batch.clients?.find((c) => c.id === clientId);
+  if (!client || client.status === ClientStatus.SETTLED) throw new Error("客户已结算或历史结算信息待核对。");
+  if (f.legacyWarnings.length) throw new Error(f.legacyWarnings.join(" "));
+  if (activeRound(batch)) throw new Error("本轮补仓尚未完成，请先完成机构补仓再结算。");
+  if (f.trades.some((t) => t.remainingFraction > 0 && t.needsReconciliation)) throw new Error("历史补仓成交信息待核对，暂不能结算。");
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  if (!(price > 0)) throw new Error("结算价格无效。");
+  const weight = client.investmentAmount / batch.priorityAmount;
+  if (!(weight > 0 && weight <= 1 + 1e-8)) throw new Error("客户本金与账户优先池不一致，请核对。");
+  const result = calculateClientSettlement(client, batch, getAccountMarketValue(batch), price);
+  if (result.institutionReceives < -0.005) throw new Error("账户资产不足以保本退出，请机构补足资金后再结算。");
+  const rescue = calculateRescueStats(batch, price);
+  const entryPrice = client.entryStockPrice ?? batch.stockPriceAtStart;
+  const initialPosPnl = client.investmentAmount * (price / entryPrice - 1);
+  const snapshot: SettlementSnapshot = {
+    ...result, id: uid(), settledAt: new Date().toISOString(), stockPrice: price, principal: client.investmentAmount,
+    originalAccountCapital: money(f.remainingCapital * weight),
+    institutionInitialCapital: money(batch.subordinateAmount * weight),
+    institutionRescueValue: money(rescue.rescueCurrentValue * weight),
+    institutionInitialPnL: money(initialPosPnl * SUBORDINATE_RATIO / PRIORITY_RATIO),
+    institutionClientShare: money(initialPosPnl - result.clientPnL),
+    institutionRescuePnL: money(rescue.rescuePnL * weight),
+  };
+  f.settlements[clientId] = snapshot;
+  f.remainingCapital = money(f.remainingCapital - snapshot.originalAccountCapital);
+  f.remainingShares = Math.max(0, f.remainingShares - client.investmentAmount / PRIORITY_RATIO / entryPrice);
+  for (const t of f.trades) t.remainingFraction *= Math.max(0, 1 - weight);
+  client.status = ClientStatus.SETTLED;
+  client.settledAt = new Date(snapshot.settledAt);
+  client.settlement = snapshot;
+  f.revision++;
+  syncBatchFinance(batch);
+  return snapshot;
+}
+
+export function addClientPosition(batch: BatchLike, client: ClientLike): void {
+  initializeBatchFinance(batch);
+  if (batch.finance!.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再新增客户。");
+  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再新增客户。");
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  if (!(price > 0)) throw new Error("当前成交价无效。");
+  if (!Number.isFinite(client.investmentAmount) || client.investmentAmount <= 0) throw new Error("客户本金无效。");
+  const capital = client.investmentAmount / PRIORITY_RATIO;
+  const f = batch.finance!;
+  f.originalCapital += capital;
+  f.originalPriority += client.investmentAmount;
+  f.remainingCapital += capital;
+  f.originalShares += capital / price;
+  f.remainingShares += capital / price;
+  client.entryStockPrice = price;
+  (client as any).__financeManaged = true;
+  (batch.clients ??= []).push(client);
+  f.revision++;
+  syncBatchFinance(batch);
+}
+
+export function calculateRealtimeClientMetrics(client: Client, batch: BatchLike, currentMarketValue: number) {
+  const estimated = calculateClientSettlement(client, batch, currentMarketValue, batch.currentStockPrice ?? batch.stockPriceAtStart);
+  const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;
+  const entryPrice = (client as ClientLike).entryStockPrice ?? batch.stockPriceAtStart;
+  const clientShares = entryPrice > 0 ? client.investmentAmount / entryPrice : 0;
+  if (client.status === ClientStatus.SETTLED && !snapshot) {
     return {
-      client: HIGH_INVESTMENT_CLIENT_SPLIT,
-      institution: 1 - HIGH_INVESTMENT_CLIENT_SPLIT,
+      realtimePnL: client.realtimePnL ?? 0, estimatedExitAmount: client.estimatedExitAmount ?? 0,
+      marketValueShare: client.estimatedExitAmount ?? 0, clientShares: 0, isPriceAboveStart: false,
     };
   }
   return {
-    client: LOW_INVESTMENT_CLIENT_SPLIT,
-    institution: 1 - LOW_INVESTMENT_CLIENT_SPLIT,
+    realtimePnL: estimated.clientPnL, estimatedExitAmount: estimated.clientReceives,
+    marketValueShare: snapshot ? snapshot.clientReceives : clientShares * (batch.currentStockPrice ?? batch.stockPriceAtStart),
+    clientShares, isPriceAboveStart: snapshot ? snapshot.clientPnL > 0 : (batch.currentStockPrice ?? 0) > entryPrice,
   };
 }
-
-export function calculateBatchRiskMetrics(
-  initialTotalAmount: number,
-  currentMarketValue: number,
-  cumulativeMarginCalls: number = 0
-): BatchRiskMetrics {
-  const dropAmount = initialTotalAmount - currentMarketValue;
-  const dropPercent = initialTotalAmount > 0 ? dropAmount / initialTotalAmount : 0;
-  const safetyBufferPercent = CRITICAL_DROP_THRESHOLD - dropPercent;
-  const totalPnL = currentMarketValue + cumulativeMarginCalls - initialTotalAmount;
-  const totalPnLPercent = initialTotalAmount > 0 ? totalPnL / initialTotalAmount : 0;
-
-  let riskLevel: RiskLevel = RiskLevel.NORMAL;
-  if (dropPercent >= CRITICAL_DROP_THRESHOLD) {
-    riskLevel = RiskLevel.CRITICAL;
-  } else if (dropPercent >= WARNING_DROP_THRESHOLD) {
-    riskLevel = RiskLevel.WARNING;
-  }
-
-  const requiredMarginCall = dropPercent >= CRITICAL_DROP_THRESHOLD ? dropAmount : 0;
-
-  return {
-    dropPercent: Math.max(0, dropPercent) * 100,
-    dropAmount: Math.max(0, dropAmount),
-    currentMarketValue,
-    safetyBufferPercent: safetyBufferPercent * 100,
-    requiredMarginCall,
-    riskLevel,
-    totalPnL,
-    totalPnLPercent: totalPnLPercent * 100,
-  };
-}
-
-export function calculateCurrentMarketValue(
-  stockPriceAtStart: number,
-  currentStockPrice: number,
-  totalShares: number
-): number {
-  if (stockPriceAtStart <= 0) return 0;
-  return totalShares * currentStockPrice;
-}
-
-export function calculateTotalShares(
-  initialTotalAmount: number,
-  stockPriceAtStart: number
-): number {
-  if (stockPriceAtStart <= 0) return 0;
-  return initialTotalAmount / stockPriceAtStart;
-}
-
-export function calculateRescueStats(
-  batch: Batch & { marginCalls?: MarginCall[] },
-  currentStockPrice: number
-): RescueStats {
-  const perCall: RescueStats["perCall"] = [];
-  let totalRescueAmount = 0;
-  let totalRescueShares = 0;
-  let totalWeightedCost = 0;
-
-  for (const mc of batch.marginCalls || []) {
-    const amount = (mc as any).fulfilledAmount || 0;
-    if (amount <= 0) continue;
-    const entryPrice = (mc as any).averageEntryPrice || 0;
-    const explicitShares = (mc as any).rescueShares;
-    const shares = explicitShares && explicitShares > 0
-      ? explicitShares
-      : (entryPrice > 0 ? amount / entryPrice : 0);
-    if (shares <= 0) continue;
-
-    const currentValue = shares * (currentStockPrice || 0);
-    const pnl = currentValue - amount;
-    const pnlPercent = amount > 0 ? (pnl / amount) * 100 : 0;
-
-    perCall.push({
-      id: mc.id,
-      amount,
-      entryPrice,
-      shares,
-      currentValue,
-      pnl,
-      pnlPercent,
-    });
-    totalRescueAmount += amount;
-    totalRescueShares += shares;
-    totalWeightedCost += amount * entryPrice;
-  }
-
-  const rescueCurrentValue = totalRescueShares * (currentStockPrice || 0);
-  const rescuePnL = rescueCurrentValue - totalRescueAmount;
-  const rescuePnLPercent = totalRescueAmount > 0 ? (rescuePnL / totalRescueAmount) * 100 : 0;
-  const weightedAverageEntryPrice = totalRescueShares > 0
-    ? totalRescueAmount / totalRescueShares
-    : 0;
-
-  return {
-    totalRescueAmount,
-    totalRescueShares,
-    weightedAverageEntryPrice,
-    rescueCurrentValue,
-    rescuePnL,
-    rescuePnLPercent,
-    perCall,
-  };
-}
-
-export function calculateClientSettlement(
-  client: Client,
-  batch: Batch & { marginCalls?: MarginCall[] },
-  finalMarketValue: number,
-  finalStockPrice: number
-): SettlementResult {
-  const priorityPool = batch.priorityAmount || batch.initialTotalAmount * PRIORITY_RATIO;
-  const subordinatePool = batch.subordinateAmount || batch.initialTotalAmount * SUBORDINATE_RATIO;
-  const weight = priorityPool > 0 ? client.investmentAmount / priorityPool : 0;
-
-  const clientShares = (batch.totalShares || 0) * PRIORITY_RATIO * weight;
-  const instInitialShares = (batch.totalShares || 0) * SUBORDINATE_RATIO;
-
-  const rescue = calculateRescueStats(batch as any, finalStockPrice);
-  const instRescueShares = rescue.totalRescueShares;
-  const instRescueReturnedAmount = rescue.totalRescueAmount;
-  const instRescuePnL = rescue.rescuePnL;
-
-  const stockPriceAtStart = batch.stockPriceAtStart;
-  const isPriceAboveStart = stockPriceAtStart > 0 && finalStockPrice > stockPriceAtStart;
-
-  // ① 规则1：只有股价超买入价，客户才参与利润分成；否则客户只保本。
-  // 客户初始仓位盈利 = max(0, (finalPrice - startPrice) × clientShares)
-  const clientInitialPosPnL = isPriceAboveStart && clientShares > 0
-    ? Math.max(0, (finalStockPrice - stockPriceAtStart) * clientShares)
-    : 0;
-
-  // 客户按分成比例取自己那部分
-  const split = calculateProfitSplitRatio(client.investmentAmount);
-  const clientPnL = clientInitialPosPnL * split.client;
-  const clientReceives = client.investmentAmount + clientPnL;
-
-  // 机构收款 = 总市值 - 客户收款。机构盈利 = 三部分相加
-  //  1) 机构初始劣后仓位 PnL = (finalPrice - startPrice) × instInitialShares
-  //  2) 机构补仓救援仓位 PnL = rescuePnL (独立核算，规则3)
-  //  3) 客户盈利中机构分到的部分 = clientInitialPosPnL × split.institution
-  const totalPoolFromSale = finalMarketValue;
-  const institutionReceives = Math.max(0, totalPoolFromSale - clientReceives);
-  const isLoss = clientPnL <= 0;
-
-  const marginCallReturned = rescue.totalRescueAmount;
-
-  return {
-    clientReceives: Math.max(0, clientReceives),
-    institutionReceives,
-    clientPnL,
-    institutionPnL: institutionReceives - (subordinatePool + rescue.totalRescueAmount),
-    splitRatioClient: split.client * 100,
-    isLoss,
-    marginCallReturned,
-  };
-}
-
-export function calculateRealtimeClientMetrics(
-  client: Client,
-  batch: Batch & { marginCalls?: MarginCall[] },
-  currentMarketValue: number
-) {
-  const priorityPool = batch.priorityAmount || batch.initialTotalAmount * PRIORITY_RATIO;
-  const weight = priorityPool > 0 ? client.investmentAmount / priorityPool : 0;
-  const currentStockPrice = batch.currentStockPrice ?? batch.stockPriceAtStart;
-  const stockPriceAtStart = batch.stockPriceAtStart;
-
-  const estimatedFinal = calculateClientSettlement(
-    client,
-    batch as any,
-    currentMarketValue,
-    currentStockPrice
-  );
-
-  // 规则1 核心：只有股价 > 买入价，客户才有"浮盈"；否则一律 = 0（保本/浮亏状态都不显示盈利）
-  const isPriceAboveStart = stockPriceAtStart > 0 && (currentStockPrice || 0) > stockPriceAtStart;
-  const clientShares = (batch.totalShares || 0) * PRIORITY_RATIO * weight;
-  const clientInitialPosPnL = isPriceAboveStart && clientShares > 0
-    ? Math.max(0, ((currentStockPrice || 0) - stockPriceAtStart) * clientShares)
-    : 0;
-  const split = calculateProfitSplitRatio(client.investmentAmount);
-  const realtimePnL = clientInitialPosPnL * split.client;
-
-  // 当前客户对应市值（不代表客户最终能拿到，仅代表市场价值占位）
-  const marketValueShare = (currentMarketValue || 0) * weight;
-
-  return {
-    realtimePnL,
-    estimatedExitAmount: estimatedFinal.clientReceives,
-    marketValueShare,
-    // UI 额外显示用
-    clientShares,
-    isPriceAboveStart,
-  };
-}
-
 export function calculateBatchStatus(batch: Batch): BatchStatus {
   const trading = calculateTradingWindows(batch.signDate);
   if (trading.monthsElapsed >= 24) return BatchStatus.CLOSED;
   return trading.isLocked ? BatchStatus.LOCKED : BatchStatus.TRADING_OPEN;
 }
 
-export interface PortfolioSummary {
-  totalAUM: number;
-  totalPriority: number;
-  totalSubordinate: number;
-  totalMarginCalls: number;
-  totalPnL: number;
-  totalPnLPercent: number;
-  institutionPnL: number;
-  institutionPnLPercent: number;
-  allClientsPnL: number;
-  allClientsPnLPercent: number;
-  profitableCount: number;
-  normalCount: number;
-  warningCount: number;
-  criticalCount: number;
-  totalBatches: number;
-  currentMarketValueTotal: number;
-  rescueTotalInjected: number;
-  rescueTotalCurrentValue: number;
-  rescueTotalPnL: number;
-}
-
 export interface BatchPnLSplit {
-  clientTotalPnL: number;
-  clientTotalPnLPercent: number;
-  institutionTotalPnL: number;
-  institutionTotalPnLPercent: number;
+  clientTotalPnL: number; clientTotalPnLPercent: number;
+  institutionTotalPnL: number; institutionTotalPnLPercent: number;
   perClient: Map<string, { name: string; pnl: number; pnlPercent: number; isProfitable: boolean }>;
   rescueStats: RescueStats | null;
-  breakdown: {
-    institutionInitialSubordinatePnL: number;
-    institutionClientSplitShare: number;
-    institutionRescuePnL: number;
-  };
+  breakdown: { institutionInitialSubordinatePnL: number; institutionClientSplitShare: number; institutionRescuePnL: number };
 }
-
-export function calculateBatchPnLSplit(
-  batch: Batch & { clients?: Client[]; marginCalls?: MarginCall[] },
-  currentMarketValue: number
-): BatchPnLSplit {
+export function calculateBatchPnLSplit(batch: BatchLike, _currentMarketValue: number): BatchPnLSplit {
   let clientTotalPnL = 0;
   let institutionClientSplitShare = 0;
-  const perClient = new Map<
-    string,
-    { name: string; pnl: number; pnlPercent: number; isProfitable: boolean }
-  >();
-
-  const priorityPool = batch.priorityAmount || batch.initialTotalAmount * PRIORITY_RATIO;
-  const subordinatePool = batch.subordinateAmount || batch.initialTotalAmount * SUBORDINATE_RATIO;
-  const currentStockPrice = (batch.currentStockPrice ?? batch.stockPriceAtStart) || 0;
-  const stockPriceAtStart = batch.stockPriceAtStart || 0;
-  const isPriceAboveStart = stockPriceAtStart > 0 && currentStockPrice > stockPriceAtStart;
-  const totalShares = batch.totalShares || 0;
-
-  const instInitialShares = totalShares * SUBORDINATE_RATIO;
-  const institutionInitialSubordinatePnL = instInitialShares * (currentStockPrice - stockPriceAtStart);
-
-  const rescue = calculateRescueStats(batch as any, currentStockPrice);
-  const institutionRescuePnL = rescue.rescuePnL;
-
-  if (batch.clients) {
-    for (const client of batch.clients) {
-      const weight = priorityPool > 0 ? client.investmentAmount / priorityPool : 0;
-      const split = calculateProfitSplitRatio(client.investmentAmount);
-
-      const clientShares = totalShares * PRIORITY_RATIO * weight;
-      const clientInitialPosPnL = isPriceAboveStart && clientShares > 0
-        ? Math.max(0, (currentStockPrice - stockPriceAtStart) * clientShares)
-        : 0;
-
-      const pnl = clientInitialPosPnL * split.client;
-      const instFromClient = clientInitialPosPnL * split.institution;
-
-      clientTotalPnL += pnl;
-      institutionClientSplitShare += instFromClient;
-
-      perClient.set(client.id, {
-        name: client.name,
-        pnl,
-        pnlPercent:
-          client.investmentAmount > 0
-            ? (pnl / client.investmentAmount) * 100
-            : 0,
-        isProfitable: pnl > 0,
-      });
+  const perClient: BatchPnLSplit["perClient"] = new Map();
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  let institutionInitialSubordinatePnL = (batch.totalShares * price - batch.initialTotalAmount) * SUBORDINATE_RATIO;
+  const rescue = calculateRescueStats(batch, price);
+  let institutionRescuePnL = rescue.rescuePnL;
+  for (const client of batch.clients ?? []) {
+    const snapshot = batch.finance?.settlements[client.id] ?? client.settlement;
+    const raw = client.investmentAmount * (price / (client.entryStockPrice ?? batch.stockPriceAtStart) - 1);
+    const pnl = snapshot?.clientPnL ?? (client.status === ClientStatus.SETTLED ? client.realtimePnL ?? 0 : money(Math.max(0, raw) * getClientProfitSplit(client).client));
+    if (snapshot) {
+      institutionInitialSubordinatePnL += snapshot.institutionInitialPnL;
+      institutionRescuePnL += snapshot.institutionRescuePnL;
+      institutionClientSplitShare += snapshot.institutionClientShare;
+    } else if (client.status !== ClientStatus.SETTLED) {
+      // The institution also bears the client's original-position loss under principal protection.
+      institutionClientSplitShare += raw - pnl;
+    } else {
+      // Legacy positions remain unverified; reconcile provisional account PnL without inventing a payout.
+      institutionClientSplitShare += raw - pnl;
     }
+    clientTotalPnL += pnl;
+    perClient.set(client.id, { name: client.name, pnl, pnlPercent: client.investmentAmount > 0 ? pnl / client.investmentAmount * 100 : 0, isProfitable: pnl > 0 });
   }
-
-  const institutionTotalPnL =
-    institutionInitialSubordinatePnL +
-    institutionClientSplitShare +
-    institutionRescuePnL;
-
-  const instBase = subordinatePool + rescue.totalRescueAmount;
-
+  const institutionTotalPnL = institutionInitialSubordinatePnL + institutionClientSplitShare + institutionRescuePnL;
+  const capital = batch.finance?.originalCapital ?? batch.initialTotalAmount;
+  const injected = batch.finance?.trades.reduce((s, t) => s + t.amount, 0) ?? rescue.totalRescueAmount;
   return {
-    clientTotalPnL,
-    clientTotalPnLPercent:
-      priorityPool > 0 ? (clientTotalPnL / priorityPool) * 100 : 0,
-    institutionTotalPnL,
-    institutionTotalPnLPercent:
-      instBase > 0 ? (institutionTotalPnL / instBase) * 100 : 0,
-    perClient,
-    rescueStats: rescue.totalRescueAmount > 0 ? rescue : null,
-    breakdown: {
-      institutionInitialSubordinatePnL,
-      institutionClientSplitShare,
-      institutionRescuePnL,
-    },
+    clientTotalPnL, clientTotalPnLPercent: capital > 0 ? clientTotalPnL / (capital * PRIORITY_RATIO) * 100 : 0,
+    institutionTotalPnL, institutionTotalPnLPercent: capital * SUBORDINATE_RATIO + injected > 0 ? institutionTotalPnL / (capital * SUBORDINATE_RATIO + injected) * 100 : 0,
+    perClient, rescueStats: rescue.totalRescueAmount > 0 ? rescue : null,
+    breakdown: { institutionInitialSubordinatePnL, institutionClientSplitShare, institutionRescuePnL },
   };
 }
-
-export function calculateClientMarginCall(
-  clientInvestmentAmount: number,
-  batchInitialTotalAmount: number,
-  batchRequiredMarginCallTotal: number
-): number {
-  if (batchRequiredMarginCallTotal <= 0) return 0;
-  if (batchInitialTotalAmount <= 0) return 0;
-  return batchRequiredMarginCallTotal * (clientInvestmentAmount / (batchInitialTotalAmount * PRIORITY_RATIO));
+export function calculateClientMarginCall(clientInvestmentAmount: number, batchInitialTotalAmount: number, batchRequiredMarginCallTotal: number) {
+  return batchInitialTotalAmount > 0 ? Math.max(0, batchRequiredMarginCallTotal) * clientInvestmentAmount / (batchInitialTotalAmount * PRIORITY_RATIO) : 0;
 }
-
-export function calculatePortfolioSummary(
-  batches: (Batch & {
-    clients?: Client[];
-    marginCalls?: MarginCall[];
-  })[]
-): PortfolioSummary {
-  let totalAUM = 0;
-  let totalPriority = 0;
-  let totalSubordinate = 0;
-  let totalMarginCalls = 0;
-  let totalPnL = 0;
-  let institutionPnL = 0;
-  let allClientsPnL = 0;
-  let currentMarketValueTotal = 0;
-  let profitableCount = 0;
-  let normalCount = 0;
-  let warningCount = 0;
-  let criticalCount = 0;
-  let rescueTotalInjected = 0;
-  let rescueTotalCurrentValue = 0;
-  let rescueTotalPnL = 0;
-
-  for (const batch of batches) {
-    totalAUM += batch.initialTotalAmount;
-    totalPriority += batch.priorityAmount;
-    totalSubordinate += batch.subordinateAmount;
-    totalMarginCalls += batch.cumulativeMarginCalls || 0;
-
-    const mv = batch.currentMarketValue || batch.initialTotalAmount;
-    currentMarketValueTotal += mv;
-    const metrics = calculateBatchRiskMetrics(
-      batch.initialTotalAmount,
-      mv,
-      batch.cumulativeMarginCalls || 0
-    );
-    totalPnL += metrics.totalPnL;
-    // 规则1：股价超买入价 = 盈利批次
-    if (
-      batch.stockPriceAtStart > 0 &&
-      (batch.currentStockPrice ?? 0) > batch.stockPriceAtStart
-    ) {
-      profitableCount++;
-    }
-
-    const split = calculateBatchPnLSplit(batch, mv);
-    institutionPnL += split.institutionTotalPnL;
-    allClientsPnL += split.clientTotalPnL;
+export interface PortfolioSummary {
+  totalAUM: number; totalPriority: number; totalSubordinate: number; totalMarginCalls: number;
+  totalPnL: number; totalPnLPercent: number; institutionPnL: number; institutionPnLPercent: number;
+  allClientsPnL: number; allClientsPnLPercent: number; profitableCount: number; normalCount: number;
+  warningCount: number; criticalCount: number; totalBatches: number; currentMarketValueTotal: number;
+  rescueTotalInjected: number; rescueTotalCurrentValue: number; rescueTotalPnL: number;
+}
+export function calculatePortfolioSummary(batches: BatchLike[]): PortfolioSummary {
+  const s: PortfolioSummary = { totalAUM: 0, totalPriority: 0, totalSubordinate: 0, totalMarginCalls: 0,
+    totalPnL: 0, totalPnLPercent: 0, institutionPnL: 0, institutionPnLPercent: 0, allClientsPnL: 0,
+    allClientsPnLPercent: 0, profitableCount: 0, normalCount: 0, warningCount: 0, criticalCount: 0,
+    totalBatches: batches.length, currentMarketValueTotal: 0, rescueTotalInjected: 0, rescueTotalCurrentValue: 0, rescueTotalPnL: 0 };
+  let originalCapital = 0;
+  for (const b of batches) {
+    s.totalAUM += b.initialTotalAmount; s.totalPriority += b.priorityAmount; s.totalSubordinate += b.subordinateAmount;
+    originalCapital += b.finance?.originalCapital ?? b.initialTotalAmount;
+    s.totalMarginCalls += b.cumulativeMarginCalls ?? 0;
+    const metrics = getBatchMetrics(b);
+    s.currentMarketValueTotal += metrics.currentMarketValue;
+    const split = calculateBatchPnLSplit(b, metrics.currentMarketValue);
+    s.institutionPnL += split.institutionTotalPnL; s.allClientsPnL += split.clientTotalPnL;
+    s.totalPnL += split.institutionTotalPnL + split.clientTotalPnL;
+    if (metrics.totalPnL > 0) s.profitableCount++;
+    if (metrics.riskLevel === RiskLevel.CRITICAL) s.criticalCount++;
+    else if (metrics.riskLevel === RiskLevel.WARNING) s.warningCount++;
+    else s.normalCount++;
     if (split.rescueStats) {
-      rescueTotalInjected += split.rescueStats.totalRescueAmount;
-      rescueTotalCurrentValue += split.rescueStats.rescueCurrentValue;
-      rescueTotalPnL += split.rescueStats.rescuePnL;
-    }
-
-    switch (batch.riskLevel) {
-      case RiskLevel.NORMAL:
-        normalCount++;
-        break;
-      case RiskLevel.WARNING:
-        warningCount++;
-        break;
-      case RiskLevel.CRITICAL:
-        criticalCount++;
-        break;
+      s.rescueTotalInjected += split.rescueStats.totalRescueAmount;
+      s.rescueTotalCurrentValue += split.rescueStats.rescueCurrentValue;
+      s.rescueTotalPnL += split.rescueStats.rescuePnL;
     }
   }
-
-  return {
-    totalAUM,
-    totalPriority,
-    totalSubordinate,
-    totalMarginCalls,
-    totalPnL,
-    totalPnLPercent: totalAUM > 0 ? (totalPnL / totalAUM) * 100 : 0,
-    institutionPnL,
-    institutionPnLPercent:
-      totalSubordinate + rescueTotalInjected > 0
-        ? (institutionPnL / (totalSubordinate + rescueTotalInjected)) * 100
-        : 0,
-    allClientsPnL,
-    allClientsPnLPercent:
-      totalPriority > 0 ? (allClientsPnL / totalPriority) * 100 : 0,
-    profitableCount,
-    normalCount,
-    warningCount,
-    criticalCount,
-    totalBatches: batches.length,
-    currentMarketValueTotal,
-    rescueTotalInjected,
-    rescueTotalCurrentValue,
-    rescueTotalPnL,
-  };
+  s.totalPnLPercent = originalCapital > 0 ? s.totalPnL / originalCapital * 100 : 0;
+  s.institutionPnLPercent = originalCapital * SUBORDINATE_RATIO + s.totalMarginCalls > 0 ? s.institutionPnL / (originalCapital * SUBORDINATE_RATIO + s.totalMarginCalls) * 100 : 0;
+  s.allClientsPnLPercent = originalCapital > 0 ? s.allClientsPnL / (originalCapital * PRIORITY_RATIO) * 100 : 0;
+  return s;
 }

@@ -31,10 +31,11 @@ import {
 } from "@/lib/utils";
 import {
   calculateProfitSplitRatio,
+  addClientPosition,
   HIGH_INVESTMENT_THRESHOLD,
 } from "@/lib/riskEngine";
 import { triggerClientAddedAlert } from "@/lib/notifier";
-import { getMockData } from "@/lib/mockData";
+import { getMockData, commitBatchFinance } from "@/lib/mockData";
 import { ClientStatus } from "@prisma/client";
 import {
   UserPlus,
@@ -113,7 +114,7 @@ export function AddClientDialog({
     if (numAmount > batchPriorityAmount * 0.5) {
       e.investmentAmount = `单笔投资不可超过优先池 50%（${formatCurrency(batchPriorityAmount * 0.5)}）`;
     }
-    if (!bdManager) e.bdManager = "请选择负责的 BD 经理（必填）";
+    if (!bdManager) e.bdManager = "请选择负责的 商务经理（必填）";
     if (!signDate) e.signDate = "请选择签约日期";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -131,8 +132,9 @@ export function AddClientDialog({
       bdManager,
       signDate: new Date(signDate),
       status: ClientStatus.ACTIVE,
-      profitSplitClient: Math.round(splitRatio.client * 100),
-      profitSplitInstitution: Math.round(splitRatio.institution * 100),
+      profitSplitClient: splitRatio.client * 100,
+      profitSplitInstitution: splitRatio.institution * 100,
+      signedVipThreshold: splitRatio.vipThreshold,
       realtimePnL: 0,
       estimatedExitAmount: numAmount,
       createdAt: new Date(),
@@ -141,10 +143,12 @@ export function AddClientDialog({
       settledAt: null as any,
     } as any;
     if (batch && batch.clients) {
-      batch.clients.push(newClient);
-      batch.priorityAmount += numAmount;
-      batch.initialTotalAmount += numAmount;
-      batch.subordinateAmount += numAmount * (3 / 7);
+      try {
+        commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+      } catch (err) {
+        setErrors({ investmentAmount: err instanceof Error ? err.message : "新增客户失败" });
+        return;
+      }
     }
     if (batch) {
       try {
@@ -311,7 +315,7 @@ export function AddClientDialog({
                     客户分成
                   </p>
                   <p className="text-2xl font-bold font-mono text-success">
-                    {Math.round(split.client * 100)}%
+                    {Number((split.client * 100).toFixed(2))}%
                   </p>
                 </div>
                 <div className="rounded-lg bg-background/50 p-3 border border-border/60">
@@ -319,7 +323,7 @@ export function AddClientDialog({
                     机构分成
                   </p>
                   <p className="text-2xl font-bold font-mono text-primary">
-                    {Math.round(split.institution * 100)}%
+                    {Number((split.institution * 100).toFixed(2))}%
                   </p>
                 </div>
               </div>
@@ -345,7 +349,7 @@ export function AddClientDialog({
             <div className="space-y-1.5">
               <Label htmlFor="bd" className="text-xs flex items-center gap-1.5">
                 <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                商务经理 (BD) <span className="text-danger">*</span>
+                商务经理 <span className="text-danger">*</span>
               </Label>
               <Select
                 value={bdManager}
@@ -358,7 +362,7 @@ export function AddClientDialog({
                     lockedBdManager && "border-success/40 ring-1 ring-success/30 focus-visible:ring-success/50 cursor-not-allowed"
                   )}
                 >
-                  <SelectValue placeholder={lockedBdManager ? lockedBdManager : "请选择 BD 经理"} />
+                  <SelectValue placeholder={lockedBdManager ? lockedBdManager : "请选择 商务经理"} />
                 </SelectTrigger>
                 <SelectContent>
                   {BD_OPTIONS.map((bd) => {

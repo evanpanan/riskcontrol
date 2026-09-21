@@ -32,12 +32,12 @@ export interface BdStatValue {
   pnl: number;
 }
 
-/** 批次详情：其他 BD 客户的脱敏占位行 */
+/** 批次详情：其他商务经理 客户的脱敏占位行 */
 export interface RedactedClientPlaceholder {
   id: string;
   __placeholder: true;
   __redacted: true;
-  name: '— 其他 BD 客户（已脱敏）—';
+  name: '— 其他商务经理 客户（已脱敏）—';
   bdManager: '（已隐藏）';
   investmentAmount: null;
   status: ClientStatus | 'ACTIVE';
@@ -48,7 +48,7 @@ export interface RedactedClientPlaceholder {
   estimatedExitAmount?: null;
 }
 
-const REDACTED_CLIENT_NAME = '— 其他 BD 客户（已脱敏）—' as const;
+const REDACTED_CLIENT_NAME = '— 其他商务经理 客户（已脱敏）—' as const;
 const REDACTED_BD = '（已隐藏）' as const;
 
 function isBd(role: AppRole): boolean {
@@ -142,7 +142,7 @@ export function filterBatchDetailClientsByRole(
   };
 }
 
-/** BD 业绩分布过滤：RISK/OP=全量；BD=仅自己 1 条 + 其他 BD 聚合为 "其他商务经理（N 位）" */
+/** BD 业绩分布过滤：RISK/OP=全量；BD=仅自己 1 条 + 其他商务经理 聚合为 "其他商务经理（N 位）" */
 export function filterBdStatsByRole(
   bdMap: Record<BdKey, BdStatValue>,
   user: AppSessionUser

@@ -4,11 +4,17 @@ import Link from "next/link";
 import React, { useMemo, useState } from "react";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatCompactNumber } from "@/lib/utils";
 import {
-  calculateBatchRiskMetrics,
+  getBatchMetrics,
   calculateBatchPnLSplit,
   calculateTotalShares,
+  summarizeBatchMarginFromClients,
+  executeInstitutionTopup,
+  getLockedBatchRequiredMargin,
+  type BatchLike as RiskEngineBatchLike,
 } from "@/lib/riskEngine";
-import { triggerMarginCallAlert, triggerWarningAlert } from "@/lib/notifier";
+import { commitBatchFinance, getMockData } from "@/lib/mockData";
+import { notifyBatchChannel } from "@/lib/notifier";
+import { toast } from "sonner";
 import { Batch, Client, ClientStatus, MarginCall, MarginCallStatus, RiskLevel } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +27,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { formatCurrency as fmtCur } from "@/lib/utils";
 import {
   AlertTriangle,
   Flame,
@@ -39,6 +47,7 @@ import {
   Zap,
   Archive,
   CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 
 export type BatchLike = Batch & {
@@ -55,13 +64,11 @@ interface BatchCardV2Props {
 
 export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAGER, viewerUser }: BatchCardV2Props) {
   const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
-  const metrics = calculateBatchRiskMetrics(
-    batch.initialTotalAmount,
-    mv,
-    batch.cumulativeMarginCalls ?? 0
-  );
+  const metrics = getBatchMetrics(batch);
   const tradingInfo = calculateTradingWindows(batch.signDate);
   const split = calculateBatchPnLSplit(batch, mv);
+
+  const [showFulfillDialog, setShowFulfillDialog] = useState(false);
 
   const currentPrice =
     (batch as any).currentPrice ?? (batch as any).currentStockPrice ?? batch.stockPriceAtStart ?? 0;
@@ -98,6 +105,27 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
   const isAllSettled = clients.length > 0 && clients.every((c) => c?.status === ClientStatus.SETTLED);
   const settledCount = clients.filter((c) => c?.status === ClientStatus.SETTLED).length;
 
+  const [marginTick, setMarginTick] = useState(0);
+  const batchForSummary = useMemo<BatchLike>(
+    () => ({ ...batch, clients } as any),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [batch, clients, hydrated, marginTick]
+  );
+  const marginAgg = useMemo(() => summarizeBatchMarginFromClients(batchForSummary as unknown as RiskEngineBatchLike), [batchForSummary]);
+  const lockedRequiredBase = getLockedBatchRequiredMargin(batchForSummary as unknown as RiskEngineBatchLike);
+  const adjustedRequired = marginAgg.totalPending;
+  const hasSingleTopups = marginAgg.clientCountWithSingleTopup > 0;
+
+  React.useEffect(() => {
+    const handler = () => setMarginTick((t) => t + 1);
+    window.addEventListener("risk-control:client-single-margin", handler);
+    window.addEventListener("risk-control:margin-fulfilled", handler);
+    return () => {
+      window.removeEventListener("risk-control:client-single-margin", handler);
+      window.removeEventListener("risk-control:margin-fulfilled", handler);
+    };
+  }, []);
+
   const chrome = isAllSettled
     ? "border-border/60 border-2 border-dashed bg-secondary/10 grayscale opacity-70 hover:opacity-80 transition-all"
     : isCritical
@@ -109,7 +137,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
   const isLocked = tradingInfo.isLocked;
   const windowOpen = tradingInfo.isTradingWindow;
 
-  const safetyPct = Math.max(0, 20 + metrics.dropPercent);
+  const safetyPct = Math.max(0, 20 - metrics.dropPercent);
   const gaugePct = Math.min(100, Math.max(0, (Math.max(0, 20 - Math.abs(metrics.dropPercent)) / 20) * 100));
 
   const statusBadge = isAllSettled ? (
@@ -318,9 +346,17 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
         />
         <StatTile
           label="需补仓"
-          value={metrics.requiredMarginCall}
+          value={adjustedRequired}
           formatter="dollarCompact"
-          accent={isCritical ? "danger" : isWarning ? "warning" : "muted"}
+          accent={adjustedRequired > 0 ? (hasSingleTopups ? "warning" : (isCritical ? "danger" : "warning")) : "muted"}
+          subNode={
+            hasSingleTopups ? (
+              <div className="flex items-center gap-1 text-[9px] font-mono text-success/90 mt-0.5">
+                <Sparkles className="h-2.5 w-2.5" />
+                已单独补 {marginAgg.clientCountWithSingleTopup} 位
+              </div>
+            ) : undefined
+          }
         />
         <StatTile
           label="补仓次数"
@@ -356,8 +392,8 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
       </div>
 
       {/* ===== Footer ===== */}
-      <div className="mt-auto px-5 pb-5 pt-2 flex items-center gap-3 border-t border-border/40">
-        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground min-w-0 shrink-0 flex-wrap">
+      <div className="mt-auto px-5 pb-5 pt-3 flex flex-col items-stretch gap-3 border-t border-border/40">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-w-0 flex-wrap">
           <span className="inline-flex items-center gap-1 whitespace-nowrap">
             <Building2 className="h-3 w-3 shrink-0" />
             {formatDate(batch.signDate).slice(5)} → {formatDate(batch.maturityDate).slice(5)}
@@ -375,10 +411,10 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
           )}
         </div>
 
-        {isCritical ? (
-          <div className="flex items-center gap-1 ml-auto shrink-0" onClick={(e) => e.preventDefault()}>
+        {adjustedRequired > 0 ? (
+          <div className="flex items-center justify-end gap-2 w-full min-w-0" onClick={(e) => e.preventDefault()}>
             <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER]}
+              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:notify_email:${batch.id}`}
               auditAction="ui_component_denied"
             >
@@ -392,29 +428,20 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
                     e.preventDefault();
                     e.stopPropagation();
                     try {
-                      const bds = Array.from(
-                        new Set((batch.clients ?? []).map((c) => c.bdManager).filter(Boolean) as string[])
-                      );
-                      if ((batch.marginCalls ?? []).length > 0) {
-                        for (const mc of batch.marginCalls!)
-                          await triggerMarginCallAlert(batch as any, mc, bds);
-                      } else {
-                        await triggerWarningAlert(batch as any, metrics.dropPercent, 20);
-                      }
-                      onAction?.("notify-email", batch.id);
+                      toast.success(await notifyBatchChannel(batch as any, "email"));
                     } catch (err) {
-                      console.warn(err);
+                      toast.error(err instanceof Error ? err.message : "通知失败");
                     }
                   }}
                 >
                   <Mail className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>一键 Email 通知 BD 及风控</TooltipContent>
+              <TooltipContent>一键 Email 通知商务经理 及风控</TooltipContent>
             </Tooltip>
             </RoleGate>
             <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER]}
+              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:notify_wa:${batch.id}`}
               auditAction="ui_component_denied"
             >
@@ -424,10 +451,11 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
                   size="sm"
                   variant="ghost"
                   className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onAction?.("notify-wa", batch.id);
+                    try { toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
+                    catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
                   }}
                 >
                   <MessageCircle className="h-3.5 w-3.5" />
@@ -444,59 +472,11 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
             <Button
               size="sm"
               variant="danger"
-              className="h-7 gap-1 rounded-md text-[11px]"
+              className="h-9 flex-1 min-w-0 whitespace-nowrap gap-1.5 rounded-lg text-xs font-semibold"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const req = metrics.requiredMarginCall;
-                if (
-                  !confirm(
-                    `确认处理补仓 $${req.toLocaleString()} ?\n批次 ${batch.batchNumber}\n补仓后市值将恢复至初始总值。`
-                  )
-                )
-                  return;
-                const mc = (batch.marginCalls ?? []).find(
-                  (m) => m.status === MarginCallStatus.PENDING
-                ) ?? (batch.marginCalls ?? [])[0];
-                if (mc) {
-                  (mc as any).status = MarginCallStatus.FULLFILLED;
-                  (mc as any).fulfilledAmount = req;
-                  (mc as any).fulfilledDate = new Date();
-                } else if (Array.isArray((batch as any).marginCalls)) {
-                  (batch as any).marginCalls.push({
-                    id: `mc_${Date.now()}`,
-                    batchId: batch.id,
-                    requiredAmount: req,
-                    fulfilledAmount: req,
-                    status: MarginCallStatus.FULLFILLED,
-                    triggerDate: new Date(),
-                    fulfilledDate: new Date(),
-                    createdAt: new Date(),
-                  } as any);
-                }
-                (batch as any).cumulativeMarginCalls =
-                  (batch.cumulativeMarginCalls ?? 0) + req;
-                (batch as any).currentMarketValue =
-                  (batch.currentMarketValue ?? batch.initialTotalAmount ?? 0) + req;
-                const newMetrics = calculateBatchRiskMetrics(
-                  batch.initialTotalAmount,
-                  (batch as any).currentMarketValue,
-                  (batch as any).cumulativeMarginCalls
-                );
-                (batch as any).riskLevel = newMetrics.riskLevel;
-                (batch as any).totalPnL = newMetrics.totalPnL;
-                const s =
-                  (batch as any).totalShares ??
-                  calculateTotalShares(batch.initialTotalAmount || 0, batch.stockPriceAtStart || 1);
-                if (s > 0) {
-                  (batch as any).currentStockPrice =
-                    ((batch as any).currentMarketValue ?? 0) / s;
-                  (batch as any).currentPrice = (batch as any).currentStockPrice;
-                }
-                onAction?.("fulfill-mc", batch.id);
-                window.dispatchEvent(new CustomEvent("risk-control:margin-fulfilled", {
-                  detail: { batchId: batch.id, amount: req },
-                }));
+                setShowFulfillDialog(true);
               }}
             >
               <Zap className="h-3.5 w-3.5" />
@@ -511,6 +491,64 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={showFulfillDialog}
+        onOpenChange={(v) => {
+          if (adjustedRequired <= 0 && v) return;
+          setShowFulfillDialog(v);
+        }}
+        tone="danger"
+        title={
+          hasSingleTopups
+            ? "补仓剩余缺口（扣除客户已单独补仓部分）"
+            : "确认处理本次补仓"
+        }
+        description={
+          hasSingleTopups
+            ? "部分客户已单独补仓完成。本次「批次一键补仓」将按剩余缺口从大到小分配到每位客户，补齐未到账部分；已单独补仓客户不会重复分配。"
+            : "按本轮锁定缺口记录机构出资及成交份额。机构补仓本金和收益全部归机构，不改变客户原始本金或股票价格。"
+        }
+        summary={[
+          { label: "批次号", value: batch.batchNumber, accent: "primary" },
+          { label: "股票", value: `${batch.stockSymbol} · ${batch.stockName}`, accent: "muted" },
+          { label: "批次原始需补仓", value: fmtCur(lockedRequiredBase), accent: "muted" },
+          hasSingleTopups
+            ? { label: "客户已单独补仓", value: fmtCur(marginAgg.totalFulfilled) + ` · ${marginAgg.clientCountWithSingleTopup}位`, accent: "success" }
+            : null,
+          { label: "当前跌幅", value: `${metrics.dropPercent.toFixed(2)}%`, accent: "danger" },
+          hasSingleTopups
+            ? { label: "本次一键补仓(剩余)", value: fmtCur(adjustedRequired), accent: "danger" }
+            : { label: "需补仓金额", value: fmtCur(lockedRequiredBase), accent: "danger" },
+          { label: "补仓后市值", value: fmtCur(mv + adjustedRequired), accent: "success" },
+          { label: "累计补仓(含本次)", value: fmtCur((batch.cumulativeMarginCalls ?? 0) + adjustedRequired), accent: "warning" },
+        ].filter(Boolean) as any}
+        confirmText={
+          hasSingleTopups
+            ? `一键补齐剩余 ${fmtCur(adjustedRequired)}`
+            : "确认处理补仓"
+        }
+        cancelText="再想一想"
+        onConfirm={async () => {
+          const req = adjustedRequired;
+          if (req <= 0) {
+            setShowFulfillDialog(false);
+            return;
+          }
+          const canonical = getMockData().batches.find((b) => b.id === batch.id);
+          if (!canonical) throw new Error("批次不存在，请刷新。");
+          const applied = commitBatchFinance(canonical, (draft) => executeInstitutionTopup(draft, {
+            amount: req, expectedRoundId: marginAgg.roundId,
+            operatorName: viewerUser?.displayName ?? viewerUser?.email,
+          }));
+          if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
+          onAction?.("fulfill-mc", batch.id);
+          window.dispatchEvent(new CustomEvent("risk-control:margin-fulfilled", {
+            detail: { batchId: batch.id, amount: applied },
+          }));
+          setMarginTick((t) => t + 1);
+          setShowFulfillDialog(false);
+        }}
+      />
     </Link>
   );
 }
@@ -523,6 +561,7 @@ function StatTile(props: {
   accent?: "danger" | "warning" | "success" | "muted";
   icon?: React.ReactNode;
   valueClassName?: string;
+  subNode?: React.ReactNode;
 }) {
   const accent =
     props.accent === "danger"
@@ -550,6 +589,7 @@ function StatTile(props: {
               />
             )}
       </div>
+      {props.subNode}
     </div>
   );
 }

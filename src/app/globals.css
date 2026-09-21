@@ -113,6 +113,11 @@
       0 0 0 1px hsl(var(--danger) / 0.08);
   }
 
+  .gradient-primary {
+    background: linear-gradient(135deg, #3b82f6, #4f46e5 55%, #7c3aed);
+    color: #fff;
+  }
+
   .text-gradient-primary {
     background: linear-gradient(
       135deg,

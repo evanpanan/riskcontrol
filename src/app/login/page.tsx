@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -15,7 +15,6 @@ import {
   BadgeCheck,
   LineChart,
   AlertTriangle,
-  KeyRound,
   ArrowRight,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -44,7 +43,7 @@ function validatePassword(v: string): { ok: boolean; hint?: string } {
   return { ok: true };
 }
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, switchToMockRole, loginAsCustom } = useCurrentUser();
@@ -288,7 +287,7 @@ export default function LoginPage() {
               </h1>
               <p className="text-muted-foreground/90 leading-relaxed max-w-lg">
                 实时监控股票组合跌幅，15% 预警 / 20% 补仓自动击穿，机构分层补仓台账与客户结算穿透。
-                BD经理、风控总监、运营角色权限分离，全部操作审计留痕。
+                商务经理、风控总监、运营角色权限分离，全部操作审计留痕。
               </p>
             </div>
 
@@ -296,12 +295,12 @@ export default function LoginPage() {
               <Card className="p-4 gradient-card border-border/50">
                 <Shield className="h-5 w-5 text-primary mb-2" />
                 <p className="text-sm font-semibold">RBAC 权限分离</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">ADMIN / 风控总监 / BD经理 / 运营</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">ADMIN / 风控总监 / 商务经理 / 运营</p>
               </Card>
               <Card className="p-4 gradient-card border-border/50">
                 <Users className="h-5 w-5 text-success mb-2" />
                 <p className="text-sm font-semibold">客户归属锁定</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">BD仅可见自有客户与对应批次</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">商务经理仅可见自有客户与对应批次</p>
               </Card>
               <Card className="p-4 gradient-card border-border/50">
                 <Lock className="h-5 w-5 text-warning mb-2" />
@@ -322,12 +321,6 @@ export default function LoginPage() {
                   <span className="font-semibold text-foreground/80">首次登录指引：</span>
                   &nbsp;默认使用企业邮箱 + 密码。管理员在「系统设置 → 新增账号」创建账号。
                   忘记密码请联系 ADMIN 角色进行重置。
-                </div>
-              </div>
-              <div className="flex items-start gap-2 text-[11.5px] text-muted-foreground/85">
-                <KeyRound className="h-3.5 w-3.5 mt-0.5 text-primary shrink-0" />
-                <div>
-                  当前处于 Mock 演示身份提供方。设置 <code className="font-mono text-[10px] bg-background/60 rounded px-1 py-0.5 border border-border/50">NEXT_PUBLIC_AUTH_PROVIDER=supabase</code> 切换为生产级 Supabase Auth。
                 </div>
               </div>
             </div>
@@ -486,5 +479,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
   );
 }

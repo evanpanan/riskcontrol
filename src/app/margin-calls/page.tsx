@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { getMockData } from "@/lib/mockData";
+import { getMockData, commitBatchFinance } from "@/lib/mockData";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import {
   History,
@@ -19,22 +19,63 @@ import {
   AlertCircle,
   Filter,
   Zap,
+  Sparkles,
 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { MarginCallStatus } from "@prisma/client";
 import Link from "next/link";
 import { RoleGate } from "@/components/auth/RoleGate";
 import { APP_ROLES } from "@/types/auth";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  summarizeBatchMarginFromClients,
+  executeInstitutionTopup,
+  getLockedBatchRequiredMargin,
+  type BatchLike,
+} from "@/lib/riskEngine";
+
+type FullfillTarget = {
+  mcId: string;
+  batchId: string;
+  requiredAmount: number;
+  batchTotalRequired: number;
+  adjustedPending: number;
+  perClientFulfilledTotal: number;
+  singleTopupCount: number;
+  progressPct: number;
+  batchNumber: string;
+  symbol: string;
+  stockName: string;
+  currentMarketValue: number;
+  cumulativeMarginCalls: number;
+  initialTotalAmount: number;
+  stockPriceAtStart: number;
+  totalShares: number;
+} | null;
 
 export default function MarginCallsPage() {
-  const { batches } = getMockData();
+  const mockData = getMockData();
+  const [tick, setTick] = useState(0);
+  const batches = useMemo(() => [...mockData.batches], [mockData, tick]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | MarginCallStatus>("ALL");
+  const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [fulfillTarget, setFulfillTarget] = useState<FullfillTarget>(null);
+
+  useEffect(() => {
+    const handler = () => setTick((t) => t + 1);
+    window.addEventListener("risk-control:client-single-margin", handler);
+    window.addEventListener("risk-control:margin-fulfilled", handler);
+    return () => {
+      window.removeEventListener("risk-control:client-single-margin", handler);
+      window.removeEventListener("risk-control:margin-fulfilled", handler);
+    };
+  }, []);
 
   const allCalls = useMemo(() => {
     const list: any[] = [];
-    batches.forEach((b) => {
-      b.marginCalls?.forEach((mc) => {
+    batches.forEach((b: any) => {
+      b.marginCalls?.forEach((mc: any) => {
         list.push({
           ...mc,
           batchNumber: b.batchNumber,
@@ -45,7 +86,34 @@ export default function MarginCallsPage() {
       });
     });
 
-    let result = list;
+    const perBatchAgg = new Map<string, ReturnType<typeof summarizeBatchMarginFromClients>>();
+    for (const b of batches) perBatchAgg.set(b.id, summarizeBatchMarginFromClients(b as BatchLike));
+
+    const enriched = list.map((mc) => {
+      const current = perBatchAgg.get(mc.batchId);
+      const agg = current?.roundId === mc.id ? current : undefined;
+      const batchTotalRequired = mc.requiredAmount ?? 0;
+      const adjustedPending = mc.status === MarginCallStatus.PENDING
+        ? Math.max(0, (mc.requiredAmount ?? 0) - (mc.fulfilledAmount ?? 0))
+        : 0;
+      const singleTopupCount = agg?.clientCountWithSingleTopup ?? 0;
+      const totalSingleFulfilled = mc.fulfilledAmount ?? 0;
+      const needed = mc.requiredAmount ?? 0;
+      const progressPct = needed > 0 ? Math.min(100, ((mc.fulfilledAmount ?? 0) + (needed > 0 ? Math.max(0, totalSingleFulfilled - (mc.fulfilledAmount ?? 0)) : 0)) / needed * 100) : 0;
+      const fulfillmentPctVal = mc.status === MarginCallStatus.PENDING
+        ? Math.min(100, ((batchTotalRequired - adjustedPending) / Math.max(batchTotalRequired, 1)) * 100)
+        : progressPct;
+      return {
+        ...mc,
+        batchTotalRequired,
+        adjustedPending,
+        singleTopupCount,
+        totalSingleFulfilled,
+        fulfillmentPct: fulfillmentPctVal,
+      };
+    });
+
+    let result = enriched;
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter(
@@ -68,8 +136,8 @@ export default function MarginCallsPage() {
       expired = 0,
       totalRequired = 0,
       totalFulfilled = 0;
-    batches.forEach((b) => {
-      b.marginCalls?.forEach((mc) => {
+    batches.forEach((b: any) => {
+      b.marginCalls?.forEach((mc: any) => {
         totalRequired += mc.requiredAmount;
         totalFulfilled += mc.fulfilledAmount || 0;
         if (mc.status === "PENDING") pending++;
@@ -236,10 +304,11 @@ export default function MarginCallsPage() {
                 allCalls.map((mc) => {
                   const sc = getStatusConfig(mc.status);
                   const SIcon = sc.Icon;
-                  const fulfillmentPct =
+                  const fulfillmentPct = mc.fulfillmentPct ?? (
                     mc.requiredAmount > 0
                       ? ((mc.fulfilledAmount || 0) / mc.requiredAmount) * 100
-                      : 0;
+                      : 0
+                  );
                   return (
                     <div
                       key={mc.id}
@@ -324,18 +393,38 @@ export default function MarginCallsPage() {
                               size="sm"
                               variant="danger"
                               className="gap-1 h-8 text-xs"
+                              disabled={mc.adjustedPending <= 0.01}
                               onClick={() => {
-                                mc.status = MarginCallStatus.FULLFILLED;
-                                mc.fulfilledAmount = mc.requiredAmount;
-                                mc.fulfilledDate = new Date();
-                                const mock = getMockData();
-                                const b = mock.batches.find((x) => x.id === mc.batchId);
-                                if (b) b.cumulativeMarginCalls = (b.cumulativeMarginCalls || 0) + mc.requiredAmount;
-                                window.location.reload();
+                                const b: any = batches.find((x: any) => x.id === mc.batchId);
+                                const batchTotalRequired = (mc.batchTotalRequired ?? mc.requiredAmount) as number;
+                                const target: FullfillTarget = {
+                                  mcId: mc.id,
+                                  batchId: mc.batchId,
+                                  requiredAmount: mc.requiredAmount,
+                                  batchTotalRequired,
+                                  adjustedPending: mc.adjustedPending,
+                                  perClientFulfilledTotal: mc.totalSingleFulfilled ?? 0,
+                                  singleTopupCount: mc.singleTopupCount ?? 0,
+                                  progressPct: fulfillmentPct,
+                                  batchNumber: mc.batchNumber,
+                                  symbol: mc.symbol,
+                                  stockName: mc.stockName,
+                                  currentMarketValue: b?.currentMarketValue ?? mc.triggerMarketValue ?? 0,
+                                  cumulativeMarginCalls: b?.cumulativeMarginCalls ?? 0,
+                                  initialTotalAmount: b?.initialTotalAmount ?? 0,
+                                  stockPriceAtStart: b?.stockPriceAtStart ?? 0,
+                                  totalShares: b?.totalShares ?? 0,
+                                };
+                                setFulfillTarget(target);
+                                setFulfillOpen(true);
                               }}
                             >
                               <Zap className="h-3 w-3" />
-                              处理补仓
+                              {mc.adjustedPending <= 0.01
+                                ? "客户已单独补齐"
+                                : mc.singleTopupCount > 0
+                                ? `处理剩余 ${formatCurrency(mc.adjustedPending)}`
+                                : "处理补仓"}
                             </Button>
                           </RoleGate>
                         )}
@@ -348,6 +437,108 @@ export default function MarginCallsPage() {
           </div>
         </CardContent>
       </Card>
+      <ConfirmDialog
+        open={fulfillOpen && !!fulfillTarget}
+        onOpenChange={(v) => {
+          setFulfillOpen(v);
+          if (!v) setFulfillTarget(null);
+        }}
+        tone="danger"
+        title={
+          fulfillTarget && fulfillTarget.singleTopupCount > 0
+            ? "确认补齐剩余缺口（已扣除客户单独补仓部分）"
+            : "确认处理本次补仓"
+        }
+        description={
+          fulfillTarget && fulfillTarget.singleTopupCount > 0
+            ? `本批次已有 ${fulfillTarget.singleTopupCount} 位客户完成单独补仓，本次仅对剩余缺口进行批次级一键分配（按缺口从大到小依次覆盖）。已单独补仓客户不会被重复分配，资金池实际划付金额 = 剩余缺口。`
+            : "按本轮剩余缺口记录机构补仓金额、成交价格与份额。补仓本金及收益全部归机构，不增加客户原始本金，也不修改股票价格。"
+        }
+        summary={
+          fulfillTarget
+            ? (() => {
+                const hasSingle = fulfillTarget.singleTopupCount > 0;
+                const topupAmount = Math.max(0, fulfillTarget.adjustedPending);
+                const rows: { label: string; value: string; accent?: "primary" | "success" | "danger" | "warning" | "muted" }[] = [
+                  { label: "补仓单 ID", value: fulfillTarget.mcId.slice(-8).toUpperCase(), accent: "muted" },
+                  { label: "批次号", value: fulfillTarget.batchNumber, accent: "primary" },
+                  { label: "股票", value: `${fulfillTarget.symbol} · ${fulfillTarget.stockName}`, accent: "muted" },
+                  { label: "当前到账进度", value: `${fulfillTarget.progressPct.toFixed(0)}%`, accent: "warning" },
+                ];
+                if (hasSingle) {
+                  rows.push(
+                    { label: "批次原始需补仓", value: formatCurrency(fulfillTarget.batchTotalRequired), accent: "muted" },
+                    {
+                      label: `客户已单独补仓 · ${fulfillTarget.singleTopupCount} 位`,
+                      value: formatCurrency(fulfillTarget.perClientFulfilledTotal),
+                      accent: "success",
+                    },
+                    {
+                      label: "本次一键补仓（剩余缺口）",
+                      value: formatCurrency(topupAmount),
+                      accent: "danger",
+                    }
+                  );
+                } else {
+                  rows.push({
+                    label: "需补仓金额",
+                    value: formatCurrency(topupAmount),
+                    accent: "danger",
+                  });
+                }
+                rows.push(
+                  {
+                    label: "补仓后市值",
+                    value: formatCurrency(fulfillTarget.currentMarketValue + topupAmount),
+                    accent: "success",
+                  },
+                  {
+                    label: "累计补仓(含本次)",
+                    value: formatCurrency(fulfillTarget.cumulativeMarginCalls + topupAmount),
+                    accent: "warning",
+                  },
+                  {
+                    label: "初始股价",
+                    value: `$${fulfillTarget.stockPriceAtStart.toFixed(2)}`,
+                    accent: "primary",
+                  }
+                );
+                return rows;
+              })()
+            : []
+        }
+        confirmText={
+          fulfillTarget && fulfillTarget.singleTopupCount > 0
+            ? `一键补齐剩余 ${formatCurrency(Math.max(0, fulfillTarget.adjustedPending))}`
+            : "确认处理补仓"
+        }
+        cancelText="取消"
+        onConfirm={async () => {
+          if (!fulfillTarget) return;
+          const topupAmount = Math.max(0, fulfillTarget.adjustedPending);
+          if (topupAmount <= 0) {
+            setFulfillOpen(false);
+            setFulfillTarget(null);
+            setTick((t) => t + 1);
+            return;
+          }
+          const b: any = batches.find((x: any) => x.id === fulfillTarget.batchId);
+          if (b) {
+            const applied = commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, {
+              amount: topupAmount, expectedRoundId: fulfillTarget.mcId,
+            }));
+            if (applied <= 0) throw new Error("补仓轮次已更新，请刷新后重新确认。");
+            window.dispatchEvent(
+              new CustomEvent("risk-control:margin-fulfilled", {
+                detail: { batchId: fulfillTarget.batchId, amount: applied },
+              })
+            );
+          }
+          setFulfillOpen(false);
+          setFulfillTarget(null);
+          setTick((t) => t + 1);
+        }}
+      />
     </div>
   );
 }

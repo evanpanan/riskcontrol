@@ -4,12 +4,30 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { getMockData } from "@/lib/mockData";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { getMockData, commitBatchFinance } from "@/lib/mockData";
+import { triggerClientAddedAlert } from "@/lib/notifier";
 import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
-import { calculateProfitSplitRatio } from "@/lib/riskEngine";
+import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient } from "@/lib/riskEngine";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { filterClientsByRole, type ClientLike } from "@/lib/authz/dataScope";
 import { APP_ROLES } from "@/types/auth";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import {
   Users,
   Search,
@@ -27,11 +45,24 @@ import {
   Calendar,
   Landmark,
   Layers,
+  UserPlus as UserPlusIcon,
+  CheckCircle2,
+  Plus,
+  X as XIcon,
 } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { ClientStatus } from "@prisma/client";
 import { mergeClientStatusesOnClientList } from "@/lib/clientStatusStore";
+
+const BD_OPTIONS_ADD = [
+  "李晓明 (Evan Li)",
+  "王思远 (Sylvia Wang)",
+  "张志强 (Jack Zhang)",
+  "刘佳 (Jennifer Liu)",
+  "陈志远 (Daniel Chen)",
+  "林晓雯 (Sharon Lin)",
+];
 
 export default function ClientsPage() {
   const { batches } = getMockData();
@@ -40,6 +71,16 @@ export default function ClientsPage() {
   const [batchFilter, setBatchFilter] = useState<string>("ALL");
   const [hydrated, setHydrated] = useState(false);
   const [tick, setTick] = useState(0);
+  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [addForm, setAddForm] = useState({
+    name: "",
+    investment: "",
+    bdManager: "",
+    batchId: "",
+    signDate: new Date().toISOString().split("T")[0],
+  });
+  const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [lastAddedSummary, setLastAddedSummary] = useState<{ name: string; amount: number; batchNumber: string }[]>([]);
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
 
   useEffect(() => {
@@ -177,7 +218,7 @@ export default function ClientsPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">客户管理中心</h1>
           <p className="text-sm text-muted-foreground">
-            统一管理所有批次的客户档案、投资记录与 BD 分配
+            统一管理所有批次的客户档案、投资记录与 商务经理分配
             {isBdManager && (
               <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-secondary/60 border border-border/60 text-xs font-mono">
               <EyeOff className="h-3 w-3" />
@@ -194,7 +235,22 @@ export default function ClientsPage() {
                 <Download className="h-3.5 w-3.5" />
                 导出客户表
               </Button>
-              <Button size="sm" className="gap-1.5">
+              <Button
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  setAddForm({
+                    name: "",
+                    investment: "",
+                    bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                    batchId: batches[0]?.id ?? "",
+                    signDate: new Date().toISOString().split("T")[0],
+                  });
+                  setAddErrors({});
+                  setLastAddedSummary([]);
+                  setAddClientOpen(true);
+                }}
+              >
                 <UserPlus className="h-3.5 w-3.5" />
                 批量新增客户
               </Button>
@@ -233,7 +289,7 @@ export default function ClientsPage() {
         <Card className="border-border/50">
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-muted-foreground">BD 经理数</p>
+              <p className="text-xs text-muted-foreground">商务经理数</p>
               <Building2 className="h-4 w-4 text-secondary-foreground" />
             </div>
             <p className="text-2xl font-bold font-mono">{stats.bdCount}</p>
@@ -261,7 +317,7 @@ export default function ClientsPage() {
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-bold flex items-center gap-2">
             <Building2 className="h-4 w-4" />
-            BD 经理业绩排行榜
+            商务经理业绩排行榜
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
@@ -274,19 +330,9 @@ export default function ClientsPage() {
                   className="rounded-xl border border-border/50 bg-secondary/30 p-4 hover:bg-secondary/50 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-3 mb-3">
-                    <div
-                      className={cn(
-                        "h-9 w-9 rounded-lg flex items-center justify-center text-xs font-bold shrink-0",
-                        idx === 0 && "bg-gradient-to-br from-amber-400 to-yellow-500 text-white shadow-md shadow-amber-500/30",
-                        idx === 1 && "bg-gradient-to-br from-slate-300 to-slate-400 text-white",
-                        idx === 2 && "bg-gradient-to-br from-orange-400 to-amber-600 text-white",
-                        idx > 2 && "bg-primary/15 text-primary border border-primary/20"
-                      )}
-                    >
-                      #{idx + 1}
-                    </div>
+                    <ClientAvatar name={bd} size="md" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold truncate">{bd}</p>
+                      <Link href={`/bd/${encodeURIComponent(bd)}`} className="text-xs font-semibold hover:text-primary hover:underline">{bd}</Link>
                       <p className="text-[10px] text-muted-foreground">
                         {s.count} 位客户
                       </p>
@@ -314,7 +360,7 @@ export default function ClientsPage() {
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="搜索：姓名 / BD / 股票..."
+                  placeholder="搜索：姓名 / 商务经理 / 股票..."
                   className="pl-8 h-9 w-[240px] text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -326,12 +372,12 @@ export default function ClientsPage() {
                 onChange={(e) => setBdFilter(e.target.value)}
                 disabled={isBdManager}
               >
-                <option value="ALL">{isBdManager ? "仅我名下（已锁定）" : "全部 BD 经理"}</option>
+                <option value="ALL">{isBdManager ? "仅我名下（已锁定）" : "全部 商务经理"}</option>
                 {bdManagers.map((bd) => {
                   const disabled = isBdManager && bd !== bdManagerFullName;
                   return (
                     <option key={bd} value={bd} disabled={disabled}>
-                      {bd}{disabled ? "（其他 BD · 无权限）" : ""}
+                      {bd}{disabled ? "（其他商务经理 · 无权限）" : ""}
                     </option>
                   );
                 })}
@@ -397,7 +443,7 @@ export default function ClientsPage() {
           <div className="border border-border/50 rounded-xl overflow-hidden">
             <div className="grid grid-cols-12 px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30 border-b border-border/50">
               <div className="col-span-2">客户</div>
-              <div className="col-span-2">所属 BD</div>
+              <div className="col-span-2">所属商务经理</div>
               <div className="col-span-2">批次 / 股票</div>
               <div className="col-span-1 text-right">投资金额</div>
               <div className="col-span-1 text-center">分成</div>
@@ -418,11 +464,7 @@ export default function ClientsPage() {
                   >
                     <div className="col-span-2">
                       <div className="flex items-center gap-2.5">
-                        <div className="h-8 w-8 rounded-lg gradient-primary flex items-center justify-center shrink-0 shadow-sm">
-                          <span className="text-[11px] font-bold text-primary-foreground">
-                            {c.name.charAt(0)}
-                          </span>
-                        </div>
+                        <ClientAvatar name={c.name} size="sm" rounded="lg" />
                         <div className="min-w-0">
                           <p className="font-semibold text-sm truncate">{c.name}</p>
                           <p className="text-[10px] text-muted-foreground font-mono">
@@ -432,10 +474,10 @@ export default function ClientsPage() {
                       </div>
                     </div>
                     <div className="col-span-2 min-w-0">
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <Building2 className="h-3 w-3 text-primary shrink-0" />
+                      <Link href={`/bd/${encodeURIComponent(c.bdManager)}`} className="flex items-center gap-1.5 text-xs hover:text-primary hover:underline">
+                        <ClientAvatar name={c.bdManager} size="xs" />
                         <span className="truncate">{c.bdManager}</span>
-                      </div>
+                      </Link>
                     </div>
                     <div className="col-span-2 min-w-0">
                       <p className="font-mono text-[10px] text-muted-foreground">
@@ -447,7 +489,7 @@ export default function ClientsPage() {
                       <p className="font-mono font-bold text-sm">
                         {formatCurrency(c.investmentAmount)}
                       </p>
-                      {c.investmentAmount >= 100000 && (
+                      {isVipClient(c) && (
                         <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
                           VIP
                         </Badge>
@@ -455,12 +497,12 @@ export default function ClientsPage() {
                     </div>
                     <div className="col-span-1 text-center text-xs font-mono">
                       {(() => {
-                        const split = calculateProfitSplitRatio(c.investmentAmount || 0);
+                        const split = getClientProfitSplit(c);
                         return (
                           <>
-                            <p className="font-semibold">客户 {Math.round(split.client * 100)}%</p>
+                            <p className="font-semibold">客户 {Number((split.client * 100).toFixed(2))}%</p>
                             <p className="text-[10px] text-muted-foreground">
-                              / 机构 {Math.round(split.institution * 100)}%
+                              / 机构 {Number((split.institution * 100).toFixed(2))}%
                             </p>
                           </>
                         );
@@ -528,6 +570,273 @@ export default function ClientsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog
+        open={addClientOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setAddClientOpen(false);
+            setTick((t) => t + 1);
+          } else {
+            setAddClientOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[640px] max-h-[90vh] overflow-hidden flex flex-col p-0">
+          <DialogHeader className="p-4 border-b border-border/50">
+            <DialogTitle className="text-base flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl gradient-primary flex items-center justify-center shrink-0 shadow-md shadow-primary/30">
+                <UserPlusIcon className="h-4.5 w-4.5 text-primary-foreground" />
+              </div>
+              <div>
+                <p className="font-bold">批量新增客户</p>
+                <DialogDescription className="text-[11px] text-muted-foreground mt-0.5">
+                  连续录入：保存后自动重置姓名和金额，继续添加下一位客户
+                </DialogDescription>
+              </div>
+              {lastAddedSummary.length > 0 && (
+                <Badge variant="success" className="ml-auto text-[10px] h-5 font-mono">
+                  本次已新增 {lastAddedSummary.length} 位
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="rounded-lg border border-border/50 bg-card/40 p-3 space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">客户姓名 *</Label>
+                  <Input
+                    value={addForm.name}
+                    onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
+                    placeholder="例：张伟 / Jennifer Zhang"
+                    className={cn(addErrors.name && "border-danger ring-danger/20")}
+                  />
+                  {addErrors.name && <p className="text-[10px] text-danger font-mono">{addErrors.name}</p>}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">投资本金（USD）*</Label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground">$</span>
+                    <Input
+                      value={addForm.investment}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/[^0-9.]/g, "");
+                        const parts = v.split(".");
+                        const cleaned = parts[0] + (parts.length > 1 ? "." + parts.slice(1).join("") : "");
+                        setAddForm({ ...addForm, investment: cleaned });
+                      }}
+                      onBlur={() => {
+                        const n = Number(addForm.investment.replace(/[^0-9.]/g, ""));
+                        if (Number.isFinite(n)) {
+                          setAddForm({ ...addForm, investment: n.toFixed(2) });
+                        }
+                      }}
+                      placeholder="500000.00"
+                      className="pl-7 font-mono tabular-nums"
+                    />
+                  </div>
+                  {addErrors.investment && <p className="text-[10px] text-danger font-mono">{addErrors.investment}</p>}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">所属批次 *</Label>
+                  <Select
+                    value={addForm.batchId || ""}
+                    onValueChange={(v) => setAddForm({ ...addForm, batchId: v })}
+                  >
+                    <SelectTrigger className={cn(addErrors.batchId && "border-danger ring-danger/20")}>
+                      <SelectValue placeholder="选择要加入的批次" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {batches.map((b) => (
+                        <SelectItem key={b.id} value={b.id}>
+                          <span className="flex items-center gap-2">
+                            <span className="font-mono text-[10px] text-muted-foreground">{b.batchNumber}</span>
+                            <span className="font-semibold">{b.stockSymbol}</span>
+                            <span className="text-muted-foreground text-xs">{b.stockName}</span>
+                            <Badge variant="outline" className="ml-auto font-mono text-[9px]">
+                              {b.clients?.length ?? 0} 位
+                            </Badge>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {addErrors.batchId && <p className="text-[10px] text-danger font-mono">{addErrors.batchId}</p>}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">商务经理*</Label>
+                  <Select
+                    value={addForm.bdManager || ""}
+                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v })}
+                    disabled={!!bdManagerFullName}
+                  >
+                    <SelectTrigger className={cn(addErrors.bdManager && "border-danger ring-danger/20")}>
+                      <SelectValue placeholder="选择 商务经理" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BD_OPTIONS_ADD.map((b) => (
+                        <SelectItem key={b} value={b}>{b}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {addErrors.bdManager && <p className="text-[10px] text-danger font-mono">{addErrors.bdManager}</p>}
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-[11px]">签约日期</Label>
+                  <Input
+                    type="date"
+                    value={addForm.signDate}
+                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              {(() => {
+                const b = batches.find((x) => x.id === addForm.batchId);
+                const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, "")) || 0;
+                const split = numAmt > 0 ? calculateProfitSplitRatio(numAmt) : null;
+                return (
+                  <div className="rounded-md border border-dashed border-border/70 bg-secondary/30 p-3 grid gap-2 md:grid-cols-3 text-[11px]">
+                    <div>
+                      <p className="text-muted-foreground mb-0.5">批次优先池上限</p>
+                      <p className="font-mono font-semibold">{b ? formatCurrency(b.priorityAmount ?? 0) : "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground mb-0.5">分成比例（客户/机构）</p>
+                      <p className="font-mono font-semibold">
+                        {split ? `客户${Number((split.client * 100).toFixed(2))}% / 机构${Number((split.institution * 100).toFixed(2))}%` : "-"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground mb-0.5">签约日期</p>
+                      <p className="font-mono font-semibold">{addForm.signDate || "-"}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {lastAddedSummary.length > 0 && (
+              <div className="rounded-lg border border-success/40 bg-success/5 p-3 space-y-2">
+                <p className="text-[11px] font-semibold text-success flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  本次已新增 {lastAddedSummary.length} 位客户
+                </p>
+                <ul className="space-y-1 max-h-36 overflow-y-auto">
+                  {lastAddedSummary.map((x, i) => (
+                    <li key={i} className="flex items-center justify-between text-[11px] px-2 py-1 rounded bg-background/50">
+                      <div className="flex items-center gap-2">
+                        <ClientAvatar name={x.name} size="xs" rounded="full" />
+                        <span className="font-semibold">{x.name}</span>
+                        <span className="text-muted-foreground font-mono text-[10px]">{x.batchNumber}</span>
+                      </div>
+                      <span className="font-mono font-semibold text-success">{formatCurrency(x.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="p-3 border-t border-border/50 flex-row justify-between gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLastAddedSummary([])}
+              disabled={lastAddedSummary.length === 0}
+              className="text-[11px]"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+              清空本次记录
+            </Button>
+            <div className="flex items-center gap-2 ml-auto">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setAddClientOpen(false);
+                  setTick((t) => t + 1);
+                }}
+                className="text-[11px]"
+              >
+                完成并关闭
+              </Button>
+              <Button
+                size="sm"
+                className="gap-1.5 text-[11px]"
+                onClick={async () => {
+                  const errs: Record<string, string> = {};
+                  if (!addForm.name.trim() || addForm.name.trim().length < 2) errs.name = "至少 2 个字符";
+                  const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, ""));
+                  if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
+                  if (!addForm.batchId) errs.batchId = "请选择所属批次";
+                  if (!addForm.bdManager) errs.bdManager = "请选择 商务经理";
+                  setAddErrors(errs);
+                  if (Object.keys(errs).length > 0) return;
+                  const mock = getMockData();
+                  const batch = mock.batches.find((x) => x.id === addForm.batchId);
+                  if (!batch) return;
+                  const split = calculateProfitSplitRatio(numAmt);
+                  const newClient: any = {
+                    id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    name: addForm.name.trim(),
+                    investmentAmount: numAmt,
+                    initialInvestment: numAmt,
+                    bdManager: addForm.bdManager,
+                    signDate: new Date(addForm.signDate),
+                    status: ClientStatus.ACTIVE,
+                    profitSplitClient: split.client * 100,
+                    profitSplitInstitution: split.institution * 100,
+                    signedVipThreshold: split.vipThreshold,
+                    realtimePnL: 0,
+                    estimatedExitAmount: numAmt,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                    batchId: batch.id,
+                    settledAt: null,
+                  };
+                  try {
+                    commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+                  } catch (err) {
+                    setAddErrors({ investment: err instanceof Error ? err.message : "新增客户失败" });
+                    return;
+                  }
+                  try {
+                    await triggerClientAddedAlert(batch as any, {
+                      name: newClient.name,
+                      investmentAmount: numAmt,
+                      bdManager: addForm.bdManager,
+                    });
+                  } catch {}
+                  setLastAddedSummary((xs) => [
+                    ...xs,
+                    { name: newClient.name, amount: numAmt, batchNumber: batch.batchNumber },
+                  ]);
+                  window.dispatchEvent(
+                    new CustomEvent("risk-control:client-added", {
+                      detail: { batchId: batch.id, client: newClient },
+                    })
+                  );
+                  setTick((t) => t + 1);
+                  setAddForm({
+                    name: "",
+                    investment: "",
+                    bdManager: addForm.bdManager,
+                    batchId: addForm.batchId,
+                    signDate: addForm.signDate,
+                  });
+                  setAddErrors({});
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                保存并继续新增
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

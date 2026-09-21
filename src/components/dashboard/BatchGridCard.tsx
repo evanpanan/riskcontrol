@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn, formatCurrency, formatPercent, formatDate, calculateTradingWindows } from "@/lib/utils";
 import {
-  calculateBatchRiskMetrics,
+  getBatchMetrics,
   calculateBatchPnLSplit,
   WARNING_DROP_THRESHOLD,
   CRITICAL_DROP_THRESHOLD,
@@ -46,11 +46,7 @@ const statusBadge = {
 
 export function BatchGridCard({ batch }: BatchGridCardProps) {
   const mv = batch.currentMarketValue || batch.initialTotalAmount;
-  const metrics = calculateBatchRiskMetrics(
-    batch.initialTotalAmount,
-    mv,
-    batch.cumulativeMarginCalls || 0
-  );
+  const metrics = getBatchMetrics(batch);
   const split = calculateBatchPnLSplit(batch, mv);
   const tradingInfo = calculateTradingWindows(batch.signDate);
 

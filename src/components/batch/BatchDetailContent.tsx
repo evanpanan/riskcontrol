@@ -3,15 +3,25 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
-  calculateBatchRiskMetrics,
+  getBatchMetrics,
   calculateBatchPnLSplit,
   calculateRealtimeClientMetrics,
   calculateTotalShares,
   calculateClientMarginCall,
-  calculateProfitSplitRatio,
+  getClientProfitSplit,
+  isVipClient,
   calculateRescueStats,
+  getLockedBatchRequiredMargin,
+  summarizeBatchMarginFromClients,
+  executeInstitutionTopup,
+  settleClientPosition,
+  calculateClientSettlement,
 } from "@/lib/riskEngine";
-import { triggerMarginCallAlert, triggerWarningAlert } from "@/lib/notifier";
+import { commitBatchFinance, getMockData } from "@/lib/mockData";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { toast } from "sonner";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
+import { notifyBatchChannel } from "@/lib/notifier";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime, formatPercent } from "@/lib/utils";
 import { Batch, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
@@ -118,6 +128,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [settleTarget, setSettleTarget] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [bdFilter, setBdFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState<ClientStatus | "ALL">("ALL");
@@ -142,12 +153,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     };
   }, []);
 
-  const mv = batch.currentMarketValue || batch.initialTotalAmount || 0;
-  const metrics = calculateBatchRiskMetrics(
-    batch.initialTotalAmount,
-    mv,
-    batch.cumulativeMarginCalls || 0
-  );
+  const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
+  const marginSummary = summarizeBatchMarginFromClients(batch as any);
+  const metrics = { ...getBatchMetrics(batch as any), requiredMarginCall: marginSummary.totalPending };
+  const lockedBatchRequiredMargin = getLockedBatchRequiredMargin(batch as any);
   const split = calculateBatchPnLSplit(batch as any, mv);
   const rescueStats = calculateRescueStats(batch as any, batch.currentStockPrice ?? batch.stockPriceAtStart);
   const tradingInfo = calculateTradingWindows(batch.signDate);
@@ -170,7 +179,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     const base: Client[] = hydrated
       ? (batch.clients || []).map((c) => (c as any).__redacted ? c : mergeClientStatusOnClient(c as any)) as Client[]
       : (batch.clients || []) as Client[];
-    // BD 视角：bdFilter 仅"ALL"和"我自己"生效（因为其他 BD 客户端根本不可见）
+    // BD 视角：bdFilter 仅"ALL"和"我自己"生效（因为其他商务经理 客户端根本不可见）
     const { mergedRows } = filterBatchDetailClientsByRole(base, scopeUser);
     return mergedRows as (Client | RedactedClientPlaceholder)[];
   }, [batch, scopeUser, hydrated, tick]);
@@ -191,12 +200,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     if (splitFilter !== "ALL") {
       list = list.filter((c: any) => {
         if (c.__redacted) return true;
-        const ratio = calculateProfitSplitRatio(c.investmentAmount || 0);
-        return splitFilter === "VIP" ? ratio.client >= 0.4 : ratio.client < 0.4;
+        return splitFilter === "VIP" ? isVipClient(c) : !isVipClient(c);
       });
     }
     // 每客户分摊的"机构补仓救援金名义值"（不扣减客户本金，仅展示）
-    const cm = batch.cumulativeMarginCalls || 0;
+    const cm = rescueStats.totalRescueAmount;
     const pr = batch.priorityAmount || batch.initialTotalAmount * 0.7;
     const enriched = list.map((client: any) => {
       if (client.__redacted) return client;
@@ -207,8 +215,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         batch.initialTotalAmount || 0,
         metrics.requiredMarginCall || 0
       );
-      const rescueAllocation =
-        cm > 0 && pr > 0 ? cm * (client.investmentAmount / pr) : 0;
+      const rescueAllocation = client.settlement?.marginCallReturned ??
+        (cm > 0 && pr > 0 ? cm * (client.investmentAmount / pr) : 0);
       return {
         ...client,
         ...realtime,
@@ -273,56 +281,28 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   };
 
   const handleFulfill = () => setFulfillOpen(true);
+  const handleNotify = async (channel: "email" | "whatsapp") => {
+    if (user?.role !== APP_ROLES.ADMIN && user?.role !== APP_ROLES.RISK_MANAGER) {
+      toast.error("仅管理员和风控总监可发送机构通知。");
+      return;
+    }
+    try { toast.success(await notifyBatchChannel(batch as any, channel)); }
+    catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
+  };
   const doFulfill = () => {
-    const req = metrics.requiredMarginCall;
-    const averageEntryPrice = batch.currentStockPrice ?? batch.stockPriceAtStart ?? 1;
-    const rescueShares = req / averageEntryPrice;
-    const mcs = (batch as any).marginCalls ?? [];
-    const pending = mcs.find((x: any) => x.status === MarginCallStatus.PENDING) ?? mcs[0];
-    if (pending) {
-      pending.status = MarginCallStatus.FULLFILLED;
-      pending.fulfilledAmount = req;
-      pending.fulfilledDate = new Date();
-      (pending as any).averageEntryPrice = averageEntryPrice;
-      (pending as any).rescueShares = rescueShares;
-    } else if (Array.isArray((batch as any).marginCalls)) {
-      (batch as any).marginCalls.push({
-        id: `mc_${Date.now()}`,
-        batchId: batch.id,
-        requiredAmount: req,
-        fulfilledAmount: req,
-        status: MarginCallStatus.FULLFILLED,
-        triggerDate: new Date(),
-        fulfilledDate: new Date(),
-        createdAt: new Date(),
-        averageEntryPrice,
-        rescueShares,
-      });
-    }
-    (batch as any).cumulativeMarginCalls = (batch.cumulativeMarginCalls || 0) + req;
-    (batch as any).currentMarketValue =
-      (batch.currentMarketValue ?? batch.initialTotalAmount ?? 0) + req;
-    const newMetrics = calculateBatchRiskMetrics(
-      batch.initialTotalAmount,
-      (batch as any).currentMarketValue,
-      (batch as any).cumulativeMarginCalls
-    );
-    (batch as any).riskLevel = newMetrics.riskLevel;
-    (batch as any).totalPnL = newMetrics.totalPnL;
-    const s =
-      (batch as any).totalShares ??
-      calculateTotalShares(batch.initialTotalAmount || 0, batch.stockPriceAtStart || 1);
-    if (s > 0) {
-      (batch as any).currentStockPrice =
-        ((batch as any).currentMarketValue ?? 0) / s;
-      (batch as any).currentPrice = (batch as any).currentStockPrice;
-    }
-    console.log("[补仓] 确认补仓成功:", req, "新风险等级:", newMetrics.riskLevel, "rescueShares:", rescueShares, "avgEntry:", averageEntryPrice);
+    const canonical = getMockData().batches.find((b) => b.id === batch.id);
+    if (!canonical) throw new Error("批次不存在，请刷新。");
+    const applied = commitBatchFinance(canonical, (draft) => executeInstitutionTopup(draft, {
+      amount: marginSummary.totalPending, expectedRoundId: marginSummary.roundId,
+      operatorName: user?.displayName ?? user?.email,
+    }));
+    if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
     window.dispatchEvent(
       new CustomEvent("risk-control:margin-fulfilled", {
-        detail: { batchId: batch.id, amount: req, averageEntryPrice, rescueShares },
+        detail: { batchId: batch.id, amount: applied },
       })
     );
+    setTick((t) => t + 1);
     setFulfillOpen(false);
     onChange?.();
   };
@@ -331,14 +311,23 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     if (!batch.clients) return;
     const target = batch.clients.find((c: any) => c.id === clientId);
     if (!target) return;
-    (target as any).status = newStatus;
     if (newStatus === ClientStatus.SETTLED) {
-      (target as any).settledAt = new Date();
-    } else {
-      (target as any).settledAt = null;
+      setSettleTarget(clientId);
+      return;
     }
-    setClientStatus(clientId, newStatus);
-    console.log("[客户状态变更]", clientId, "→", newStatus);
+    try {
+      const canonical = getMockData().batches.find((b) => b.id === batch.id);
+      if (!canonical) return;
+      commitBatchFinance(canonical, (draft) => {
+        const client = draft.clients!.find((c) => c.id === clientId)!;
+        if (client.status === ClientStatus.SETTLED) throw new Error("已结算快照不可撤销或重新激活。");
+        client.status = newStatus;
+        client.settledAt = null;
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "状态更新失败");
+      return;
+    }
     window.dispatchEvent(
       new CustomEvent("risk-control:client-status-changed", {
         detail: { batchId: batch.id, clientId, newStatus },
@@ -353,6 +342,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   return (
     <div className={cn("space-y-6", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
+      {((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings ?? []).map((warning) => (
+        <p key={warning} role="alert" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
+          待核对：{warning} 当前估值仅供核对，不作为付款凭证。
+        </p>
+      ))}
       {/* Breadcrumb & Back */}
       {!compact ? (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -365,12 +359,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <span className="font-mono text-foreground font-medium">{batch.batchNumber}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <Link href="/">
-                <Button variant="ghost" size="sm" className="gap-1.5 h-8">
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  返回
-                </Button>
-              </Link>
+              <Button asChild variant="outline" className="h-10 gap-2 shrink-0 border-primary/50 bg-primary/10 text-foreground font-semibold hover:bg-primary/20 shadow-sm">
+                <Link href="/"><ArrowLeft className="h-4 w-4" />返回风控大盘</Link>
+              </Button>
               <h1 className="text-2xl font-bold tracking-tight">
                 {batch.stockSymbol}
                 {batch.stockName && (
@@ -387,7 +378,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
           <div className="flex items-center gap-2 flex-wrap">
             <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER]}
+              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:notify_email:${batch.id}`}
               auditAction="ui_component_denied"
             >
@@ -395,29 +386,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-9"
-              onClick={async () => {
-                try {
-                  const mcs = (batch as any).marginCalls ?? [];
-                  const bds = Array.from(
-                    new Set(((batch.clients?.map((c) => c.bdManager).filter(Boolean)) ?? []) as string[])
-                  ) as string[];
-                  if (mcs.length > 0) {
-                    for (const mc of mcs) await triggerMarginCallAlert(batch as any, mc, bds);
-                  } else {
-                    await triggerWarningAlert(batch as any, metrics.dropPercent, 20);
-                  }
-                  console.log("[通知] 邮件通知BD完成:", batch.batchNumber, bds);
-                } catch (e) {
-                  console.warn(e);
-                }
-              }}
+              onClick={() => handleNotify("email")}
             >
               <Mail className="h-3.5 w-3.5" />
-              邮件通知 BD
+              邮件通知商务经理
             </Button>
             </RoleGate>
             <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER]}
+              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:notify_wa:${batch.id}`}
               auditAction="ui_component_denied"
             >
@@ -425,7 +401,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-9"
-              onClick={() => console.log("[通知] WhatsApp提醒已推送至风控:", batch.batchNumber)}
+              onClick={() => handleNotify("whatsapp")}
             >
               <MessageCircle className="h-3.5 w-3.5" />
               WhatsApp 提醒
@@ -460,9 +436,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <Download className="h-3.5 w-3.5" />
               导出明细
             </Button>
-            {batch.riskLevel === RiskLevel.CRITICAL && (
+            {marginSummary.totalPending > 0 && (
               <RoleGate
-                allowed={[APP_ROLES.RISK_MANAGER]}
+                allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
                 auditResource={`batch:fulfill_mc:${batch.id}`}
                 auditAction="ui_component_denied"
               >
@@ -502,21 +478,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-8 text-[11px]"
-              onClick={async () => {
-                try {
-                  const mcs = (batch as any).marginCalls ?? [];
-                  const bds = Array.from(
-                    new Set(((batch.clients?.map((c) => c.bdManager).filter(Boolean)) ?? []) as string[])
-                  ) as string[];
-                  if (mcs.length > 0) {
-                    for (const mc of mcs) await triggerMarginCallAlert(batch as any, mc, bds);
-                  } else {
-                    await triggerWarningAlert(batch as any, metrics.dropPercent, 20);
-                  }
-                } catch (e) {
-                  console.warn(e);
-                }
-              }}
+              onClick={() => handleNotify("email")}
             >
               <Mail className="h-3 w-3" />
               Email
@@ -525,12 +487,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-8 text-[11px]"
-              onClick={() => console.log("[WA]", batch.batchNumber)}
+              onClick={() => handleNotify("whatsapp")}
             >
               <MessageCircle className="h-3 w-3" />
               WA
             </Button>
-            {batch.riskLevel === RiskLevel.CRITICAL && (
+            {marginSummary.totalPending > 0 && (
               <Button variant="danger" size="sm" className="gap-1.5 h-8 text-[11px]" onClick={handleFulfill}>
                 <Zap className="h-3 w-3" />
                 补仓
@@ -758,7 +720,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <Users className="h-3 w-3" /> 客户
             </p>
             <p className="text-sm font-bold font-mono">{batch.clients?.length || 0} 位</p>
-            <p className="text-[10px] text-muted-foreground">{Object.keys(investedByBD).length} 位 BD</p>
+            <p className="text-[10px] text-muted-foreground">{Object.keys(investedByBD).length} 位商务经理</p>
           </CardContent>
         </Card>
       </div>
@@ -1006,7 +968,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                         {" · "}
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-secondary/60 border border-border/50 text-muted-foreground/90">
                           <EyeOff className="h-3 w-3" />
-                          {redactedCountInPage} 位其他 BD 客户已脱敏
+                          {redactedCountInPage} 位其他商务经理 客户已脱敏
                         </span>
                       </>
                     )}
@@ -1027,7 +989,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <input
                       className="h-9 pl-8 pr-3 rounded-lg border border-input bg-background text-xs w-[180px] focus:outline-none focus:ring-2 focus:ring-ring"
-                      placeholder={isBdManager ? "搜索我名下客户" : "客户 / BD 搜索"}
+                      placeholder={isBdManager ? "搜索我名下客户" : "客户 / 商务经理搜索"}
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />
@@ -1037,12 +999,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     value={bdFilter}
                     onChange={(e) => setBdFilter(e.target.value)}
                   >
-                    <option value="ALL">{isBdManager ? "仅我名下 / 全部" : "全部 BD"}</option>
+                    <option value="ALL">{isBdManager ? "仅我名下 / 全部" : "全部商务经理"}</option>
                     {bdManagers.map((bd) => {
                       const disabled = isBdManager && bd !== bdManagerFullName;
                       return (
                         <option key={bd} value={bd} disabled={disabled}>
-                          {bd}{disabled ? "（其他 BD · 无权限）" : ""}
+                          {bd}{disabled ? "（其他商务经理 · 无权限）" : ""}
                         </option>
                       );
                     })}
@@ -1063,8 +1025,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     onChange={(e) => setSplitFilter(e.target.value as any)}
                   >
                     <option value="ALL">全部分成档位</option>
-                    <option value="VIP">VIP 档（客户 40% / 机构 60%）</option>
-                    <option value="STANDARD">普通档（客户 30% / 机构 70%）</option>
+                    <option value="VIP">VIP 档（按签约时门槛）</option>
+                    <option value="STANDARD">普通档（按签约时门槛）</option>
                   </select>
                   <Button
                     size="sm"
@@ -1083,8 +1045,13 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 batchInitialAmount={batch.initialTotalAmount}
                 viewerRole={role}
                 viewerUser={user ?? undefined}
-                batchRequiredMarginCall={metrics.requiredMarginCall}
+                batchRequiredMarginCall={lockedBatchRequiredMargin > 0 ? lockedBatchRequiredMargin : metrics.requiredMarginCall}
                 onClientStatusChange={handleClientStatusChange}
+                batch={batch as any}
+                onBatchMutated={() => {
+                  onChange?.();
+                  setTick((t) => t + 1);
+                }}
               />
             </CardContent>
           </Card>
@@ -1093,7 +1060,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <Building2 className="h-4 w-4 text-secondary-foreground" />
-                BD 经理资金分布
+                商务经理资金分布
                 {isBdManager && (
                   <Badge variant="outline" className="text-[9px] ml-1 font-mono">
                     仅我可见范围
@@ -1117,12 +1084,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                         )}
                       >
                         <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-lg gradient-primary flex items-center justify-center text-xs font-bold text-primary-foreground">
-                              {idx + 1}
-                            </div>
-                            <div>
-                              <p className="font-semibold text-xs">{bd}</p>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <ClientAvatar name={bd} size="sm" />
+                            <div className="min-w-0">
+                              <Link href={`/bd/${encodeURIComponent(bd)}`} className="font-semibold text-xs hover:text-primary hover:underline focus-visible:outline focus-visible:outline-primary">{bd}</Link>
                               <p className="text-[10px] text-muted-foreground">{count} 位客户</p>
                             </div>
                           </div>
@@ -1218,6 +1183,27 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">以下机构出资与客户原始本金独立记账，补仓仓位本金及全部收益归机构。</p>
+            {((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings ?? []).map((warning) => (
+              <p key={warning} role="alert" className="text-xs text-warning">{warning}</p>
+            ))}
+            <div className="max-h-48 overflow-auto rounded-lg border border-border/50">
+              <table className="w-full text-xs tabular-nums">
+                <thead className="sticky top-0 bg-card text-muted-foreground">
+                  <tr><th className="p-2 text-left">机构成交时间</th><th>出资金额</th><th>成交价</th><th>买入份额</th></tr>
+                </thead>
+                <tbody>
+                  {((batch as import("@/lib/riskEngine").BatchLike).finance?.trades ?? []).map((trade) => (
+                    <tr key={trade.id} className="border-t border-border/40">
+                      <td className="p-2">{formatDateTime(new Date(trade.createdAt))}</td>
+                      <td className="text-right p-2">{formatCurrency(trade.amount)}</td>
+                      <td className="text-right p-2">{trade.entryPrice ? formatCurrency(trade.entryPrice) : "待核对"}</td>
+                      <td className="text-right p-2">{trade.entryPrice ? trade.shares.toFixed(4) : "待核对"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {!batch.marginCalls?.length ? (
               <div className="text-center py-12 text-muted-foreground border rounded-xl border-dashed border-border/60">
                 <History className="h-10 w-10 mx-auto mb-2 opacity-30" />
@@ -1320,7 +1306,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 确认补仓操作
               </DialogTitle>
               <DialogDescription className="text-left">
-                本次补仓将通过二级市场以当前价买入对应股票，补仓后市值恢复至初始总值。
+                按本轮锁定缺口记录机构补仓。每笔按当前价格独立记录份额，本金和收益全部归机构。
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -1346,7 +1332,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <div className="space-y-0.5">
                 <p>补仓完成后将：</p>
                 <p>· 累计补仓金额 + ${metrics.requiredMarginCall.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-                <p>· 风险等级将从「击穿」下调至「正常」</p>
+                <p>· 原始仓位和机构补仓仓位分别核算，股票价格不变</p>
                 <p>· 客户保本进度与分成比例保持不变</p>
               </div>
             </div>
@@ -1355,13 +1341,40 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <Button type="button" variant="secondary" onClick={() => setFulfillOpen(false)} className="h-9 px-4">
               取消
             </Button>
-            <Button type="button" variant="danger" onClick={doFulfill} className="h-9 px-4 gap-1.5">
+            <Button type="button" variant="danger" onClick={() => {
+              try { doFulfill(); } catch (err) { toast.error(err instanceof Error ? err.message : "补仓失败"); }
+            }} className="h-9 px-4 gap-1.5">
               <Zap className="h-3.5 w-3.5" />
               确认补仓 ${metrics.requiredMarginCall.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={!!settleTarget}
+        onOpenChange={(open) => { if (!open) setSettleTarget(null); }}
+        title="确认客户退出结算"
+        description="按签约比例结算客户利润；对应机构原始仓位、历次补仓本金和收益同时按占比结清。结算后金额、价格和比例永久冻结，不可重新激活。"
+        summary={(() => {
+          const client = batch.clients?.find((c) => c.id === settleTarget);
+          if (!client) return [];
+          const result = calculateClientSettlement(client, batch as any, mv, batch.currentStockPrice ?? batch.stockPriceAtStart);
+          return [
+            { label: "客户原始本金", value: formatCurrency(client.investmentAmount) },
+            { label: "客户实收", value: formatCurrency(result.clientReceives) },
+            { label: "机构实收（含补仓）", value: formatCurrency(result.institutionReceives) },
+            { label: "客户签约分成", value: `${result.splitRatioClient}%` },
+          ];
+        })()}
+        onConfirm={() => {
+          const canonical = getMockData().batches.find((b) => b.id === batch.id);
+          if (!canonical || !settleTarget) throw new Error("客户不存在，请刷新。");
+          commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
+          window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
+          setTick((t) => t + 1);
+          onChange?.();
+        }}
+      />
     </div>
   );
 }

@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Client, ClientStatus } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import Link from "next/link";
 import {
   Tooltip,
@@ -33,6 +34,9 @@ import {
   RotateCcw,
   Archive,
   AlertCircle,
+  Zap,
+  History,
+  DollarSign,
 } from "lucide-react";
 import {
   Table,
@@ -42,7 +46,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { calculateProfitSplitRatio } from "@/lib/riskEngine";
+import {
+  getClientProfitSplit,
+  isVipClient,
+  allocateClientMarginRequirements,
+  executeInstitutionTopup,
+  summarizeBatchMarginFromClients,
+  getLockedBatchRequiredMargin,
+  type BatchLike,
+  type ClientMarginState,
+} from "@/lib/riskEngine";
+import { commitBatchFinance } from "@/lib/mockData";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
 
 export interface EnrichedClient extends Omit<Client, 'realtimePnL' | 'estimatedExitAmount'> {
   __redacted?: boolean;
@@ -54,23 +70,6 @@ export interface EnrichedClient extends Omit<Client, 'realtimePnL' | 'estimatedE
   requiredMarginCall?: number;
 }
 
-const AVATAR_GRADIENTS = [
-  "bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600",
-  "bg-gradient-to-br from-sky-500 via-blue-500 to-indigo-600",
-  "bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600",
-  "bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600",
-  "bg-gradient-to-br from-amber-500 via-orange-500 to-red-500",
-  "bg-gradient-to-br from-fuchsia-500 via-purple-500 to-violet-600",
-  "bg-gradient-to-br from-lime-500 via-green-500 to-emerald-600",
-  "bg-gradient-to-br from-orange-400 via-rose-500 to-red-600",
-];
-
-function pickGradientForName(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
-}
-
 interface ClientTableProps {
   clients: EnrichedClient[];
   batchInitialAmount: number;
@@ -78,6 +77,14 @@ interface ClientTableProps {
   viewerUser?: AppSessionUser | null;
   batchRequiredMarginCall?: number;
   onClientStatusChange?: (clientId: string, newStatus: ClientStatus) => void;
+  batch?: BatchLike;
+  onBatchMutated?: (payload: {
+    type: "client_single_margin";
+    clientId: string;
+    amount: number;
+    totalAddedCumulative: number;
+  }) => void;
+  onClientInvestmentRefresh?: () => void;
 }
 
 export function ClientTable({
@@ -87,6 +94,8 @@ export function ClientTable({
   viewerUser,
   batchRequiredMarginCall = 0,
   onClientStatusChange,
+  batch,
+  onBatchMutated,
 }: ClientTableProps) {
   const totalInvestment = clients
     .filter((c) => !(c as any).__redacted)
@@ -94,7 +103,7 @@ export function ClientTable({
 
   const isBd = viewerRole === APP_ROLES.BD_MANAGER;
   const bdFullName = viewerUser?.bdManagerFullName;
-  const institutionRole = !isBd;
+  const institutionRole = viewerRole === APP_ROLES.RISK_MANAGER || viewerRole === APP_ROLES.ADMIN;
   const nonRedactedClients = clients.filter(c => !(c as any).__redacted);
   const shouldMergeProfitCols = nonRedactedClients.every(c => {
     const rt = c.realtimePnL ?? 0;
@@ -143,13 +152,60 @@ export function ClientTable({
     }
   };
 
+  const [marginDialogOpen, setMarginDialogOpen] = useState(false);
+  const [marginDialogClientId, setMarginDialogClientId] = useState<string | null>(null);
+  const [marginInputValue, setMarginInputValue] = useState<string>("");
+  const [marginDialogTick, setMarginDialogTick] = useState(0);
+  const [renderTick, setRenderTick] = useState(0);
+  const effectiveLockedRequired = batch ? getLockedBatchRequiredMargin(batch) : batchRequiredMarginCall;
 
+  const batchSummary = useMemo(() => {
+    if (!batch) return null;
+    const s = summarizeBatchMarginFromClients(batch);
+    return s;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch, marginDialogTick, clients, renderTick]);
 
-  const showMarginCallCol = batchRequiredMarginCall > 0;
+  const perClientStateMap: Map<string, ClientMarginState> = useMemo(() => {
+    const fallbackMap = new Map<string, ClientMarginState>();
+    if (batch) {
+      const lockedFromRef = effectiveLockedRequired;
+      const sm = batchSummary?.perClient;
+      if (sm) {
+        return sm;
+      }
+      const lockedRequired = lockedFromRef > 0 ? lockedFromRef : getLockedBatchRequiredMargin(batch);
+      const effectiveBatchRequired = lockedRequired > 0 ? lockedRequired : batchRequiredMarginCall;
+      const alloc = allocateClientMarginRequirements(batch, effectiveBatchRequired, batch.cumulativeMarginCalls ?? 0);
+      return alloc;
+    }
+    const effectiveInitial = Math.max(batchInitialAmount || 0, totalInvestment);
+    for (const c of clients) {
+      const inv = c.investmentAmount ?? 0;
+      const ratio = effectiveInitial > 0 ? inv / effectiveInitial : 0;
+      const required = batchRequiredMarginCall * ratio;
+      const existing: ClientMarginState | undefined = (c as any).marginState;
+      fallbackMap.set(c.id, {
+        initialInvestment: inv,
+        required,
+        fulfilled: existing?.fulfilled ?? 0,
+        history: existing?.history ?? [],
+      });
+    }
+    return fallbackMap;
+  }, [batch, batchRequiredMarginCall, batchInitialAmount, totalInvestment, clients, batchSummary, renderTick, effectiveLockedRequired]);
+
+  const marginDialogClient: EnrichedClient | null = useMemo(() => {
+    if (!marginDialogClientId) return null;
+    return clients.find((c) => c.id === marginDialogClientId) ?? null;
+  }, [clients, marginDialogClientId, marginDialogTick, renderTick]);
+
+  const showMarginCallCol = (batchSummary ? batchSummary.totalRequired > 0 : batchRequiredMarginCall > 0);
   const anyRescueAllocation = clients.some(
     (c) => typeof (c as any).rescueAllocation === "number" && (c as any).rescueAllocation > 0.01
   );
   const showRescueCol = showMarginCallCol || anyRescueAllocation;
+  const clientTotalMarginPending = batchSummary?.totalPending ?? Math.max(0, batchRequiredMarginCall);
 
   const sortedClients = useMemo(() => {
     const statusRank = (c: EnrichedClient): number => {
@@ -194,7 +250,7 @@ export function ClientTable({
             <TableHead className="w-[180px]">客户信息</TableHead>
             <TableHead>
               <div className="flex items-center">
-                BD 经理
+                商务经理
               </div>
             </TableHead>
             <TableHead className="text-right">投资金额</TableHead>
@@ -263,8 +319,10 @@ export function ClientTable({
             const statusConfig = getStatusConfig(client.status as ClientStatus);
             const StatusIcon = statusConfig.Icon;
             const realtimePnL = client.realtimePnL || 0;
-            const estExit = client.estimatedExitAmount || client.investmentAmount;
-            const split = calculateProfitSplitRatio(client.investmentAmount || 0);
+            const estExit = client.estimatedExitAmount ?? client.investmentAmount;
+            const isSettled = client.status === ClientStatus.SETTLED;
+            const unverifiedSettlement = isSettled && !(client as any).settlement;
+            const split = getClientProfitSplit(client);
             const actualPnL = client.actualClientPnL ?? 0;
             const actualPnLPct = client.actualClientPnLPercent ?? 0;
             const clientRatio = totalInvestment > 0
@@ -272,6 +330,15 @@ export function ClientTable({
               : 0;
             const canEdit = canEditClient(client);
             const canDelete = canDeleteClient(client);
+            const ms = perClientStateMap.get(client.id);
+            const clientRequired = ms?.required ?? 0;
+            const clientFulfilled = ms?.fulfilled ?? 0;
+            const clientPending = Math.max(0, clientRequired - clientFulfilled);
+            const historyCount = ms?.history?.length ?? 0;
+            const clientMarginProgressPct = clientRequired > 0 ? Math.min(100, (clientFulfilled / clientRequired) * 100) : 0;
+            const clientMarginPctOfTotal = (batchSummary?.totalRequired ?? 0) > 0
+              ? (clientRequired / (batchSummary?.totalRequired ?? 1)) * 100
+              : clientRatio;
 
             return (
               <TableRow
@@ -297,24 +364,17 @@ export function ClientTable({
                           {client.name}
                         </p>
                         <p className="text-[10px] text-muted-foreground/80 font-mono">
-                          其他 BD 客户 · 已脱敏
+                          其他商务经理 客户 · 已脱敏
                         </p>
                       </div>
                     </div>
                   ) : (
                     <div className="flex items-center gap-3">
-                      <div className={cn(
-                        "h-9 w-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm",
-                        pickGradientForName(client.name)
-                      )}>
-                        <span className="text-xs font-bold text-white">
-                          {client.name.charAt(0)}
-                        </span>
-                      </div>
+                      <ClientAvatar name={client.name} size="md" rounded="xl" />
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="font-semibold text-sm truncate">{client.name}</p>
-                          {split.client >= 0.4 && (
+                          {isVipClient(client) && (
                             <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">
                               VIP
                             </Badge>
@@ -338,10 +398,11 @@ export function ClientTable({
                   ) : (
                     <Link
                       href={`/bd/${encodeURIComponent(client.bdManager)}`}
-                      className="text-sm truncate text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
+                      className="inline-flex items-center gap-2 text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
                       title={`查看 ${client.bdManager} 的所有客户`}
                     >
-                      {client.bdManager}
+                      <ClientAvatar name={client.bdManager} size="xs" />
+                      <span>{client.bdManager}</span>
                     </Link>
                   )}
                 </TableCell>
@@ -364,10 +425,10 @@ export function ClientTable({
                       <TooltipTrigger asChild>
                         <div className="cursor-help">
                           <p className="text-xs font-mono font-semibold">
-                            客户 {Math.round(split.client * 100)}%
+                            客户 {Number((split.client * 100).toFixed(2))}%
                           </p>
                           <p className="text-[10px] text-muted-foreground">
-                            / 机构 {Math.round(split.institution * 100)}%
+                            / 机构 {Number((split.institution * 100).toFixed(2))}%
                           </p>
                         </div>
                       </TooltipTrigger>
@@ -378,9 +439,8 @@ export function ClientTable({
                             投资金额 ${client.investmentAmount?.toLocaleString?.()}
                           </p>
                           <p className="text-muted-foreground">
-                            {client.investmentAmount >= 100000
-                              ? "≥ $100,000 档：客户 40% / 机构 60%"
-                              : "< $100,000 档：客户 30% / 机构 70%"}
+                            签约比例：客户 {Number((split.client * 100).toFixed(2))}% /
+                            机构 {Number((split.institution * 100).toFixed(2))}%
                           </p>
                           <p className="pt-1 text-[10px] text-primary">
                             * 客户亏损全额由机构劣后资金承担
@@ -410,7 +470,7 @@ export function ClientTable({
                             </span>
                           ) : (
                             <span className="flex items-center gap-0.5 justify-end text-primary/80">
-                              <ShieldCheck className="h-3 w-3" /> 保本中
+                              <ShieldCheck className="h-3 w-3" /> {unverifiedSettlement ? "待核对" : isSettled ? "已结算" : "保本中"}
                             </span>
                           )}
                         </p>
@@ -420,6 +480,7 @@ export function ClientTable({
                           </p>
                         ) : (
                           (() => {
+                            if (isSettled) return null;
                             const mv = (client.marketValueShare ?? 0);
                             const inv = client.investmentAmount || 0;
                             const progress = inv > 0
@@ -494,6 +555,7 @@ export function ClientTable({
                             </p>
                           ) : (
                             (() => {
+                              if (isSettled) return null;
                               const mv = (client.marketValueShare ?? 0);
                               const inv = client.investmentAmount || 0;
                               const progress = inv > 0
@@ -556,6 +618,7 @@ export function ClientTable({
                             </p>
                           ) : (
                             (() => {
+                              if (isSettled) return null;
                               const mv = (client.marketValueShare ?? 0);
                               const inv = client.investmentAmount || 0;
                               const progress = inv > 0
@@ -598,51 +661,128 @@ export function ClientTable({
                     ) : (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <div className="cursor-help w-[120px] ml-auto">
-                            <p className={cn(
-                              "font-mono font-bold text-sm",
-                              ((client as any).rescueAllocation ?? 0) > 0
-                                ? "text-warning"
-                                : (client.requiredMarginCall ?? 0) > 0
-                                ? "text-danger"
-                                : "text-muted-foreground"
-                            )}>
-                              {((client as any).rescueAllocation ?? 0) > 0 ? (
-                                <span className="flex items-center gap-0.5 justify-end">
-                                  <Archive className="h-3 w-3" />
-                                  {formatCurrency((client as any).rescueAllocation ?? 0)}
-                                </span>
-                              ) : (client.requiredMarginCall ?? 0) > 0 ? (
-                                <span className="flex items-center gap-0.5 justify-end">
-                                  <AlertCircle className="h-3 w-3" />
-                                  {formatCurrency(client.requiredMarginCall ?? 0)}
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground/60">—</span>
-                              )}
-                            </p>
-                            <p className="text-[10px] font-mono mt-0.5 text-right text-warning/80">
-                              占 {clientRatio.toFixed(1)}%
-                            </p>
+                          <div className="cursor-help w-[170px] ml-auto">
+                            <div className="flex items-center justify-end gap-2">
+                              <p className={cn(
+                                "font-mono font-bold text-sm",
+                                clientRequired > 0
+                                  ? clientPending > 0.01
+                                    ? "text-danger"
+                                    : clientFulfilled > 0
+                                      ? "text-success"
+                                      : "text-muted-foreground"
+                                  : ((client as any).rescueAllocation ?? 0) > 0
+                                    ? "text-warning"
+                                    : "text-muted-foreground"
+                              )}>
+                                {clientRequired > 0 ? (
+                                  <span className="flex items-center gap-0.5 justify-end">
+                                    {clientPending > 0.01 ? (
+                                      <>
+                                        <AlertCircle className="h-3 w-3" />
+                                        {formatCurrency(clientPending)}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle className="h-3 w-3" />
+                                        {formatCurrency(clientFulfilled)}
+                                      </>
+                                    )}
+                                  </span>
+                                ) : ((client as any).rescueAllocation ?? 0) > 0 ? (
+                                  <span className="flex items-center gap-0.5 justify-end">
+                                    <Archive className="h-3 w-3" />
+                                    {formatCurrency((client as any).rescueAllocation ?? 0)}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground/60">—</span>
+                                )}
+                              </p>
+                            </div>
+                            {clientRequired > 0 && (
+                              <>
+                                <div className="flex items-center justify-between text-[9px] font-mono mt-1">
+                                  <span className="text-muted-foreground">
+                                    {clientFulfilled > 0 ? `到账 ${clientMarginProgressPct.toFixed(0)}%${historyCount > 0 ? ` · ${historyCount}次` : ""}` : `待补${clientMarginPctOfTotal.toFixed(1)}%批次总`}
+                                  </span>
+                                  <span className={cn(clientFulfilled > 0 ? "text-success" : "text-warning")}>
+                                    上限 {formatCurrency(clientRequired)}
+                                  </span>
+                                </div>
+                                <div className="h-1.5 w-full rounded-full bg-secondary/60 mt-1 overflow-hidden">
+                                  <div
+                                    className={cn(
+                                      "h-full transition-all duration-500",
+                                      clientMarginProgressPct >= 99.99
+                                        ? "bg-gradient-to-r from-success to-success/70"
+                                        : clientFulfilled > 0
+                                        ? "bg-gradient-to-r from-primary to-success/80"
+                                        : "bg-gradient-to-r from-danger/80 to-danger/50"
+                                    )}
+                                    style={{ width: `${clientMarginProgressPct}%` }}
+                                  />
+                                </div>
+                              </>
+                            )}
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top" align="end">
-                          <div className="text-xs w-[240px] space-y-1">
-                            {((client as any).rescueAllocation ?? 0) > 0 ? (
+                        <TooltipContent side="top" align="end" className="w-[300px]">
+                          <div className="text-xs space-y-1.5">
+                            {clientRequired > 0 ? (
                               <>
-                                <p className="font-semibold text-warning">机构补仓救援（名义分摊）</p>
-                                <p className="text-muted-foreground">
-                                  机构已出资救援补仓，本客户按出资比例名义分摊对应救援金 {formatCurrency((client as any).rescueAllocation ?? 0)}
-                                </p>
-                                <p className="pt-1 text-[10px] text-primary">
-                                  * 救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底
-                                </p>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground">个体需补仓</span>
+                                  <span className="font-mono font-semibold text-danger">{formatCurrency(clientRequired)}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-muted-foreground">单独已补仓</span>
+                                  <span className="font-mono font-semibold text-success">{formatCurrency(clientFulfilled)}{historyCount > 0 ? ` · ${historyCount}次` : ""}</span>
+                                </div>
+                                <div className="flex items-center justify-between border-t border-border/50 pt-1">
+                                  <span className="font-semibold">当前缺口</span>
+                                  <span className="font-mono font-bold text-danger">{formatCurrency(clientPending)}</span>
+                                </div>
+                                {((client as any).rescueAllocation ?? 0) > 0.01 && (
+                                  <div className="mt-1.5 pt-1.5 border-t border-border/50 space-y-1">
+                                    <p className="font-semibold text-warning flex items-center gap-1">
+                                      <Archive className="h-3 w-3" />机构补仓救援（名义分摊）
+                                    </p>
+                                    <p className="text-muted-foreground text-[11px]">
+                                      机构已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底。
+                                    </p>
+                                  </div>
+                                )}
+                                {ms?.history && ms.history.length > 0 && (
+                                  <div className="mt-1.5 pt-1.5 border-t border-border/50 space-y-1 max-h-[84px] overflow-y-auto">
+                                    <p className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1">
+                                      <History className="h-3 w-3" /> 单独补仓历史
+                                    </p>
+                                    {[...ms.history].reverse().slice(0, 5).map((h) => (
+                                      <div key={h.id} className="flex items-center justify-between text-[10.5px]">
+                                        <span className={cn(
+                                          "font-mono",
+                                          h.source === "batch_one_click" ? "text-primary" : "text-success"
+                                        )}>
+                                          {h.source === "batch_one_click" ? "批次分配" : "单独补仓"}
+                                        </span>
+                                        <span className="flex items-center gap-1.5 font-mono font-semibold">
+                                          {formatCurrency(h.amount)}
+                                          <span className="text-muted-foreground">
+                                            {new Date(h.fulfilledAt).toLocaleDateString("zh-CN")}
+                                          </span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </>
-                            ) : (client.requiredMarginCall ?? 0) > 0 ? (
+                            ) : ((client as any).rescueAllocation ?? 0) > 0 ? (
                               <>
-                                <p className="font-semibold text-danger">需机构补仓（待处理）</p>
-                                <p className="text-muted-foreground">
-                                  当前批次需补仓 {formatCurrency(client.requiredMarginCall ?? 0)}，该客户按出资比例占 {clientRatio.toFixed(1)}%
+                                <p className="font-semibold text-warning flex items-center gap-1">
+                                  <Archive className="h-3 w-3" />机构补仓救援（名义分摊）
+                                </p>
+                                <p className="text-muted-foreground text-[11px]">
+                                  机构已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底。
                                 </p>
                               </>
                             ) : null}
@@ -658,10 +798,10 @@ export function ClientTable({
                   ) : (
                     <div>
                       <p className="font-mono font-bold text-sm text-gradient-primary">
-                        {formatCurrency((client.investmentAmount || 0) + actualPnL)}
+                        {unverifiedSettlement ? "待核对" : formatCurrency(estExit)}
                       </p>
                       <p className="text-[10px] text-muted-foreground mt-0.5">
-                        本金 + 真实盈利
+                        {unverifiedSettlement ? "缺少历史结算快照" : isSettled ? "已冻结结算金额" : "本金 + 真实盈利"}
                       </p>
                     </div>
                   )}
@@ -692,6 +832,29 @@ export function ClientTable({
                 <TableCell className="text-center">
                   {!isRedacted && (
                     <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      {!isSettled && showRescueCol && clientRequired > 0 && clientPending > 0.01 && institutionRole && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="warning"
+                              size="sm"
+                              className="h-7 gap-1.5 px-2.5 text-[11px]"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMarginDialogClientId(client.id);
+                                setMarginInputValue(clientPending.toFixed(2));
+                                setMarginDialogOpen(true);
+                              }}
+                            >
+                              <Zap className="h-3.5 w-3.5" />
+                              单独补仓
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-[11px]">仅为该客户单独补仓 {formatCurrency(clientPending)}，其他客户保持缺口不变</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       {client.status === ClientStatus.ACTIVE && institutionRole && (
                         <>
                           <Tooltip>
@@ -843,8 +1006,148 @@ export function ClientTable({
             <TrendingUp className="h-3 w-3 text-success" />
             盈利按比例分成
           </span>
+          {(batchSummary || clientTotalMarginPending > 0) && (
+            <span className="flex items-center gap-1 pl-3 border-l border-border/60 ml-2">
+              <Zap className="h-3 w-3 text-warning" />
+              批次补仓缺口:{" "}
+              <span className="font-mono font-semibold text-danger">
+                {formatCurrency(clientTotalMarginPending)}
+              </span>
+              <span className="text-muted-foreground/70">
+                / 总需 {formatCurrency(batchSummary?.totalRequired ?? batchRequiredMarginCall)}
+              </span>
+              {batchSummary && batchSummary.clientCountWithSingleTopup > 0 && (
+                <span className="text-success/80">
+                  · 已单独补仓 {batchSummary.clientCountWithSingleTopup} 位
+                </span>
+              )}
+            </span>
+          )}
         </div>
       </div>
+      {marginDialogClient && perClientStateMap.has(marginDialogClient.id) && (
+        <ConfirmDialog
+          open={marginDialogOpen}
+          onOpenChange={(v) => {
+            setMarginDialogOpen(v);
+            if (!v) {
+              // 延迟清空避免关闭动画最后一帧闪烁
+              setTimeout(() => {
+                setMarginDialogClientId(null);
+                setMarginInputValue("");
+              }, 150);
+            }
+          }}
+          tone="warning"
+          title={`为 ${marginDialogClient.name ?? "该客户"} 单独补仓`}
+          description="机构为该客户对应缺口单独出资，其他客户需补额不变，批次剩余缺口同步扣减。补仓本金及收益全部归机构，与客户原始本金分开记录。"
+          summary={
+            (() => {
+              const mm = perClientStateMap.get(marginDialogClient.id);
+              const req = mm?.required ?? 0;
+              const ful = mm?.fulfilled ?? 0;
+              const pending = Math.max(0, req - ful);
+              const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
+              const safeAmount = Number.isFinite(parsed) && parsed > 0 ? parsed : pending;
+              const applyAmount = Math.min(pending, Math.max(0, safeAmount));
+              return [
+                { label: "客户投资本金", value: formatCurrency(mm?.initialInvestment ?? marginDialogClient.investmentAmount ?? 0), accent: "muted" as const },
+                { label: "个体需补仓", value: formatCurrency(req), accent: "danger" as const },
+                { label: "单独已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
+                { label: "本次单独补仓", value: formatCurrency(applyAmount), accent: "warning" as const },
+                { label: "补仓后剩余缺口", value: formatCurrency(Math.max(0, pending - applyAmount)), accent: applyAmount >= pending ? "success" : "danger" as const },
+                { label: "归属 商务经理", value: marginDialogClient.bdManager ?? "—", accent: "primary" as const },
+              ];
+            })()
+          }
+          footerExtra={
+            <div className="flex items-center gap-2 w-full">
+              <div className="relative flex-1">
+                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  className="h-10 pl-8 pr-3 font-mono font-semibold tabular-nums text-[13px]"
+                  value={marginInputValue}
+                  onChange={(e) => {
+                    const raw = e.target.value.replace(/[^0-9.]/g, "");
+                    const parts = raw.split(".");
+                    if (parts.length > 2) return;
+                    if (parts[1] && parts[1].length > 2) return;
+                    setMarginInputValue(raw);
+                  }}
+                  onBlur={() => {
+                    const mm = perClientStateMap.get(marginDialogClient.id);
+                    const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
+                    const parsed = Number(marginInputValue);
+                    if (!Number.isFinite(parsed) || parsed <= 0) {
+                      setMarginInputValue(pending.toFixed(2));
+                      return;
+                    }
+                    const clamped = Math.min(pending, parsed);
+                    setMarginInputValue(clamped.toFixed(2));
+                  }}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-10 shrink-0 text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  const mm = perClientStateMap.get(marginDialogClient.id);
+                  const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
+                  setMarginInputValue(pending.toFixed(2));
+                }}
+              >
+                剩余全额
+              </Button>
+            </div>
+          }
+          confirmText={(() => {
+            const mm = perClientStateMap.get(marginDialogClient.id);
+            const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
+            const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
+            const amount = Number.isFinite(parsed) && parsed > 0 ? Math.min(pending, parsed) : 0;
+            return amount > 0 ? `单独补仓 ${formatCurrency(amount)}` : "确认单独补仓";
+          })()}
+          cancelText="取消"
+          onConfirm={async () => {
+            const c = clients.find((x) => x.id === marginDialogClient.id);
+            if (!c) return;
+            const mm = perClientStateMap.get(c.id);
+            const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
+            const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
+            const amount = Math.min(pending, Math.max(0, Number.isFinite(parsed) && parsed > 0 ? parsed : pending));
+            if (!batch || !Number.isFinite(parsed) || parsed <= 0 || amount < 0.01) {
+              throw new Error("请输入有效补仓金额。");
+            }
+            const applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
+              amount, clientId: c.id, expectedRoundId: mm?.roundId,
+              operatorName: viewerUser?.displayName ?? viewerUser?.email,
+            }));
+            if (applied <= 0) throw new Error("本轮缺口已更新，请刷新后重新确认。");
+            onBatchMutated?.({
+              type: "client_single_margin",
+              clientId: c.id,
+              amount: applied,
+              totalAddedCumulative: applied,
+            });
+            setMarginDialogTick((t) => t + 1);
+            setRenderTick((t) => t + 1);
+            window.dispatchEvent(
+              new CustomEvent("risk-control:client-single-margin", {
+                detail: { batchId: batch.id, clientId: c.id, amount: applied },
+              })
+            );
+            setMarginDialogOpen(false);
+            setTimeout(() => {
+              setMarginDialogClientId(null);
+              setMarginInputValue("");
+            }, 120);
+          }}
+        />
+      )}
     </div>
   );
 }

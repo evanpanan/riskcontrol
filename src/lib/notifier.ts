@@ -6,6 +6,9 @@ import {
 } from "./riskRecipients";
 
 const SETTINGS_LS_KEY = "risk_control_settings";
+let notificationSendToken = "";
+export function setNotificationSendToken(value: string) { notificationSendToken = value.trim(); }
+export function hasNotificationSendToken() { return !!notificationSendToken; }
 
 export interface RuntimeNotificationConfig {
   emailWebhook?: string;
@@ -22,10 +25,10 @@ export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as any;
     return {
-      emailWebhook: typeof parsed?.emailWebhook === "string" ? parsed.emailWebhook : undefined,
+      emailWebhook: typeof parsed?.emailWebhook === "string" && !/example\.com/.test(parsed.emailWebhook) ? parsed.emailWebhook : undefined,
       whatsappWebhook: typeof parsed.whatsappWebhook === "string" ? parsed.whatsappWebhook : undefined,
-      defaultRiskEmail: typeof parsed.defaultRiskEmail === "string" ? parsed.defaultRiskEmail : undefined,
-      emergencyPhone: typeof parsed.emergencyPhone === "string" ? parsed.emergencyPhone : undefined,
+      defaultRiskEmail: typeof parsed.defaultRiskEmail === "string" && parsed.defaultRiskEmail !== "risk-control@institution.com" ? parsed.defaultRiskEmail : undefined,
+      emergencyPhone: typeof parsed.emergencyPhone === "string" && parsed.emergencyPhone !== "+852-9123-4567" ? parsed.emergencyPhone : undefined,
     };
   } catch {
     return empty;
@@ -58,6 +61,7 @@ export interface NotificationResult {
     whatsapp: { success: boolean; sentTo: string[]; error?: string };
     internal: { success: boolean; error?: string };
   };
+  logError?: string;
 }
 
 export const LAST_NOTIFICATIONS_KEY = "risk_control_last_notifications";
@@ -82,7 +86,7 @@ function pushLog(entry: NotificationLogEntry) {
   if (typeof window === "undefined") return;
   const existing = getLog();
   existing.unshift(entry);
-  localStorage.setItem(
+    localStorage.setItem(
     LAST_NOTIFICATIONS_KEY,
     JSON.stringify(existing.slice(0, 200))
   );
@@ -99,13 +103,12 @@ export function buildMarginCallNotification(
 ): NotificationPayload {
   const roles: ("RISK_MANAGER" | "BD_MANAGER" | "OPERATIONS")[] = [
     "RISK_MANAGER",
-    "BD_MANAGER",
     "OPERATIONS",
   ];
   const bdEmails = bdManagers?.length
     ? getRiskRecipients()
         .filter(
-          (r) => r.role === "BD_MANAGER" && bdManagers.includes(r.name)
+          (r) => r.enabled && r.role === "BD_MANAGER" && bdManagers.includes(r.name.replace(/^(?:BD经理|商务经理)\s*-\s*/, ""))
         )
         .map((r) => r.email)
     : [];
@@ -113,7 +116,7 @@ export function buildMarginCallNotification(
     ? getRiskRecipients()
         .filter(
           (r) =>
-            r.role === "BD_MANAGER" && r.whatsapp && bdManagers.includes(r.name)
+            r.enabled && r.role === "BD_MANAGER" && r.whatsapp && bdManagers.includes(r.name.replace(/^(?:BD经理|商务经理)\s*-\s*/, ""))
         )
         .map((r) => r.whatsapp as string)
     : [];
@@ -125,8 +128,8 @@ export function buildMarginCallNotification(
     message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前市值跌幅达到 ${(
       marginCall.dropPercent * 100
     ).toFixed(2)}%，已触发 20% 补仓预警线。请立即处理补仓事宜。需补仓金额：${(
-      marginCall.requiredAmount / 1000000
-    ).toFixed(2)}M USD（$${marginCall.requiredAmount.toLocaleString()}）。`,
+      Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)) / 1000000
+    ).toFixed(2)}M USD（$${Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)).toLocaleString()}）。`,
     batchId: batch.id,
     batchNumber: batch.batchNumber,
     stockSymbol: batch.stockSymbol,
@@ -196,7 +199,7 @@ export function buildClientAddedNotification(
 ): NotificationPayload {
   const bdNames = [client.bdManager];
   const bdEmails = getRiskRecipients()
-    .filter((r) => r.role === "BD_MANAGER" && bdNames.includes(r.name))
+    .filter((r) => r.enabled && r.role === "BD_MANAGER" && bdNames.includes(r.name.replace(/^(?:BD经理|商务经理)\s*-\s*/, "")))
     .map((r) => r.email);
 
   return {
@@ -205,7 +208,7 @@ export function buildClientAddedNotification(
     title: `【新客户录入】批次 ${batch.batchNumber} 新增客户 ${client.name}`,
     message: `客户 ${client.name} 已成功录入批次 ${batch.batchNumber}（${
       batch.stockSymbol
-    }），投资金额：$${client.investmentAmount.toLocaleString()}，负责 BD：${
+    }），投资金额：$${client.investmentAmount.toLocaleString()}，负责商务经理：${
       client.bdManager
     }。`,
     batchId: batch.id,
@@ -244,118 +247,41 @@ export async function sendNotification(
     },
   };
 
-  if (payload.recipients.emails.length) {
+  for (const channel of ["email", "whatsapp"] as const) {
+    const targets = channel === "email" ? payload.recipients.emails : payload.recipients.whatsapps;
+    result.channels[channel] = { success: false, sentTo: [] };
+    if (!targets.length) continue;
     try {
       const resp = await fetch("/api/notify/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${notificationSendToken}` },
         body: JSON.stringify({
-          channel: "email",
+          channel,
           payload,
-          webhookOverride: config.emailWebhook,
+          webhookOverride: channel === "email" ? config.emailWebhook : config.whatsappWebhook,
         }),
       });
       const data = (await resp.json().catch(() => null)) as any;
-      if (!resp.ok) {
-        throw new Error(data?.error || `HTTP ${resp.status}`);
-      }
-      result.channels.email = {
-        success: true,
-        sentTo: data?.sentTo || payload.recipients.emails,
-        error: data?.error || undefined,
+      const sentTo = Array.isArray(data?.sentTo) ? data.sentTo : [];
+      const success = resp.ok && data?.success === true && sentTo.length === new Set(targets).size;
+      result.channels[channel] = {
+        success, sentTo,
+        error: success ? undefined : data?.error || `发送未获确认（HTTP ${resp.status}），请先核查服务商记录。`,
       };
-    } catch (error) {
-      // 后端不可用时，降级直接请求 webhook
-      try {
-        const hook = config.emailWebhook || process.env.EMAIL_WEBHOOK_URL;
-        if (hook) {
-          await fetch(hook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              to: payload.recipients.emails,
-              subject: payload.title,
-              body: payload.message,
-              severity: payload.severity,
-              details: payload.details,
-            }),
-          });
-        } else {
-          throw new Error(error instanceof Error ? error.message : "未配置 Email Webhook");
-        }
-      } catch (fallbackErr) {
-        result.channels.email = {
-          success: false,
-          sentTo: [],
-          error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown error",
-        };
-        result.success = false;
-      }
+      if (!success) result.success = false;
+    } catch {
+      result.channels[channel] = { success: false, sentTo: [],
+        error: "连接中断，是否已受理未知；请先核查服务商记录，勿直接重复发送。" };
+      result.success = false;
     }
   }
-
-  if (payload.recipients.whatsapps.length) {
-    try {
-      const resp = await fetch("/api/notify/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          channel: "whatsapp",
-          payload,
-          webhookOverride: config.whatsappWebhook,
-        }),
-      });
-      const data = (await resp.json().catch(() => null)) as any;
-      if (!resp.ok) {
-        throw new Error(data?.error || `HTTP ${resp.status}`);
-      }
-      result.channels.whatsapp = {
-        success: true,
-        sentTo: data?.sentTo || payload.recipients.whatsapps,
-        error: data?.error || undefined,
-      };
-    } catch (error) {
-      try {
-        const hook = config.whatsappWebhook || process.env.WHATSAPP_WEBHOOK_URL;
-        if (hook) {
-          await fetch(hook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              to: payload.recipients.whatsapps,
-              message: `*${payload.title}*\n\n${payload.message}`,
-              severity: payload.severity,
-            }),
-          });
-        } else {
-          throw new Error(error instanceof Error ? error.message : "未配置 WhatsApp Webhook");
-        }
-      } catch (fallbackErr) {
-        result.channels.whatsapp = {
-          success: false,
-          sentTo: [],
-          error: fallbackErr instanceof Error ? fallbackErr.message : "Unknown error",
-        };
-        result.success = false;
-      }
-    }
+  if (!payload.recipients.emails.length && !payload.recipients.whatsapps.length) result.success = false;
+  try {
+    pushLog({ id: `n_${crypto.randomUUID()}`, payload, result });
+    window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
+  } catch {
+    result.logError = "通知结果未能保存到本地，请核查服务商记录；不要因此重新发送。";
   }
-
-  if (typeof window !== "undefined") {
-    console.groupCollapsed(
-      `%c[NOTIFICATION ${payload.severity}] ${payload.title}`,
-      "color: #fff; background: #000; padding: 2px 6px; border-radius: 4px;"
-    );
-    console.log("Payload:", payload);
-    console.log("Result:", result);
-    console.groupEnd();
-  }
-
-  pushLog({
-    id: `n_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    payload,
-    result,
-  });
 
   return result;
 }
@@ -385,22 +311,28 @@ export async function sendTestNotification(
 export async function triggerMarginCallAlert(
   batch: Batch,
   marginCall: MarginCall,
-  bdManagers?: string[]
+  bdManagers?: string[],
+  channel?: "email" | "whatsapp"
 ): Promise<NotificationResult> {
   const notification = buildMarginCallNotification(batch, marginCall, bdManagers);
+  if (channel === "email") notification.recipients.whatsapps = [];
+  if (channel === "whatsapp") notification.recipients.emails = [];
   return sendNotification(notification);
 }
 
 export async function triggerWarningAlert(
   batch: Batch,
   dropPercent: number,
-  safetyBufferPercent: number
+  safetyBufferPercent: number,
+  channel?: "email" | "whatsapp"
 ): Promise<NotificationResult> {
   const notification = buildWarningNotification(
     batch,
     dropPercent,
     safetyBufferPercent
   );
+  if (channel === "email") notification.recipients.whatsapps = [];
+  if (channel === "whatsapp") notification.recipients.emails = [];
   return sendNotification(notification);
 }
 
@@ -410,4 +342,35 @@ export async function triggerClientAddedAlert(
 ): Promise<NotificationResult> {
   const notification = buildClientAddedNotification(batch, client);
   return sendNotification(notification);
+}
+
+const pendingBatchNotifications = new Set<string>();
+export async function notifyBatchChannel(
+  batch: Batch & { clients?: Client[]; marginCalls?: MarginCall[] },
+  channel: "email" | "whatsapp"
+): Promise<string> {
+  const key = `${batch.id}:${channel}`;
+  if (pendingBatchNotifications.has(key)) throw new Error("该通知正在发送，请勿重复点击。");
+  pendingBatchNotifications.add(key);
+  try {
+    const bds = [...new Set((batch.clients ?? []).map((c) => c.bdManager))];
+    const current = batch.marginCalls?.find((m) => m.status === "PENDING");
+    const payload = current ? buildMarginCallNotification(batch, current, bds)
+      : buildWarningNotification(batch, Math.max(0, (1 - (batch.currentMarketValue ?? 0) / batch.initialTotalAmount) * 100), 0);
+    const config = getRuntimeNotificationConfig();
+    if (channel === "email") {
+      payload.recipients.whatsapps = [];
+      if (!payload.recipients.emails.length && config.defaultRiskEmail) payload.recipients.emails = [config.defaultRiskEmail];
+    } else {
+      payload.recipients.emails = [];
+      if (!payload.recipients.whatsapps.length && config.emergencyPhone) payload.recipients.whatsapps = [config.emergencyPhone];
+    }
+    const targets = channel === "email" ? payload.recipients.emails : payload.recipients.whatsapps;
+    if (!targets.length) throw new Error("请先到系统设置填写并启用真实收件人。");
+    const result = await sendNotification(payload);
+    if (!result.channels[channel].success) throw new Error(result.channels[channel].error || "通知发送失败。");
+    return `服务商已受理 ${result.channels[channel].sentTo.length} 位收件人，请核对实际收件。${result.logError ?? ""}`;
+  } finally {
+    pendingBatchNotifications.delete(key);
+  }
 }

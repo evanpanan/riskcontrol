@@ -34,20 +34,22 @@ interface LogoProps {
 
 export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     setDataUrl(getStoredLogo());
-    const onChange = () => setDataUrl(getStoredLogo());
+    const onChange = () => { setFailed(false); setDataUrl(getStoredLogo()); };
     window.addEventListener("risk-control:logo-changed", onChange);
-    window.addEventListener("storage", (e) => {
+    const onStorage = (e: StorageEvent) => {
       if (e.key === LOGO_LS_KEY) onChange();
-    });
+    };
+    window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("risk-control:logo-changed", onChange);
-      window.removeEventListener("storage", onChange as any);
+      window.removeEventListener("storage", onStorage);
     };
   }, []);
 
-  if (dataUrl) {
+  if (dataUrl && !failed) {
     return (
       <div
         className={cn("relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl shadow-lg shadow-primary/30", className)}
@@ -59,6 +61,7 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
           alt="Logo"
           className="h-full w-full object-contain"
           draggable={false}
+          onError={() => setFailed(true)}
         />
       </div>
     );
@@ -67,7 +70,7 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
   return (
     <div
       className={cn(
-        "relative flex shrink-0 items-center justify-center rounded-xl shadow-lg shadow-primary/30 gradient-primary",
+        "relative flex shrink-0 items-center justify-center rounded-xl shadow-lg shadow-blue-600/30 bg-gradient-to-br from-blue-500 via-indigo-600 to-violet-600 ring-1 ring-white/20",
         className
       )}
       style={{ width: size, height: size }}
@@ -75,7 +78,9 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
       <svg
         viewBox="0 0 24 24"
         fill="none"
-        className={cn("text-primary-foreground", iconClassName)}
+        role="img"
+        aria-label="RiskControl 标志"
+        className={cn("text-white", iconClassName)}
         width={Math.round(size * 0.55)}
         height={Math.round(size * 0.55)}
       >

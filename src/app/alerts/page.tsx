@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getMockData } from "@/lib/mockData";
 import { formatCurrency, formatDateTime, cn } from "@/lib/utils";
-import { triggerMarginCallAlert } from "@/lib/notifier";
+import { notifyBatchChannel } from "@/lib/notifier";
+import { toast } from "sonner";
 import {
   AlertTriangle,
   AlertCircle,
@@ -233,11 +234,8 @@ export default function AlertsPage() {
                           className="gap-1.5 h-8 text-xs"
                           onClick={async () => {
                             const batch = getMockData().batches.find((b) => b.id === n.batchId);
-                            if (batch) {
-                              const mc = batch.marginCalls?.[0];
-                              if (mc) await triggerMarginCallAlert(batch as any, mc, batch.clients?.map(c => c.bdManager).filter(Boolean) as any);
-                            }
-                            console.log("[通知] 邮件通知风控及BD:", n);
+                            try { if (batch) toast.success(await notifyBatchChannel(batch as any, "email")); }
+                            catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
                           }}
                         >
                           <Mail className="h-3.5 w-3.5" />
@@ -247,7 +245,11 @@ export default function AlertsPage() {
                           size="sm"
                           variant="outline"
                           className="gap-1.5 h-8 text-xs"
-                          onClick={() => console.log("[通知] WhatsApp发送至相关人员:", n)}
+                          onClick={async () => {
+                            const batch = getMockData().batches.find((b) => b.id === n.batchId);
+                            try { if (batch) toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
+                            catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
+                          }}
                         >
                           <MessageCircle className="h-3.5 w-3.5" />
                           WhatsApp

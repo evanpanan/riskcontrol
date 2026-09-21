@@ -8,102 +8,34 @@ export interface RiskRecipient {
   whatsapp?: string;
   enabled: boolean;
 }
-
-export const DEFAULT_RISK_RECIPIENTS: RiskRecipient[] = [
-  {
-    id: "r1",
-    name: "风控总监 - Evan Pan",
-    role: "RISK_MANAGER",
-    email: "evan.pan@institution.com",
-    whatsapp: "+852-9123-4567",
-    enabled: true,
-  },
-  {
-    id: "r2",
-    name: "风控主管 - Michael Chen",
-    role: "RISK_MANAGER",
-    email: "michael.chen@institution.com",
-    whatsapp: "+852-6234-5678",
-    enabled: true,
-  },
-  {
-    id: "r3",
-    name: "风控分析师 - Sarah Wu",
-    role: "RISK_MANAGER",
-    email: "sarah.wu@institution.com",
-    enabled: true,
-  },
-  {
-    id: "r4",
-    name: "BD经理 - 李晓明 (Evan Li)",
-    role: "BD_MANAGER",
-    email: "evan.li@bd-team.com",
-    whatsapp: "+86-138-0000-0001",
-    enabled: true,
-  },
-  {
-    id: "r5",
-    name: "BD经理 - 王思远 (Sylvia Wang)",
-    role: "BD_MANAGER",
-    email: "sylvia.wang@bd-team.com",
-    whatsapp: "+86-139-0000-0002",
-    enabled: true,
-  },
-  {
-    id: "r6",
-    name: "BD经理 - 张志强 (Jack Zhang)",
-    role: "BD_MANAGER",
-    email: "jack.zhang@bd-team.com",
-    whatsapp: "+86-137-0000-0003",
-    enabled: true,
-  },
-  {
-    id: "r7",
-    name: "BD经理 - 刘佳 (Jennifer Liu)",
-    role: "BD_MANAGER",
-    email: "jennifer.liu@bd-team.com",
-    whatsapp: "+86-136-0000-0004",
-    enabled: true,
-  },
-  {
-    id: "r8",
-    name: "运营总监 - David Zhao",
-    role: "OPERATIONS",
-    email: "david.zhao@institution.com",
-    enabled: true,
-  },
-];
-
-let globalRecipients = [...DEFAULT_RISK_RECIPIENTS];
+export type RiskRole = RiskRecipient["role"];
+export const DEFAULT_RISK_RECIPIENTS: RiskRecipient[] = [];
+const KEY = "risk_control_recipients";
+let globalRecipients: RiskRecipient[] = [];
 
 export function getRiskRecipients(): RiskRecipient[] {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(KEY) || "[]");
+      if (Array.isArray(saved)) globalRecipients = saved.filter((r) =>
+        r && typeof r.name === "string" && typeof r.email === "string").map((r) => ({
+          ...r, name: r.name.replace(/BD\s*经理/g, "商务经理"),
+          // Retire bundled sample addresses, including copies persisted by old versions.
+          enabled: !!r.enabled && !/@(?:institution\.com|bd-team\.com|example\.com)$/i.test(r.email),
+        }));
+    } catch { return []; }
+  }
   return globalRecipients;
 }
-
 export function setRiskRecipients(recipients: RiskRecipient[]) {
+  if (typeof window !== "undefined") window.localStorage.setItem(KEY, JSON.stringify(recipients));
   globalRecipients = [...recipients];
 }
-
-export type RiskRole = RiskRecipient["role"];
-
-export function getEnabledRecipientEmails(
-  roles?: RiskRole[] | string[],
-  extraBDEmails?: string[]
-): string[] {
-  const emails = globalRecipients
-    .filter((r) => r.enabled)
-    .filter((r) => !roles || (roles as string[]).includes(r.role))
-    .map((r) => r.email);
-  return [...new Set([...emails, ...(extraBDEmails || [])])];
+export function getEnabledRecipientEmails(roles?: RiskRole[] | string[], extra: string[] = []): string[] {
+  return [...new Set([...getRiskRecipients().filter((r) => r.enabled &&
+    (!roles || roles.includes(r.role))).map((r) => r.email), ...extra].filter(Boolean))];
 }
-
-export function getEnabledRecipientWhatsApps(
-  roles?: RiskRole[] | string[],
-  extraNumbers?: string[]
-): string[] {
-  const numbers = globalRecipients
-    .filter((r) => r.enabled && r.whatsapp)
-    .filter((r) => !roles || (roles as string[]).includes(r.role))
-    .map((r) => r.whatsapp as string);
-  return [...new Set([...numbers, ...(extraNumbers || [])])];
+export function getEnabledRecipientWhatsApps(roles?: RiskRole[] | string[], extra: string[] = []): string[] {
+  return [...new Set([...getRiskRecipients().filter((r) => r.enabled && r.whatsapp &&
+    (!roles || roles.includes(r.role))).map((r) => r.whatsapp!), ...extra].filter(Boolean))];
 }

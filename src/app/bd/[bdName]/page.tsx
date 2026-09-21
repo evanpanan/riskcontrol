@@ -34,13 +34,15 @@ import {
 import { getMockData } from "@/lib/mockData";
 import { BD_MANAGERS } from "@/lib/mockData";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
-import { calculateBatchRiskMetrics, calculateProfitSplitRatio } from "@/lib/riskEngine";
+import { getBatchMetrics, getClientProfitSplit, calculateRealtimeClientMetrics, isVipClient } from "@/lib/riskEngine";
 import type { Client } from "@prisma/client";
 import {
   mergeClientStatusesOnClientList,
 } from "@/lib/clientStatusStore";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { APP_ROLES } from "@/types/auth";
+import { ClientAvatar } from "@/components/branding/ClientAvatar";
+import { getInitialsCn } from "@/lib/utils";
 
 type ExtendedRiskLevel = "CRITICAL" | "WARNING" | "NORMAL" | "PROFITABLE";
 
@@ -59,27 +61,7 @@ function displayNameIncludes(bdFull: string, target: string): boolean {
   return false;
 }
 
-function pickGradientForName(name: string): string {
-  const AVATAR_GRADIENTS = [
-    "from-indigo-500 via-violet-500 to-purple-600",
-    "from-sky-500 via-blue-500 to-indigo-600",
-    "from-emerald-500 via-teal-500 to-cyan-600",
-    "from-rose-500 via-pink-500 to-fuchsia-600",
-    "from-amber-500 via-orange-500 to-red-500",
-    "from-fuchsia-500 via-purple-500 to-violet-600",
-  ];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
-}
 
-function getInitialsCn(fullName: string): string {
-  const m = fullName.match(/([\u4e00-\u9fa5A-Za-z]+)/);
-  if (!m) return "??";
-  const head = m[1];
-  if (/[\u4e00-\u9fa5]/.test(head)) return head.slice(0, 2);
-  return head.split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase();
-}
 
 function bdEmail(bdName: string): string {
   const m = bdName.match(/\(([^)]+)\)/);
@@ -166,22 +148,23 @@ export default function BDManagerProfilePage() {
     let vipCount = 0;
     let activeClients = 0;
     let settledClients = 0;
+    let totalPnL = 0;
+    let unverifiedClients = 0;
 
     for (const { ownClients, batch } of relatedBatches) {
-      const mv = batch.currentMarketValue || batch.initialTotalAmount || 0;
-      const clientPool = batch.priorityAmount || batch.initialTotalAmount * 0.7 || 1;
       for (const c of ownClients) {
         totalClients++;
         totalInvest += c.investmentAmount || 0;
-        const ratio = (c.investmentAmount || 0) / clientPool;
-        const clientMV = mv * ratio;
-        totalRealtime += clientMV;
-        if ((c.investmentAmount || 0) >= 100000) vipCount++;
+        const unverified = c.status === "SETTLED" && !c.settlement && !batch.finance?.settlements[c.id];
+        const realtime = calculateRealtimeClientMetrics(c, batch, batch.currentMarketValue);
+        if (c.status !== "SETTLED") totalRealtime += realtime.marketValueShare;
+        if (unverified) unverifiedClients++;
+        else totalPnL += realtime.realtimePnL;
+        if (isVipClient(c)) vipCount++;
         if (c.status === "ACTIVE") activeClients++;
         if (c.status === "SETTLED") settledClients++;
       }
     }
-    const totalPnL = totalRealtime - totalInvest;
     const pnlPct = totalInvest > 0 ? (totalPnL / totalInvest) * 100 : 0;
     return {
       totalClients,
@@ -191,6 +174,7 @@ export default function BDManagerProfilePage() {
       activeClients,
       settledClients,
       totalPnL,
+      unverifiedClients,
       pnlPct,
       batchCount: relatedBatches.length,
     };
@@ -224,17 +208,17 @@ export default function BDManagerProfilePage() {
       <Card className="border-border/50 bg-gradient-to-br from-card via-card to-secondary/30">
         <CardContent className="p-6">
           <div className="flex flex-col md:flex-row md:items-center gap-5">
-            <div className={cn(
-              "h-20 w-20 rounded-2xl flex items-center justify-center shrink-0 shadow-lg text-white font-bold text-xl bg-gradient-to-br",
-              pickGradientForName(validBD)
-            )}>
-              {initials}
-            </div>
+            <ClientAvatar
+              name={validBD}
+              className="!h-20 !w-20 !rounded-2xl !text-xl !shadow-lg"
+              mode="initials"
+              rounded="xl"
+            />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-2xl font-bold tracking-tight">{validBD}</h1>
                 <Badge variant="primary" className="gap-1">
-                  <Award className="h-3 w-3" /> BD 经理
+                  <Award className="h-3 w-3" /> 商务经理
                 </Badge>
                 <Badge variant="success" className="gap-1">
                   <Crown className="h-3 w-3" /> VIP 客户 {totalStats.vipCount}
@@ -283,10 +267,10 @@ export default function BDManagerProfilePage() {
             </div>
             <div className="rounded-xl bg-secondary/40 p-3 border border-border/40">
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <Landmark className="h-3 w-3" /> 当前市值
+                <Landmark className="h-3 w-3" /> 客户在仓市值
               </p>
               <p className="text-xl font-bold mt-1 font-mono">{formatCurrency(totalStats.totalRealtime)}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">含浮动盈亏</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">不含机构资金及已结算仓位</p>
             </div>
             <div className="rounded-xl bg-secondary/40 p-3 border border-border/40">
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
@@ -297,8 +281,9 @@ export default function BDManagerProfilePage() {
                 {totalStats.totalPnL >= 0 ? "+" : ""}{formatCurrency(totalStats.totalPnL)}
               </p>
               <p className={cn("text-[10px] mt-0.5 font-mono", totalStats.totalPnL >= 0 ? "text-success/80" : "text-danger/80")}>
-                {totalStats.totalPnL >= 0 ? "+" : ""}{formatPercent(totalStats.pnlPct)}
+                {formatPercent(totalStats.pnlPct)}
               </p>
+              {totalStats.unverifiedClients > 0 && <p className="text-[10px] text-warning">不含 {totalStats.unverifiedClients} 位历史待核对客户</p>}
             </div>
             <div className="rounded-xl bg-secondary/40 p-3 border border-border/40">
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
@@ -336,11 +321,10 @@ export default function BDManagerProfilePage() {
 
 function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
   const mv = batch.currentMarketValue || batch.initialTotalAmount || 0;
-  const metrics = calculateBatchRiskMetrics(batch.initialTotalAmount || 0, mv, batch.cumulativeMarginCalls || 0);
+  const metrics = getBatchMetrics(batch);
   const dropPct = metrics.dropPercent || 0;
 
-  const riskLevel: ExtendedRiskLevel =
-    dropPct === 0 ? "PROFITABLE" : (metrics.riskLevel as any as ExtendedRiskLevel);
+  const riskLevel: ExtendedRiskLevel = metrics.riskLevel as ExtendedRiskLevel;
 
   const riskBadgeMap: Record<ExtendedRiskLevel, { variant: any; label: string; Icon: any; cls: string }> = {
     CRITICAL: { variant: "danger", label: "击穿 · 需补仓", Icon: Flame, cls: "animate-breath-danger" },
@@ -364,19 +348,17 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
       const sa = statusRank(a);
       const sb = statusRank(b);
       if (sa !== sb) return sa - sb;
-      const isAVip = (a.splitTier === "VIP") || (a.investmentAmount || 0) >= 100000;
-      const isBVip = (b.splitTier === "VIP") || (b.investmentAmount || 0) >= 100000;
+      const isAVip = isVipClient(a);
+      const isBVip = isVipClient(b);
       if (isAVip !== isBVip) return isAVip ? -1 : 1;
       return (b.investmentAmount || 0) - (a.investmentAmount || 0);
     });
   }, [clients]);
-  const clientPool = batch.priorityAmount || batch.initialTotalAmount * 0.7 || 1;
   const bdInitial = sorted.reduce((s, c) => s + (c.investmentAmount || 0), 0);
-  const bdCurrent = sorted.reduce((s, c) => {
-    const ratio = (c.investmentAmount || 0) / clientPool;
-    return s + mv * ratio;
-  }, 0);
-  const pnl = bdCurrent - bdInitial;
+  const unverified = (c: any) => c.status === "SETTLED" && !c.settlement && !batch.finance?.settlements[c.id];
+  const unverifiedCount = sorted.filter(unverified).length;
+  const bdCurrent = sorted.reduce((s, c) => s + (c.status === "SETTLED" ? 0 : calculateRealtimeClientMetrics(c, batch, mv).marketValueShare), 0);
+  const pnl = sorted.reduce((s, c) => s + (unverified(c) ? 0 : calculateRealtimeClientMetrics(c, batch, mv).realtimePnL), 0);
   const pnlPct = bdInitial > 0 ? (pnl / bdInitial) * 100 : 0;
 
   return (
@@ -402,7 +384,7 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
             <div>
               <span className="text-muted-foreground">跌幅：</span>
               <span className={cn("font-mono font-bold", dropPct >= 20 ? "text-danger" : dropPct >= 15 ? "text-warning" : "")}>
-                {formatPercent(dropPct)}
+                {dropPct.toFixed(2)}%
               </span>
             </div>
             <div>
@@ -410,15 +392,16 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
               <span className="font-mono font-semibold">{formatCurrency(bdInitial)}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">我名下当前：</span>
+              <span className="text-muted-foreground">客户在仓市值：</span>
               <span className="font-mono font-semibold">{formatCurrency(bdCurrent)}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">浮动盈亏：</span>
+              <span className="text-muted-foreground">客户分成收益：</span>
               <span className={cn("font-mono font-bold", pnl >= 0 ? "text-success" : "text-danger")}>
-                {pnl >= 0 ? "+" : ""}{formatCurrency(pnl)} <span className="text-[10px] opacity-80">({pnl >= 0 ? "+" : ""}{formatPercent(pnlPct)})</span>
+                {pnl >= 0 ? "+" : ""}{formatCurrency(pnl)} <span className="text-[10px] opacity-80">({formatPercent(pnlPct)})</span>
               </span>
             </div>
+            {unverifiedCount > 0 && <span className="text-warning">{unverifiedCount} 位历史结算待核对，未计入收益</span>}
             <Link href={`/batch/${batch.id}`}>
               <Button size="sm" variant="outline" className="gap-1 h-7 text-[11px] px-2.5">
                 批次详情
@@ -435,32 +418,27 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
                 <TableHead className="w-[160px]">客户</TableHead>
                 <TableHead className="text-right">投资金额</TableHead>
                 <TableHead className="text-center">分成比例</TableHead>
-                <TableHead className="text-right">当前市值</TableHead>
-                <TableHead className="text-right">浮动盈亏</TableHead>
+                <TableHead className="text-right">在仓市值 / 结算实收</TableHead>
+                <TableHead className="text-right">客户分成收益</TableHead>
                 <TableHead className="text-center w-[90px]">状态</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {sorted.map((c: Client & any) => {
-                const ratio = (c.investmentAmount || 0) / clientPool;
-                const clientMV = mv * ratio;
-                const clientPnL = clientMV - (c.investmentAmount || 0);
+                const realtime = calculateRealtimeClientMetrics(c, batch, mv);
+                const clientMV = realtime.marketValueShare;
+                const clientPnL = realtime.realtimePnL;
                 const clientPnLPct = (c.investmentAmount || 0) > 0 ? (clientPnL / c.investmentAmount) * 100 : 0;
-                const split = calculateProfitSplitRatio(c.investmentAmount || 0);
+                const split = getClientProfitSplit(c);
                 return (
                   <TableRow key={c.id} className="h-[56px]">
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <div className={cn(
-                          "h-8 w-8 rounded-lg bg-gradient-to-br flex items-center justify-center shrink-0 text-white font-bold text-xs",
-                          pickGradientForName(c.name).replace("bg-gradient-to-br ", "")
-                        )}>
-                          {c.name.charAt(0)}
-                        </div>
+                        <ClientAvatar name={c.name} size="sm" rounded="lg" />
                         <div className="min-w-0">
                           <div className="flex items-center gap-1 flex-wrap">
                             <span className="text-sm font-semibold truncate">{c.name}</span>
-                            {split.client >= 0.4 && <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">VIP</Badge>}
+                            {isVipClient(c) && <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">VIP</Badge>}
                             {c.investmentAmount >= 200000 && <Badge variant="warning" className="text-[9px] px-1.5 py-0 h-4 font-mono">大额</Badge>}
                           </div>
                         </div>
@@ -468,17 +446,19 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
                     </TableCell>
                     <TableCell className="text-right font-mono font-semibold">{formatCurrency(c.investmentAmount)}</TableCell>
                     <TableCell className="text-center text-xs">
-                      <p className="font-mono font-semibold">客户 {Math.round(split.client * 100)}%</p>
-                      <p className="text-[10px] text-muted-foreground">/ 机构 {Math.round(split.institution * 100)}%</p>
+                      <p className="font-mono font-semibold">客户 {Number((split.client * 100).toFixed(2))}%</p>
+                      <p className="text-[10px] text-muted-foreground">/ 机构 {Number((split.institution * 100).toFixed(2))}%</p>
                     </TableCell>
-                    <TableCell className="text-right font-mono">{formatCurrency(clientMV)}</TableCell>
+                    <TableCell className="text-right font-mono">{unverified(c) ? <span className="text-warning">待核对</span> : formatCurrency(clientMV)}</TableCell>
                     <TableCell className="text-right">
+                      {unverified(c) ? <span className="text-xs text-warning">待核对</span> : <>
                       <p className={cn("font-mono font-bold", clientPnL > 0 ? "text-success" : clientPnL < 0 ? "text-danger" : "text-muted-foreground")}>
                         {clientPnL > 0 ? "+" : ""}{formatCurrency(clientPnL)}
                       </p>
                       <p className={cn("text-[10px] font-mono", clientPnL > 0 ? "text-success/80" : clientPnL < 0 ? "text-danger/80" : "text-muted-foreground")}>
-                        {clientPnL > 0 ? "+" : ""}{formatPercent(clientPnLPct)}
+                        {formatPercent(clientPnLPct)}
                       </p>
+                      </>}
                     </TableCell>
                     <TableCell className="text-center">
                       {c.status === "ACTIVE" ? (

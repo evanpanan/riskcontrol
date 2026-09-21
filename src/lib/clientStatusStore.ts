@@ -53,6 +53,7 @@ export function setClientStatus(clientId: string, status: ClientStatus) {
 export function mergeClientStatusOnClient<T extends { id: string; status?: ClientStatus; settledAt?: Date | null }>(
   client: T
 ): T {
+  if ((client as any).__financeManaged || (client as any).settlement) return client;
   if (typeof window === "undefined") return client;
   const record = getClientStatus(client.id);
   if (!record) return client;
@@ -70,6 +71,7 @@ export function mergeClientStatusesOnClientList<
   const store = getStore();
   if (Object.keys(store).length === 0) return clients;
   return clients.map((c) => {
+    if ((c as any).__financeManaged || (c as any).settlement) return c;
     const record = store[c.id];
     if (!record) return c;
     return {

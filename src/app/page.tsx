@@ -2,7 +2,8 @@
 
 import { Suspense, useMemo, useState, useEffect, useRef } from "react";
 import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
-import { calculatePortfolioSummary, calculateBatchRiskMetrics } from "@/lib/riskEngine";
+import { calculatePortfolioSummary, getBatchMetrics, summarizeBatchMarginFromClients } from "@/lib/riskEngine";
+import { toast } from "sonner";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { RiskLadderBar } from "@/components/dashboard/RiskLadderBar";
 import { BatchCardV2 } from "@/components/dashboard/BatchCardV2";
@@ -41,7 +42,7 @@ export default function DashboardPage() {
   const { user, role } = useCurrentUser();
   const mockDataRef = useRef(getMockData());
   const [tick, setTick] = useState(0);
-  const rawBatches = useMemo(() => mockDataRef.current.batches, [tick]);
+  const rawBatches = useMemo(() => [...mockDataRef.current.batches], [tick]);
   const batches = useMemo(() => filterBatchesForUser(rawBatches, user ?? null), [rawBatches, user]);
   const stockHistory = useMemo(() => mockDataRef.current.stockHistory, [tick]);
   const summary = calculatePortfolioSummary(batches);
@@ -64,11 +65,20 @@ export default function DashboardPage() {
     const s = getWebAlertSettings();
     if (!s.realtimeTickEnabled) return;
     const id = setInterval(() => {
-      refreshMockDataPrices();
+      try { refreshMockDataPrices(); } catch (err) {
+        toast.error(err instanceof Error ? err.message : "行情更新失败");
+        clearInterval(id);
+        return;
+      }
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
     }, Math.max(2000, s.realtimeTickIntervalSec * 1000));
     return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const handler = () => setTick((t) => t + 1);
+    window.addEventListener("risk-control:finance-changed", handler);
+    return () => window.removeEventListener("risk-control:finance-changed", handler);
   }, []);
 
   // ===== 风险预警弹窗 ACK & 构建alert列表 =====
@@ -106,22 +116,25 @@ export default function DashboardPage() {
       currentStockPrice?: number;
       currentDayChange?: number;
     })[]) {
-      const isCritical = b.riskLevel === RiskLevel.CRITICAL;
+      const margin = summarizeBatchMarginFromClients(b);
+      const isCritical = b.riskLevel === RiskLevel.CRITICAL || margin.totalPending > 0;
       const isWarning = b.riskLevel === RiskLevel.WARNING;
       if (!isCritical && !isWarning) continue;
       if (webAlertSettings.webAlertCriticalOnly && !isCritical) continue;
-      if (acks[b.id] && Date.now() - acks[b.id] < 1000 * 60 * 30) continue;
+      const alertKey = margin.totalPending > 0 ? `${b.id}:${margin.roundId}` : `${b.id}:warning`;
+      if (acks[alertKey] && Date.now() - acks[alertKey] < 1000 * 60 * 30) continue;
       const initAmt = b.initialTotalAmount ?? 0;
       const curMV = (b as any).currentMarketValue ?? initAmt;
-      const m = calculateBatchRiskMetrics(initAmt, curMV, (b as any).cumulativeMarginCalls ?? 0);
+      const m = getBatchMetrics(b);
       next.push({
+        alertKey,
         batchId: b.id,
         batchNumber: (b as any).batchNumber,
         stockSymbol: (b as any).stockSymbol,
         stockName: (b as any).stockName,
-        riskLevel: b.riskLevel,
+        riskLevel: isCritical ? RiskLevel.CRITICAL : RiskLevel.WARNING,
         dropPercent: m.dropPercent,
-        requiredMarginCall: m.requiredMarginCall,
+        requiredMarginCall: margin.totalPending,
         signDate: new Date(b.signDate),
         clientCount: ((b as any).clients as any[])?.length ?? 0,
         initialTotalAmount: initAmt,
@@ -133,18 +146,18 @@ export default function DashboardPage() {
       if (a.riskLevel !== b.riskLevel) {
         return a.riskLevel === RiskLevel.CRITICAL ? -1 : 1;
       }
-      return a.dropPercent - b.dropPercent;
+      return b.dropPercent - a.dropPercent;
     });
     setAlerts(next);
   }, [batches, webAlertSettings.webAlertCriticalOnly]);
 
   const handleDismissOne = (batchId: string) => {
-    acknowledgeAlert(batchId);
+    acknowledgeAlert(alerts.find((a) => a.batchId === batchId)?.alertKey ?? batchId);
     acksRef.current = getAlertAcks();
     setAlerts((prev) => prev.filter((a) => a.batchId !== batchId));
   };
   const handleDismissAll = () => {
-    for (const a of alerts) acknowledgeAlert(a.batchId);
+    for (const a of alerts) acknowledgeAlert(a.alertKey);
     acksRef.current = getAlertAcks();
     setAlerts([]);
   };
@@ -230,8 +243,8 @@ export default function DashboardPage() {
       if (wa !== wb) return wb - wa;
       const aMV = a.currentMarketValue ?? a.initialTotalAmount ?? 0;
       const bMV = b.currentMarketValue ?? b.initialTotalAmount ?? 0;
-      const aDrop = calculateBatchRiskMetrics(a.initialTotalAmount, aMV, a.cumulativeMarginCalls ?? 0).dropPercent;
-      const bDrop = calculateBatchRiskMetrics(b.initialTotalAmount, bMV, b.cumulativeMarginCalls ?? 0).dropPercent;
+      const aDrop = getBatchMetrics(a).dropPercent;
+      const bDrop = getBatchMetrics(b).dropPercent;
       return aDrop - bDrop;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -485,7 +498,7 @@ export default function DashboardPage() {
             const seen: Record<string, boolean> = { profit: false, normal: false, warning: false, critical: false };
             return visibleBatches.map((b) => {
               const mv = b.currentMarketValue ?? b.initialTotalAmount ?? 0;
-              const metrics = calculateBatchRiskMetrics(b.initialTotalAmount, mv, b.cumulativeMarginCalls ?? 0);
+              const metrics = getBatchMetrics(b);
               const isProfitable = mv >= (b.initialTotalAmount ?? 0);
               let anchor: string | null = null;
               if (isProfitable && !seen.profit) { anchor = "anchor-profit"; seen.profit = true; }

@@ -131,3 +131,43 @@ export function calculateTradingWindows(signDate: Date | string): TradingWindowI
 export function formatSplitRatio(client: number, institution: number): string {
   return `客户${client}% / 机构${institution}%`;
 }
+
+export const AVATAR_GRADIENTS: readonly string[] = [
+  "from-indigo-500 via-violet-500 to-purple-600",
+  "from-sky-500 via-blue-500 to-indigo-600",
+  "from-emerald-500 via-teal-500 to-cyan-600",
+  "from-rose-500 via-pink-500 to-fuchsia-600",
+  "from-amber-500 via-orange-500 to-red-500",
+  "from-fuchsia-500 via-purple-500 to-violet-600",
+  "from-lime-500 via-green-500 to-emerald-600",
+  "from-orange-400 via-rose-500 to-red-600",
+  "from-cyan-500 via-sky-500 to-blue-600",
+  "from-violet-500 via-fuchsia-500 to-pink-600",
+];
+
+export function pickGradientForName(name: string): string {
+  if (!name) return AVATAR_GRADIENTS[0];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
+}
+
+export function getInitialsCn(fullName: string): string {
+  if (!fullName) return "??";
+  const m = fullName.match(/([\u4e00-\u9fa5A-Za-z]+)/);
+  if (!m) return fullName.slice(0, 2).toUpperCase();
+  const head = m[1];
+  if (/[\u4e00-\u9fa5]/.test(head)) return head.slice(0, 2);
+  const parts = head.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return head.slice(0, 2).toUpperCase();
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+export function getFirstCharCn(fullName: string): string {
+  if (!fullName) return "?";
+  const m = fullName.match(/([\u4e00-\u9fa5A-Za-z])/);
+  if (!m) return fullName.charAt(0).toUpperCase();
+  const ch = m[1];
+  return /[\u4e00-\u9fa5]/.test(ch) ? ch : ch.toUpperCase();
+}
