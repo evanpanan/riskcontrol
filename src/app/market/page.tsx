@@ -52,13 +52,14 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
+import { Reveal } from "@/components/ui/Reveal";
 import { RiskLevel } from "@prisma/client";
 import { getWebAlertSettings } from "@/lib/webAlertSettings";
 import { getLiveQuoteSettings, DEFAULT_LIVE_QUOTE, type BrowserQuote, fetchQuoteBrowser } from "@/lib/liveQuote";
 import { BD_MANAGERS } from "@/lib/mockData";
 import { MonthlyBatchesTrend } from "@/components/dashboard/MonthlyBatchesTrend";
 
-function generateInstitutionRiskByMonth() {
+function generateInstitutionRiskByMonth(seed = 20260917) {
   const months = [
     "25/05",
     "25/07",
@@ -73,10 +74,19 @@ function generateInstitutionRiskByMonth() {
     "26/08",
     "26/09",
   ];
+  function mulberry32(a: number) {
+    return function () {
+      let t = (a += 0x6d2b79f5);
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rnd = mulberry32(seed >>> 0);
   return months.map((m, i) => ({
     month: m,
-    风险敞口: Math.round(500000 + Math.random() * 1800000 - i * 30000),
-    机构补仓: i < 3 ? 0 : Math.round(Math.random() * 500000 * (i / 8)),
+    风险敞口: Math.round(500000 + rnd() * 1800000 - i * 30000),
+    机构补仓: i < 3 ? 0 : Math.round(rnd() * 500000 * (i / 8)),
   }));
 }
 
@@ -119,7 +129,15 @@ export default function MarketPage() {
   const [hydrated, setHydrated] = useState(false);
   const [liveSymbol, setLiveSymbol] = useState<string>(DEFAULT_LIVE_QUOTE.symbol);
   const [realtime, setRealtime] = useState<BrowserQuote | null>(null);
+  const [animActive, setAnimActive] = useState(true);
   const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
+
+  const riskMonthly = useMemo(() => generateInstitutionRiskByMonth(20260917), []);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setAnimActive(false), 1400);
+    return () => window.clearTimeout(id);
+  }, []);
 
   const [settings, setSettings] = useState(DEFAULT_WEB_ALERT_SETTINGS);
 
@@ -438,7 +456,6 @@ export default function MarketPage() {
     };
   }, [clientStats, summary, totalInitial]);
 
-  const riskMonthly = generateInstitutionRiskByMonth();
   const marketOpenNow = isMarketOpen();
 
   const StackedBar = ({ data, height = 36 }: { data: { key: string; value: number; pct: number; color: string }[]; height?: number }) => (
@@ -502,127 +519,138 @@ export default function MarketPage() {
 
   return (
     <div className="space-y-5 max-w-[1800px] mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="px-2 py-0.5 rounded bg-secondary text-secondary-foreground font-semibold">
-              行情中心
-            </span>
-            <span>/</span>
-            <span className="font-mono uppercase tracking-wider text-primary font-bold">{liveSymbol}</span>
-            <span>/</span>
-            <span>数据分析看板</span>
+      <Reveal offsetY={14}>
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="px-2 py-0.5 rounded bg-secondary text-secondary-foreground font-semibold">
+                行情中心
+              </span>
+              <span>/</span>
+              <span className="font-mono uppercase tracking-wider text-primary font-bold">{liveSymbol}</span>
+              <span>/</span>
+              <span>数据分析看板</span>
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">
+              数据分析 · {liveSymbol} 机构 &amp; 风控多维可视化
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              纯图形驱动：资金构成堆叠 × 风险分层分布 × BD贡献矩阵 × 签约到期节奏 × 客户结构画像
+            </p>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            数据分析 · {liveSymbol} 机构 &amp; 风控多维可视化
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            纯图形驱动：资金构成堆叠 × 风险分层分布 × BD贡献矩阵 × 签约到期节奏 × 客户结构画像
-          </p>
-        </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <Badge
-            variant={marketOpenNow ? "success" : "secondary"}
-            className="gap-1.5 px-3 py-1"
-          >
-            <Clock className="h-3 w-3" />
-            {marketOpenNow ? "美股 / 港股 开盘中" : "全球市场休市"}
-          </Badge>
-          <Badge
-            variant={
-              realtime?.source === "LIVE"
-                ? "success"
-                : realtime?.source === "CACHE"
-                  ? "secondary"
-                  : "warning"
-            }
-            className="gap-1.5 px-3 py-1"
-          >
-            <RadioTower
-              className={cn(
-                "h-3 w-3",
-                realtime?.source === "LIVE" && marketOpenNow && "animate-pulse-green"
-              )}
-            />
-            {realtime?.provider
-              ? realtime.provider.replace("_UNOFFICIAL", "").replace("_", " ")
-              : "LIVE"}
-            <span className="text-[10px] opacity-70 font-mono">
-              [{realtime?.source ?? "—"}]
-            </span>
-          </Badge>
-          <Button
-            size="sm"
-            variant="gradient"
-            className="gap-1.5"
-            onClick={handleRefresh}
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
-            />
-            刷新行情
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge
+              variant={marketOpenNow ? "success" : "secondary"}
+              className="gap-1.5 px-3 py-1"
+            >
+              <Clock className="h-3 w-3" />
+              {marketOpenNow ? "美股 / 港股 开盘中" : "全球市场休市"}
+            </Badge>
+            <Badge
+              variant={
+                realtime?.source === "LIVE"
+                  ? "success"
+                  : realtime?.source === "CACHE"
+                    ? "secondary"
+                    : "warning"
+              }
+              className="gap-1.5 px-3 py-1"
+            >
+              <RadioTower
+                className={cn(
+                  "h-3 w-3",
+                  realtime?.source === "LIVE" && marketOpenNow && "animate-pulse-green"
+                )}
+              />
+              {realtime?.provider
+                ? realtime.provider.replace("_UNOFFICIAL", "").replace("_", " ")
+                : "LIVE"}
+              <span className="text-[10px] opacity-70 font-mono">
+                [{realtime?.source ?? "—"}]
+              </span>
+            </Badge>
+            <Button
+              size="sm"
+              variant="gradient"
+              className="gap-1.5"
+              onClick={handleRefresh}
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
+              />
+              刷新行情
+            </Button>
+          </div>
         </div>
-      </div>
+      </Reveal>
 
       {/* ===== Section 0: 近 6 月月度新增批次趋势（整页第一数据卡） ===== */}
-      <MonthlyBatchesTrend batches={batches} />
+      <Reveal offsetY={16} delayMs={80}>
+        <MonthlyBatchesTrend batches={batches} isAnimationActive={animActive} />
+      </Reveal>
 
       {/* ===== Section 1: 资金与风险全景 3 堆叠条 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Landmark className="h-4 w-4 text-primary" />
-              AUM 资金构成（100% 堆叠）
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              总规模 {formatCompactNumber(totalInitial)} · 优先 / 劣后 / 补仓三层拆分
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <StackedBar data={aumComposition} height={42} />
-            <LegendRow data={aumComposition} />
-          </CardContent>
-        </Card>
+        <Reveal offsetY={16} delayMs={120}>
+          <Card className="border-border/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Landmark className="h-4 w-4 text-primary" />
+                AUM 资金构成（100% 堆叠）
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                总规模 {formatCompactNumber(totalInitial)} · 优先 / 劣后 / 补仓三层拆分
+              </p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <StackedBar data={aumComposition} height={42} />
+              <LegendRow data={aumComposition} />
+            </CardContent>
+          </Card>
+        </Reveal>
 
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Recycle className="h-4 w-4 text-warning" />
-              补仓回收漏斗（对比劣后规模）
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              回收率 {formatPercent(summary.totalMarginCalls > 0 ? (institutionMetrics.totalRecovered / summary.totalMarginCalls) * 100 : 100, 1)} · 单笔最高敞口 {formatCompactNumber(institutionMetrics.worstExposure)}
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <StackedBar data={funnelComposition} height={42} />
-            <LegendRow data={funnelComposition} />
-          </CardContent>
-        </Card>
+        <Reveal offsetY={16} delayMs={200}>
+          <Card className="border-border/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Recycle className="h-4 w-4 text-warning" />
+                补仓回收漏斗（对比劣后规模）
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                回收率 {formatPercent(summary.totalMarginCalls > 0 ? (institutionMetrics.totalRecovered / summary.totalMarginCalls) * 100 : 100, 1)} · 单笔最高敞口 {formatCompactNumber(institutionMetrics.worstExposure)}
+              </p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <StackedBar data={funnelComposition} height={42} />
+              <LegendRow data={funnelComposition} />
+            </CardContent>
+          </Card>
+        </Reveal>
 
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <ShieldAlert className="h-4 w-4 text-danger" />
-              批次风险分层（总览）
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {batches.length} 批次 · NORMAL / WARNING / CRITICAL 占比
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <StackedBar data={riskLayerDist} height={42} />
-            <LegendRow data={riskLayerDist.map(x => ({ ...x, key: x.key.split(" ")[0] }))} />
-          </CardContent>
-        </Card>
+        <Reveal offsetY={16} delayMs={280}>
+          <Card className="border-border/50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-danger" />
+                批次风险分层（总览）
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {batches.length} 批次 · NORMAL / WARNING / CRITICAL 占比
+              </p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <StackedBar data={riskLayerDist} height={42} />
+              <LegendRow data={riskLayerDist.map(x => ({ ...x, key: x.key.split(" ")[0] }))} />
+            </CardContent>
+          </Card>
+        </Reveal>
       </div>
 
       {/* ===== Section 2: 风险甜甜圈 + BD排行 + 投资分桶 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
-        <Card className="border-border/50">
+        <Reveal offsetY={16} delayMs={160}>
+          <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <PieIcon className="h-4 w-4 text-info" />
@@ -637,6 +665,8 @@ export default function MarketPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
                     data={riskDonut}
                     innerRadius={58}
                     outerRadius={90}
@@ -658,7 +688,9 @@ export default function MarketPage() {
             <LegendRow data={riskDonut.map(x => ({ key: x.name, value: x.value, color: x.color }))} textSize="text-[11px]" />
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={240}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -692,7 +724,13 @@ export default function MarketPage() {
                     contentStyle={{ fontSize: 11, borderRadius: 8 }}
                     formatter={(v: any, n) => [n === "amount" ? formatCompactNumber(Number(v)) : `${Number(v)} 位`, n === "amount" ? "在管资金" : "服务客户"]}
                   />
-                  <Bar dataKey="amount" radius={[0, 4, 4, 0]} barSize={22}>
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="amount"
+                    radius={[0, 4, 4, 0]}
+                    barSize={22}
+                  >
                     {bdAUMRanking.map((entry, i) => (
                       <Cell key={i} fill={entry.fill} />
                     ))}
@@ -710,7 +748,9 @@ export default function MarketPage() {
             />
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={320}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -748,8 +788,21 @@ export default function MarketPage() {
                   />
                   <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar yAxisId="left" dataKey="客户数" fill="hsl(217 91% 60%)" radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="right" dataKey="投资金额" radius={[4, 4, 0, 0]}>
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    yAxisId="left"
+                    dataKey="客户数"
+                    fill="hsl(217 91% 60%)"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    yAxisId="right"
+                    dataKey="投资金额"
+                    radius={[4, 4, 0, 0]}
+                  >
                     {investBucketHist.map((e, i) => (
                       <Cell key={i} fill={e.fill} fillOpacity={0.85} />
                     ))}
@@ -759,11 +812,13 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
       </div>
 
       {/* ===== Section 3: 月度补仓 & 劣后净值（保留原） + PnL 构成 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
-        <Card className="lg:col-span-2 border-border/50">
+        <Reveal offsetY={16} delayMs={200} className="lg:col-span-2">
+        <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <Building2 className="h-4 w-4 text-primary" />
@@ -802,6 +857,8 @@ export default function MarketPage() {
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
                     dataKey="风险敞口"
                     name="当月劣后 PnL 贡献"
                     stackId="a"
@@ -815,6 +872,8 @@ export default function MarketPage() {
                     </defs>
                   </Bar>
                   <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
                     dataKey="机构补仓"
                     name="机构当月补仓注入"
                     stackId="a"
@@ -826,7 +885,9 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={280}>
         <Card className="lg:col-span-1 border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -907,10 +968,12 @@ export default function MarketPage() {
             })()}
           </CardContent>
         </Card>
+        </Reveal>
       </div>
 
       {/* ===== Section 4: 到期节奏 + 签约节奏 + 剩余寿命 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+        <Reveal offsetY={16} delayMs={140}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -929,13 +992,22 @@ export default function MarketPage() {
                   <XAxis dataKey="month" tick={{ fontSize: 10.5 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
                   <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 批次`, "到期"]} />
-                  <Bar dataKey="到期批次" radius={[4, 4, 0, 0]} fill="hsl(265 89% 70%)" barSize={30} />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="到期批次"
+                    radius={[4, 4, 0, 0]}
+                    fill="hsl(265 89% 70%)"
+                    barSize={30}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={220}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -954,7 +1026,13 @@ export default function MarketPage() {
                   <XAxis dataKey="季度" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
                   <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 位客户`, "签约"]} />
-                  <Bar dataKey="签约客户数" radius={[4, 4, 0, 0]} barSize={36}>
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="签约客户数"
+                    radius={[4, 4, 0, 0]}
+                    barSize={36}
+                  >
                     <defs>
                       <linearGradient id="signGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="hsl(142 76% 55%)" />
@@ -967,7 +1045,9 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={300}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1010,7 +1090,13 @@ export default function MarketPage() {
                       n === "剩余天数" ? "剩余" : "进度"
                     ]}
                   />
-                  <Bar dataKey="剩余天数" radius={[0, 4, 4, 0]} barSize={16}>
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="剩余天数"
+                    radius={[0, 4, 4, 0]}
+                    barSize={16}
+                  >
                     {batchLifespan.map((e, i) => (
                       <Cell key={i} fill={e.fill} />
                     ))}
@@ -1020,10 +1106,12 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
       </div>
 
       {/* ===== Section 5: 客户结构 4 图形（VIP饼 + 退出横条 + 批次生命周期饼 + 签约质量双环） ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <Reveal offsetY={16} delayMs={160}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1040,6 +1128,8 @@ export default function MarketPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
+                      isAnimationActive={animActive}
+                      animationDuration={1100}
                       data={[
                         { name: "VIP客户", value: Math.max(1, clientStats.vipAmount) },
                         { name: "普通客户", value: Math.max(1, clientStats.normalAmount) },
@@ -1091,7 +1181,9 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={260}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1128,7 +1220,13 @@ export default function MarketPage() {
                     contentStyle={{ fontSize: 11, borderRadius: 8 }}
                     formatter={(v: any) => [`${Number(v)} 天`, ""]}
                   />
-                  <Bar dataKey="days" radius={[0, 4, 4, 0]} barSize={22}>
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="days"
+                    radius={[0, 4, 4, 0]}
+                    barSize={22}
+                  >
                     {[
                       { fill: "hsl(var(--muted-foreground) / 0.6)" },
                       { fill: "hsl(142 76% 45%)" },
@@ -1161,7 +1259,9 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={160}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1178,6 +1278,8 @@ export default function MarketPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
+                      isAnimationActive={animActive}
+                      animationDuration={1100}
                       data={batchStatusDist}
                       innerRadius={58}
                       outerRadius={88}
@@ -1230,7 +1332,9 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
 
+        <Reveal offsetY={16} delayMs={260}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1284,6 +1388,7 @@ export default function MarketPage() {
             </div>
           </CardContent>
         </Card>
+        </Reveal>
       </div>
     </div>
   );

@@ -16,7 +16,7 @@ import {
   Legend,
 } from "recharts";
 
-export function MonthlyBatchesTrend({ batches }: { batches: Batch[] }) {
+export function MonthlyBatchesTrend({ batches, isAnimationActive = false }: { batches: Batch[]; isAnimationActive?: boolean }) {
   const monthlySeries = useMemo(() => {
     const byMonthKey = new Map<string, { label: string; count: number; cumAUM: number }>();
     for (const b of batches) {
@@ -160,6 +160,8 @@ export function MonthlyBatchesTrend({ batches }: { batches: Batch[] }) {
                 }}
               />
               <Bar
+                isAnimationActive={isAnimationActive}
+                animationDuration={1100}
                 yAxisId="left"
                 dataKey="count"
                 name="count"
@@ -169,6 +171,8 @@ export function MonthlyBatchesTrend({ batches }: { batches: Batch[] }) {
                 barSize={28}
               />
               <Line
+                isAnimationActive={isAnimationActive}
+                animationDuration={1300}
                 yAxisId="right"
                 type="monotone"
                 dataKey="runningTotal"
