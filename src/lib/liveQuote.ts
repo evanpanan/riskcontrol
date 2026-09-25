@@ -83,7 +83,7 @@ export interface LiveQuoteSettings {
 }
 
 export const DEFAULT_LIVE_QUOTE: LiveQuoteSettings = {
-  symbol: "XMAX",
+  symbol: "",
   refreshSec: 8,
   showOnTopBar: true,
   colorUp: "text-success",
@@ -97,7 +97,7 @@ export function getLiveQuoteSettings(): LiveQuoteSettings {
     if (!raw) return { ...DEFAULT_LIVE_QUOTE };
     const parsed = JSON.parse(raw);
     const next: LiveQuoteSettings = { ...DEFAULT_LIVE_QUOTE, ...(parsed || {}) };
-    next.symbol = String(next.symbol || DEFAULT_LIVE_QUOTE.symbol).trim().toUpperCase() || "XMAX";
+    next.symbol = String(next.symbol || "").trim().toUpperCase();
     const refreshSecRaw = Number(next.refreshSec) || 0;
     next.refreshSec = Math.max(1, Math.min(3600, refreshSecRaw)) || 8;
     return next;
@@ -111,7 +111,7 @@ export function setLiveQuoteSettings(next: LiveQuoteSettings): void {
     const clean: LiveQuoteSettings = {
       ...DEFAULT_LIVE_QUOTE,
       ...next,
-      symbol: String(next.symbol || DEFAULT_LIVE_QUOTE.symbol).trim().toUpperCase() || "XMAX",
+      symbol: String(next.symbol || "").trim().toUpperCase(),
       refreshSec: Math.max(1, Math.min(3600, Number(next.refreshSec) || 0)) || 8,
     };
     localStorage.setItem(LIVE_QUOTE_SETTINGS_KEY, JSON.stringify(clean));
@@ -130,9 +130,7 @@ export interface BrowserQuote {
   data?: RealtimeQuote;
 }
 
-const FALLBACK_PRICES: Record<string, { price: number; prevClose: number }> = {
-  XMAX: { price: 41.88, prevClose: 41.73 },
-};
+const FALLBACK_PRICES: Record<string, { price: number; prevClose: number }> = {};
 
 function loadCached(symbol: string): BrowserQuote | null {
   try {
@@ -160,7 +158,12 @@ function saveCached(symbol: string, q: BrowserQuote): void {
 }
 
 export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
-  const s = (symbol || "").trim().toUpperCase() || "XMAX";
+  const s = (symbol || "").trim().toUpperCase();
+  if (!s) {
+    const fallback = { price: 41.88, prevClose: 41.73 };
+    const chg = ((fallback.price - fallback.prevClose) / fallback.prevClose) * 100;
+    return { source: "OFFLINE", price: fallback.price, changePct: chg, up: chg >= 0, updatedAt: Date.now() };
+  }
   try {
     const res = await fetch(`/api/quote/realtime?symbol=${encodeURIComponent(s)}`, {
       headers: { Accept: "application/json" },

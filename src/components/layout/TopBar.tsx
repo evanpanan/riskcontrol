@@ -299,7 +299,8 @@ export function TopBar() {
           {/* 实时股票行情徽章（TopBar「实时连接中」旁边展示）：真实数据直出，零任何模拟/抖动 */}
           {(() => {
             if (!quote.showOnTopBar) return null;
-            const symbol = (quote.symbol || "XMAX").trim().toUpperCase();
+            const symbol = (quote.symbol || "").trim().toUpperCase();
+            if (!symbol) return null;
             const price = liveQuote ? Number(liveQuote.price) : 41.88;
             const chg = liveQuote ? Number(liveQuote.changePct) : 0.36;
             const up = chg >= 0;
@@ -510,7 +511,7 @@ export function TopBar() {
     </header>
     <KLineDialog
       open={klineOpen}
-      symbol={(quote.symbol || "XMAX").trim().toUpperCase()}
+      symbol={(quote.symbol || "").trim().toUpperCase()}
       onOpenChange={setKlineOpen}
       anchorPrice={liveQuote?.price ?? null}
     />

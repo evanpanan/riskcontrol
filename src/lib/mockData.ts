@@ -8,10 +8,10 @@ import {
   ClientStatus,
 } from "@prisma/client";
 import {
-  XMAX_HALF_YEAR_PRICE_SERIES,
+  HISTORICAL_HALF_YEAR_PRICE_SERIES,
   RECOMMENDED_BATCH_SIGN_DATES,
-  XMAX_CURRENT_LIVE_PRICE,
-} from "./xmax-price-series";
+  LATEST_SNAPSHOT_PRICE,
+} from "./historical-price-series";
 import {
   calculateBatchRiskMetrics,
   calculateInvestmentSplit,
@@ -31,8 +31,8 @@ export interface MockDataSet {
   stockHistory: StockHistory[];
 }
 
-// Scenario quote only, not a live market price. All batches share this symbol.
-const STOCKS = [{ symbol: "XMAX", name: "XMAX", basePrice: 10 }];
+// Scenario quote only, not a live market price. Actual symbol comes from settings.
+const STOCKS = [{ symbol: "", name: "", basePrice: 10 }];
 
 export const BD_MANAGERS = ["李晓明 (Evan Li)", "王思远 (Sylvia Wang)", "张志强 (Jack Zhang)", "刘佳 (Jennifer Liu)"];
 
@@ -164,9 +164,9 @@ export function generateMockData(): MockDataSet {
   const batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[] = [];
   const stockHistory: StockHistory[] = [];
 
-  // ===== 根据真实 XMAX 历史价格，快速查找 signDate 对应 close =====
+  // ===== 根据真实历史价格，快速查找 signDate 对应 close =====
   const priceLookup = new Map<string, number>();
-  for (const [d, close] of XMAX_HALF_YEAR_PRICE_SERIES) priceLookup.set(d, close);
+  for (const [d, close] of HISTORICAL_HALF_YEAR_PRICE_SERIES) priceLookup.set(d, close);
   const sortedDates = Array.from(priceLookup.keys()).sort();
   const findClosestClose = (targetDateStr: string): number => {
     if (priceLookup.has(targetDateStr)) return priceLookup.get(targetDateStr)!;
@@ -177,12 +177,12 @@ export function generateMockData(): MockDataSet {
       if (d <= targetDateStr) best = d;
       else break;
     }
-    return priceLookup.get(best) ?? XMAX_CURRENT_LIVE_PRICE;
+    return priceLookup.get(best) ?? LATEST_SNAPSHOT_PRICE;
     void targetTs;
   };
 
   // 当前最新价：所有批次共享
-  const currentStockPrice = XMAX_CURRENT_LIVE_PRICE;
+  const currentStockPrice = LATEST_SNAPSHOT_PRICE;
 
   STOCKS.forEach((stock, sIdx) => {
     const rng = createSeededRandom(1000 + sIdx);
@@ -298,7 +298,7 @@ export function generateMockData(): MockDataSet {
     const initialTotalAmount = initialTotalAmountCents / 100;
     const split = calculateInvestmentSplit(initialTotalAmount);
 
-    // 入场价 = signDate 当日 XMAX 真实收盘价
+    // 入场价 = signDate 当日真实收盘价（历史行情回查）
     const stockPriceAtStart = Number(findClosestClose(signDateISO).toFixed(4));
 
     const totalShares = calculateTotalShares(initialTotalAmount, stockPriceAtStart);
@@ -690,8 +690,10 @@ export function clearMockMarginPatches(): void {
 
 let cachedMockData: MockDataSet | null = null;
 
-// Keep the previous multi-symbol ledger untouched; never import it into XMAX fixtures.
-export const FINANCE_STORE_KEY = "risk_control_finance_xmax_v1";
+// Keep the previous multi-symbol ledger untouched; never import it into single-symbol fixtures.
+// Migration: old key risk_control_finance_xmax_v1 -> new key risk_control_finance_v1 (symbol-agnostic)
+export const FINANCE_STORE_KEY_LEGACY: string = "risk_control_finance_xmax_v1";
+export const FINANCE_STORE_KEY: string = "risk_control_finance_v1";
 type FinanceRecord = { fingerprint: string; clientFingerprints?: Record<string, string>; batch: BatchLike };
 type FinanceStore = Record<string, FinanceRecord>;
 
@@ -700,8 +702,8 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
   if (process.env.NODE_ENV !== "development" || typeof window === "undefined") {
     throw new Error("仅允许在本地开发预览中重置测试数据。");
   }
-  const keys = [FINANCE_STORE_KEY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
-    "risk_control_xmax_notifications_v1", "risk_control_xmax_alert_ack_v1"];
+  const keys = [FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
+    "risk_control_notifications_v1", "risk_control_xmax_notifications_v1", "risk_control_alert_ack_v1", "risk_control_xmax_alert_ack_v1"];
   const storage = window.localStorage;
   const backup = Object.fromEntries(keys.map((key) => [key, storage.getItem(key)]));
   const backupKey = `risk_control_test_backup_${Date.now()}`;
@@ -759,8 +761,22 @@ function financeRecord(batch: BatchLike): FinanceRecord {
   };
 }
 
+function migrateFinanceStoreIfNeeded(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const legacy = window.localStorage.getItem(FINANCE_STORE_KEY_LEGACY);
+    if (!legacy) return;
+    const current = window.localStorage.getItem(FINANCE_STORE_KEY);
+    if (!current) {
+      window.localStorage.setItem(FINANCE_STORE_KEY, legacy);
+    }
+    window.localStorage.removeItem(FINANCE_STORE_KEY_LEGACY);
+  } catch {}
+}
+
 function readFinanceStore(): FinanceStore {
   if (typeof window === "undefined") return {};
+  migrateFinanceStoreIfNeeded();
   const raw = window.localStorage.getItem(FINANCE_STORE_KEY);
   if (!raw) return {};
   const parsed = JSON.parse(raw);
@@ -816,6 +832,7 @@ export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLik
  */
 export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: string; reason?: string } {
   if (typeof window === "undefined" || process.env.NODE_ENV !== "development") return { didReset: false };
+  migrateFinanceStoreIfNeeded();
   const store: Record<string, unknown> = (() => {
     try { return JSON.parse(window.localStorage.getItem(FINANCE_STORE_KEY) || "{}"); } catch { return {}; }
   })();
@@ -1034,7 +1051,7 @@ export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client
   }
   const now = new Date();
   const existing = getMockData();
-  const stockSymbol = (input.stockSymbol || "XMAX").trim().toUpperCase() || "XMAX";
+  const stockSymbol = (input.stockSymbol || "").trim().toUpperCase();
   const stockName = (input.stockName || stockSymbol).trim() || stockSymbol;
   const maxNum = existing.batches.reduce((m, b) => {
     const m2 = String(b.batchNumber || "").match(/-(\d{3})$/);

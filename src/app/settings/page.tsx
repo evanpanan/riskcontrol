@@ -1337,7 +1337,7 @@ export default function SettingsPage() {
               </div>
             </div>
             {(() => {
-              const symbol = (quote.symbol || "XMAX").trim().toUpperCase();
+              const symbol = (quote.symbol || "").trim().toUpperCase();
               const price = quoteLive ? Number(quoteLive.price) : 41.88;
               const chg = quoteLive ? Number(quoteLive.changePct) : 0.36;
               const up = chg >= 0;
@@ -1393,7 +1393,7 @@ export default function SettingsPage() {
             <Label className="text-xs">股票代码 Symbol（必填，将作为顶部唯一展示字段）</Label>
             <Input
               className="mt-1.5 font-mono text-sm"
-              placeholder="例：XMAX / AAPL / 0700.HK"
+              placeholder="例：AAPL / NVDA / 0700.HK / 600519.SS"
               value={quote.symbol || ""}
               onChange={(e) => setQuote({ ...quote, symbol: String(e.target.value || "").toUpperCase() })}
             />

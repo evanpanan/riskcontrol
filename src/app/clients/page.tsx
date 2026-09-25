@@ -21,8 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo } from "@/lib/mockData";
+import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
+import { getLiveQuoteSettings } from "@/lib/liveQuote";
 import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
 import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit } from "@/lib/riskEngine";
 import { toast } from "sonner";
@@ -124,7 +125,7 @@ export default function ClientsPage() {
       return base.toISOString().split("T")[0];
     })(),
     batchNumber: "",
-    stockSymbol: "XMAX",
+    stockSymbol: "",
     currentStockPrice: "",
   });
   const [createBatchFetchingQuote, setCreateBatchFetchingQuote] = useState(false);
@@ -154,7 +155,8 @@ export default function ClientsPage() {
     setHydrated(true);
     const onStorage = (e: StorageEvent) => {
       if (e.key === "risk_control_client_status_v1") setTick((t) => t + 1);
-      if (e.key === "risk_control_finance_xmax_v1") setMockTick((t) => t + 1);
+      if (e.key === FINANCE_STORE_KEY || e.key === FINANCE_STORE_KEY_LEGACY)
+        setMockTick((t) => t + 1);
     };
     const onFinanceChanged = () => setMockTick((t) => t + 1);
     window.addEventListener("storage", onStorage);
@@ -516,7 +518,8 @@ export default function ClientsPage() {
                     maturityBase.setUTCFullYear(maturityBase.getUTCFullYear() + 2);
                     maturityBase.setUTCDate(maturityBase.getUTCDate() - 1);
                     const matStr = maturityBase.toISOString().split("T")[0];
-                    const initialSymbol = "XMAX";
+                    const initialSymbol =
+                      (typeof window !== "undefined" && getLiveQuoteSettings()?.symbol?.trim().toUpperCase()) || "";
                     setCreateBatchForm({
                       signDate: signStr,
                       maturityDate: matStr,
@@ -2126,7 +2129,12 @@ export default function ClientsPage() {
                     batchNumber: bn,
                     signDate: sd!,
                     maturityDate: md!,
-                    stockSymbol: (createBatchForm.stockSymbol || "XMAX").trim().toUpperCase(),
+                    stockSymbol: (
+                      createBatchForm.stockSymbol ||
+                      (typeof window !== "undefined" ? getLiveQuoteSettings()?.symbol ?? "" : "")
+                    )
+                      .trim()
+                      .toUpperCase(),
                     currentStockPrice: basePrice,
                   });
                   setMockTick((t) => t + 1);

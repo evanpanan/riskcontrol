@@ -1,7 +1,7 @@
-// XMAX 过去半年真实日线收盘价 (Nasdaq Unofficial source, captured 2026-09-24)
+// 过去半年真实日线收盘价 (Nasdaq Unofficial source, captured 2026-09-24)
 // 用于构造过去半年批次的真实 signDate -> stockPriceAtStart 映射，保证收益率符合真实行情
 // 数组每项: [日期ISO字符串, 当日Close]
-export const XMAX_HALF_YEAR_PRICE_SERIES: Array<[string, number]> = [
+export const HISTORICAL_HALF_YEAR_PRICE_SERIES: Array<[string, number]> = [
   ["2026-02-26", 6.130],
   ["2026-03-01", 6.190],
   ["2026-03-02", 6.130],
@@ -177,6 +177,6 @@ export const RECOMMENDED_BATCH_SIGN_DATES: string[] = [
   "2026-08-26",  // 2026-08 Close=$9.05
 ];
 
-// 当前 XMAX 最新收盘价 (9月22日快照，用于所有批次的 currentStockPrice)
-export const XMAX_CURRENT_LIVE_PRICE: number = 8.710; // as of 2026-09-22
+// 当前标的最新收盘价快照 (9月22日，用于所有批次的 currentStockPrice 默认值)
+export const LATEST_SNAPSHOT_PRICE: number = 8.710; // as of 2026-09-22
 

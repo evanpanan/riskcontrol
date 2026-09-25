@@ -64,16 +64,24 @@ export interface NotificationResult {
   logError?: string;
 }
 
-export const LAST_NOTIFICATIONS_KEY = "risk_control_xmax_notifications_v1";
+export const LAST_NOTIFICATIONS_KEY_LEGACY = "risk_control_xmax_notifications_v1";
+export const LAST_NOTIFICATIONS_KEY = "risk_control_notifications_v1";
 
-export interface NotificationLogEntry {
-  id: string;
-  payload: NotificationPayload;
-  result: NotificationResult;
+function migrateNotificationLog(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const legacy = localStorage.getItem(LAST_NOTIFICATIONS_KEY_LEGACY);
+    if (!legacy) return;
+    if (!localStorage.getItem(LAST_NOTIFICATIONS_KEY)) {
+      localStorage.setItem(LAST_NOTIFICATIONS_KEY, legacy);
+    }
+    localStorage.removeItem(LAST_NOTIFICATIONS_KEY_LEGACY);
+  } catch {}
 }
 
 function getLog(): NotificationLogEntry[] {
   if (typeof window === "undefined") return [];
+  migrateNotificationLog();
   try {
     const raw = localStorage.getItem(LAST_NOTIFICATIONS_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -84,6 +92,7 @@ function getLog(): NotificationLogEntry[] {
 
 function pushLog(entry: NotificationLogEntry) {
   if (typeof window === "undefined") return;
+  migrateNotificationLog();
   const existing = getLog();
   existing.unshift(entry);
     localStorage.setItem(

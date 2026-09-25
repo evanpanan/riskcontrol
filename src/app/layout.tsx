@@ -6,7 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth/authProvider";
 import { Toaster } from "sonner";
-import { FINANCE_STORE_KEY } from "@/lib/mockData";
+import { FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 
 const fontSans = FontSans({
   subsets: ["latin"],
@@ -21,9 +21,12 @@ export const metadata: Metadata = {
 
 const RAW_KEYS = [
   FINANCE_STORE_KEY,
+  FINANCE_STORE_KEY_LEGACY,
   "risk_control_mock_margin_patches_v1",
   "risk_control_client_status_v1",
+  "risk_control_notifications_v1",
   "risk_control_xmax_notifications_v1",
+  "risk_control_alert_ack_v1",
   "risk_control_xmax_alert_ack_v1",
 ];
 

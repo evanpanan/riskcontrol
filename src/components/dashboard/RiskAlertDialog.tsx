@@ -126,7 +126,7 @@ export function RiskAlertDialog({
           </DialogTitle>
         </DialogHeader>
         {process.env.NODE_ENV === "development" && <p className="text-[11px] text-muted-foreground">
-          XMAX 测试场景使用模拟报价，不代表实时行情。
+          开发模式下使用快照/模拟报价进行场景演示，不代表实时行情。
         </p>}
 
         <div className="flex-1 overflow-y-auto mt-4 space-y-2 pr-1">

@@ -45,12 +45,26 @@ export function getWebAlertSettings(): WebAlertSettings {
   }
 }
 
-const ACK_KEY = "risk_control_xmax_alert_ack_v1";
+const ACK_KEY_LEGACY = "risk_control_xmax_alert_ack_v1";
+const ACK_KEY = "risk_control_alert_ack_v1";
 
 export type AckShape = Record<string, number>;
 
+function migrateAlertAcks(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const legacy = window.localStorage.getItem(ACK_KEY_LEGACY);
+    if (!legacy) return;
+    if (!window.localStorage.getItem(ACK_KEY)) {
+      window.localStorage.setItem(ACK_KEY, legacy);
+    }
+    window.localStorage.removeItem(ACK_KEY_LEGACY);
+  } catch {}
+}
+
 export function getAlertAcks(): AckShape {
   if (typeof window === "undefined") return {};
+  migrateAlertAcks();
   try {
     const raw = window.localStorage.getItem(ACK_KEY);
     return raw ? (JSON.parse(raw) as AckShape) : {};
@@ -61,6 +75,7 @@ export function getAlertAcks(): AckShape {
 
 export function setAlertAcks(acks: AckShape) {
   if (typeof window === "undefined") return;
+  migrateAlertAcks();
   try {
     window.localStorage.setItem(ACK_KEY, JSON.stringify(acks));
   } catch {}
@@ -76,5 +91,6 @@ export function clearAllAlerts() {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(ACK_KEY);
+    window.localStorage.removeItem(ACK_KEY_LEGACY);
   } catch {}
 }
