@@ -377,6 +377,11 @@ export function ClientTable({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <p className="font-semibold text-sm truncate">{client.name}</p>
+                          {(client as any).clientNo ? (
+                            <span className="font-mono text-[10px] px-1.5 py-0 rounded border border-primary/30 bg-primary/10 text-primary/90 h-[18px] leading-[18px] inline-flex items-center">
+                              {String((client as any).clientNo)}
+                            </span>
+                          ) : null}
                           {isVipClient(client) && (
                             <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">
                               VIP

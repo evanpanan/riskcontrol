@@ -35,7 +35,7 @@ import {
   HIGH_INVESTMENT_THRESHOLD,
 } from "@/lib/riskEngine";
 import { triggerClientAddedAlert } from "@/lib/notifier";
-import { getMockData, commitBatchFinance } from "@/lib/mockData";
+import { getMockData, commitBatchFinance, nextClientNo } from "@/lib/mockData";
 import { ClientStatus } from "@prisma/client";
 import {
   UserPlus,
@@ -125,8 +125,10 @@ export function AddClientDialog({
     const mock = getMockData();
     const batch = mock.batches.find((b) => b.id === batchId);
     const splitRatio = calculateProfitSplitRatio(numAmount);
+    const signYear = new Date(signDate).getUTCFullYear();
     const newClient = {
       id: `client-${Date.now()}`,
+      clientNo: nextClientNo(mock.batches, signYear),
       name,
       investmentAmount: numAmount,
       bdManager,

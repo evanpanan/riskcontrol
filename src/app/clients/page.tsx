@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getMockData, commitBatchFinance, createNewBatch, reloadMockData } from "@/lib/mockData";
+import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
 import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit } from "@/lib/riskEngine";
@@ -98,7 +98,7 @@ export default function ClientsPage() {
   const [tick, setTick] = useState(0);
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
-  const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string }>(null);
+  const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
   const [clientDetail, setClientDetail] = useState<string | null>(null);
   const [deleteClientConfirm, setDeleteClientConfirm] = useState<null | { id: string; batchId: string; name: string }>(null);
   const [addForm, setAddForm] = useState({
@@ -144,7 +144,7 @@ export default function ClientsPage() {
   });
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
-  const [lastAddedSummary, setLastAddedSummary] = useState<{ name: string; amount: number; batchNumber: string }[]>([]);
+  const [lastAddedSummary, setLastAddedSummary] = useState<{ clientNo?: string; name: string; amount: number; batchNumber: string }[]>([]);
   const [moreFilterOpen, setMoreFilterOpen] = useState(false);
   const [bdRankingOpen, setBdRankingOpen] = useState(false);
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
@@ -246,6 +246,7 @@ export default function ClientsPage() {
       const q = search.toLowerCase();
       result = result.filter(
         (c) =>
+          String(c.clientNo ?? "").toLowerCase().includes(q) ||
           c.name?.toLowerCase().includes(q) ||
           c.bdManager?.toLowerCase().includes(q) ||
           c.batchNumber?.toLowerCase().includes(q)
@@ -423,6 +424,7 @@ export default function ClientsPage() {
                         ? "持仓中 / 签约有效"
                         : "混合状态";
                     rows.push({
+                      "客户编号": String(c.clientNo ?? ""),
                       "客户姓名": c.name ?? "",
                       "客户ID尾号": String(c.id ?? "").slice(-6),
                       "商务经理": c.bdManager ?? "",
@@ -437,18 +439,19 @@ export default function ClientsPage() {
                   }
                   const sheet1 = XLSX.utils.json_to_sheet(rows, {
                     header: [
-                      "客户姓名", "客户ID尾号", "商务经理", "参与批次（按签约时间升序，多个批次以逗号分隔）",
+                      "客户编号", "客户姓名", "客户ID尾号", "商务经理", "参与批次（按签约时间升序，多个批次以逗号分隔）",
                       "参与批次数目", "累计投资总额（USD，多批次合计）", "当前行所在批次投资金额（USD）",
                       "签约状态（客户维度聚合）", "最近一次签约日期", "VIP客户标记"
                     ]
                   });
                   sheet1["!cols"] = [
-                    { wch: 12 }, { wch: 10 }, { wch: 24 }, { wch: 60 }, { wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 10 }
+                    { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 24 }, { wch: 60 }, { wch: 10 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 10 }
                   ];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, sheet1, "客户档案（按自然人去重）");
                   // Sheet 2：原始明细（不去重，每一条客户批次参与记录一行）
                   const detailRows = (all as any[]).map((c: any) => ({
+                    "客户编号": String(c.clientNo ?? ""),
                     "客户姓名": c.name ?? "",
                     "客户ID": c.id ?? "",
                     "商务经理": c.bdManager ?? "",
@@ -465,7 +468,7 @@ export default function ClientsPage() {
                   }));
                   const sheet2 = XLSX.utils.json_to_sheet(detailRows);
                   sheet2["!cols"] = [
-                    { wch: 12 }, { wch: 26 }, { wch: 24 }, { wch: 18 }, { wch: 20 }, { wch: 12 },
+                    { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 24 }, { wch: 18 }, { wch: 20 }, { wch: 12 },
                     { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 10 }
                   ];
                   XLSX.utils.book_append_sheet(wb, sheet2, "客户批次参与明细（每批次一行）");
@@ -701,7 +704,7 @@ export default function ClientsPage() {
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="搜索：姓名 / 商务经理 / 批次号..."
+                  placeholder="搜索：编号 / 姓名 / 商务经理 / 批次号..."
                   className="pl-8 h-9 w-[240px] text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -772,7 +775,9 @@ export default function ClientsPage() {
                         <ClientAvatar name={c.name} size="sm" rounded="lg" />
                         <div className="min-w-0">
                           <p className="font-semibold text-sm truncate">{c.name}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono">
+                          <p className="text-[10px] text-muted-foreground font-mono truncate" title={c.clientNo}>
+                            <span className="text-primary/90 font-semibold">{String(c.clientNo ?? "—")}</span>
+                            {" · "}
                             {(() => {
                               const d = getPersonFirstSignDate(c);
                               return d ? formatDate(d) : "-";
@@ -876,7 +881,7 @@ export default function ClientsPage() {
                               signDate: (c.signDate ? new Date(c.signDate) : new Date()).toISOString().split("T")[0],
                               status: (c.status as ClientStatus) || ClientStatus.ACTIVE,
                             });
-                            setEditClientOpen({ id: c.id, batchId: c.batchId });
+                            setEditClientOpen({ id: c.id, batchId: c.batchId, clientNo: (c as any).clientNo });
                           }}
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -1082,8 +1087,14 @@ export default function ClientsPage() {
                     <li key={i} className="flex items-center justify-between text-[11px] px-2 py-1 rounded bg-background/50">
                       <div className="flex items-center gap-2">
                         <ClientAvatar name={x.name} size="xs" rounded="full" />
-                        <span className="font-semibold">{x.name}</span>
-                        <span className="text-muted-foreground font-mono text-[10px]">{x.batchNumber}</span>
+                        <div className="flex flex-col items-start">
+                          <span className="font-semibold leading-tight">{x.name}</span>
+                          <span className="text-muted-foreground font-mono text-[10px] leading-tight">
+                            {x.clientNo ? <span className="text-primary/90 font-semibold">{x.clientNo}</span> : null}
+                            {x.clientNo ? " · " : null}
+                            {x.batchNumber}
+                          </span>
+                        </div>
                       </div>
                       <span className="font-mono font-semibold text-success">{formatCurrency(x.amount)}</span>
                     </li>
@@ -1132,8 +1143,10 @@ export default function ClientsPage() {
                   const batch = mock.batches.find((x) => x.id === addForm.batchId);
                   if (!batch) return;
                   const split = calculateProfitSplitRatio(numAmt);
+                  const signYear = new Date(addForm.signDate).getUTCFullYear();
                   const newClient: any = {
                     id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    clientNo: nextClientNo(mock.batches, signYear),
                     name: addForm.name.trim(),
                     investmentAmount: numAmt,
                     initialInvestment: numAmt,
@@ -1165,7 +1178,7 @@ export default function ClientsPage() {
                   } catch {}
                   setLastAddedSummary((xs) => [
                     ...xs,
-                    { name: newClient.name, amount: numAmt, batchNumber: batch.batchNumber },
+                    { clientNo: newClient.clientNo, name: newClient.name, amount: numAmt, batchNumber: batch.batchNumber },
                   ]);
                   window.dispatchEvent(
                     new CustomEvent("risk-control:client-added", {
@@ -1205,7 +1218,14 @@ export default function ClientsPage() {
                 <Pencil className="h-4.5 w-4.5 text-primary-foreground" />
               </div>
               <div>
-                <p className="font-bold">编辑客户信息</p>
+                <p className="font-bold flex items-center gap-2">
+                  编辑客户信息
+                  {editClientOpen?.clientNo ? (
+                    <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0 h-4 border-primary/30 text-primary/90 bg-primary/5">
+                      {String(editClientOpen.clientNo)}
+                    </Badge>
+                  ) : null}
+                </p>
                 <DialogDescription className="text-[11px] text-muted-foreground mt-0.5">
                   允许修改姓名 / 本金 / 商务经理 / 签约日期 / 状态；已结算客户不能再修改
                 </DialogDescription>

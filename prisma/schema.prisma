@@ -103,6 +103,7 @@ model Batch {
 
 model Client {
   id              String       @id @default(cuid())
+  clientNo        String?      @unique
   batchId         String
   name            String
   investmentAmount Float
@@ -125,6 +126,7 @@ model Client {
   @@index([bdManager])
   @@index([status])
   @@index([bdUserId])
+  @@index([clientNo])
 }
 
 model MarginCall {

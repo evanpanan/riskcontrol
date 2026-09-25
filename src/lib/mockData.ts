@@ -69,6 +69,96 @@ function deterministicOffsetDate(baseDate: Date, offsetDays: number, fracHours: 
   return new Date(baseDate.getTime() + offsetDays * 86400000 + Math.round(fracHours * 3600000));
 }
 
+export function formatClientNo(year: number, seq: number): string {
+  const yy = String(year).slice(-2);
+  const pad = String(Math.max(1, seq | 0)).padStart(5, "0");
+  return `C${yy}${pad}`;
+}
+
+function clientYearOf(c: Client): number {
+  const d = (c.signDate ? new Date(c.signDate as any) : null) ?? (c.createdAt ? new Date((c as any).createdAt as any) : new Date());
+  const y = d.getUTCFullYear();
+  return Number.isFinite(y) && y > 2000 ? y : new Date().getUTCFullYear();
+}
+
+function stableBatchSortKey(b: Batch & { clients?: Client[] }): [number, string, string] {
+  const sd = b.signDate ? new Date(b.signDate as any).getTime() : 0;
+  return [Number.isFinite(sd) ? sd : 0, b.batchNumber || String(0), b.id];
+}
+
+export type ClientNoAllocator = { next: (forYear?: number) => string };
+
+/**
+ * 为缺失 clientNo 的客户回填稳定唯一编号，保证：
+ *  - 同一客户每次 reload 编号一致（按「批次签约日期升序 → 批次号 → 批次内 clients 顺序」排序）
+ *  - 按签约年份独立编号（C + 两位年份 + 5 位序号），例如 C2600001
+ *  - 已存在 clientNo 的客户绝不覆盖
+ *
+ * getMockData() 返回前调用，兼容 localStorage 旧账本 & 新生成的种子数据。
+ * 返回的 allocator.next(forYear) 用于后续新增客户时拿到下一个可用编号。
+ */
+export function ensureClientNosOnBatches(
+  batches: Array<Batch & { clients?: Client[] }>,
+): ClientNoAllocator {
+  const sorted = [...batches].sort((a, b) => {
+    const ka = stableBatchSortKey(a);
+    const kb = stableBatchSortKey(b);
+    for (let i = 0; i < ka.length; i++) {
+      if (ka[i] < kb[i]) return -1;
+      if (ka[i] > kb[i]) return 1;
+    }
+    return 0;
+  });
+  const yearMaxSeq = new Map<number, number>();
+  const all: Client[] = [];
+  for (const b of sorted) {
+    for (const c of b.clients ?? []) all.push(c);
+  }
+  // first pass: 统计各年份已使用的最大 seq
+  for (const c of all) {
+    const no = (c as any).clientNo as string | null | undefined;
+    if (!no) continue;
+    const m = /^C(\d{2})(\d{5})$/.exec(no);
+    if (!m) continue;
+    const yy = Number(m[1]);
+    const seq = Number(m[2]);
+    if (!Number.isFinite(yy) || !Number.isFinite(seq)) continue;
+    const century = Math.floor(new Date().getUTCFullYear() / 100);
+    const year = century * 100 + yy;
+    yearMaxSeq.set(year, Math.max(yearMaxSeq.get(year) ?? 0, seq));
+  }
+  // second pass: 按稳定顺序给缺编号的客户依次编号
+  for (const c of all) {
+    const no = (c as any).clientNo as string | null | undefined;
+    if (no) continue;
+    const year = clientYearOf(c);
+    const nxt = (yearMaxSeq.get(year) ?? 0) + 1;
+    yearMaxSeq.set(year, nxt);
+    (c as any).clientNo = formatClientNo(year, nxt);
+  }
+  return {
+    next: (forYear?: number) => {
+      const year = forYear && forYear > 2000 ? forYear : new Date().getUTCFullYear();
+      const nxt = (yearMaxSeq.get(year) ?? 0) + 1;
+      yearMaxSeq.set(year, nxt);
+      return formatClientNo(year, nxt);
+    },
+  };
+}
+
+let lastClientNoAllocator: ClientNoAllocator | null = null;
+
+/** 从当前 mock 数据分配器拿到下一个客户编号；如果 allocator 未构建则立即构建。 */
+export function nextClientNo(batches: Array<Batch & { clients?: Client[] }>, forYear?: number): string {
+  if (!lastClientNoAllocator) {
+    lastClientNoAllocator = ensureClientNosOnBatches(batches);
+  }
+  return lastClientNoAllocator.next(forYear);
+}
+
+/** 当缓存被刷新时同步重置编号分配器，避免序号复用冲突。 */
+function resetClientNoAllocator() { lastClientNoAllocator = null; }
+
 export function generateMockData(): MockDataSet {
   const now = new Date();
   const batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[] = [];
@@ -648,6 +738,8 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
   storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
   storage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
   for (const key of keys.slice(1)) storage.removeItem(key);
+  resetClientNoAllocator();
+  lastClientNoAllocator = ensureClientNosOnBatches(fresh.batches);
   cachedMockData = fresh;
   window.dispatchEvent(new CustomEvent("risk-control:finance-changed"));
   window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
@@ -833,7 +925,14 @@ export function getMockData(): MockDataSet {
         window.localStorage.setItem(FINANCE_STORE_KEY, serialized);
       }
     }
+    resetClientNoAllocator();
+    lastClientNoAllocator = ensureClientNosOnBatches(loaded.batches);
     cachedMockData = loaded;
+  } else {
+    if (!lastClientNoAllocator) {
+      // 缓存中已加载但此前未经过 ensureClientNos（例如跨 tab 事件），补齐编号。
+      lastClientNoAllocator = ensureClientNosOnBatches(cachedMockData.batches);
+    }
   }
   return cachedMockData;
 }
@@ -841,6 +940,7 @@ export function getMockData(): MockDataSet {
 /** Re-read the persisted ledger after explicit refresh or a cross-tab storage event. */
 export function reloadMockData(): MockDataSet {
   cachedMockData = null;
+  resetClientNoAllocator();
   return getMockData();
 }
 
