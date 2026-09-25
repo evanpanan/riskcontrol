@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { cn, formatCurrency, formatPercent, formatCompactNumber } from "@/lib/utils";
 
 type Formatter = "currency" | "percent" | "number" | "dollarCompact";
@@ -60,7 +60,7 @@ export function isMarketOpenNow(now = new Date()): boolean {
   }
 }
 
-export function FlashNumber({
+export const FlashNumber = memo(function FlashNumber({
   value,
   formatter = "number",
   className,
@@ -212,4 +212,4 @@ export function FlashNumber({
       {suffix}
     </span>
   );
-}
+});

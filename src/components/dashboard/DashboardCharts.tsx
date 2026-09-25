@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { FlashNumber } from "@/components/ui/FlashNumber";
 import { cn } from "@/lib/utils";
@@ -161,7 +161,56 @@ function synthesizeHistory(
   });
 }
 
-/* -------- 资产价值曲线图 -------- */
+/* -------- 合成收益率历史（与 synthesizeHistory 对应：最新点 = 当前百分比锚定） -------- */
+function synthesizeYieldHistory(
+  totalPnLPercent: number,
+  institutionPnLPercent: number,
+  allClientsPnLPercent: number,
+  timeframe: Timeframe,
+  seed: number
+): YieldDataPoint[] {
+  const N = TIMEFRAME_POINTS[timeframe];
+  const rnd = mulberry32(seed + TIMEFRAME_POINTS[timeframe] * 11);
+  const vol =
+    timeframe === "1D"
+      ? 1.2
+      : timeframe === "1W"
+      ? 2.5
+      : timeframe === "1M"
+      ? 5
+      : timeframe === "3M"
+      ? 10
+      : timeframe === "6M"
+      ? 16
+      : 28;
+  const walk: { t: number; i: number; c: number }[] = [];
+  for (let idx = 0; idx < N; idx++) {
+    const k = (idx + 1) / N;
+    walk.push({
+      t: totalPnLPercent * k + (rnd() - 0.5) * vol,
+      i: institutionPnLPercent * k + (rnd() - 0.5) * vol * 1.2,
+      c: allClientsPnLPercent * k + (rnd() - 0.5) * vol * 0.85,
+    });
+  }
+  const last = walk[walk.length - 1];
+  const adjT = totalPnLPercent - last.t;
+  const adjI = institutionPnLPercent - last.i;
+  const adjC = allClientsPnLPercent - last.c;
+  return walk.map((w, i) => {
+    const k = (i + 1) / N;
+    const t = w.t + adjT * k;
+    const inst = w.i + adjI * k;
+    const cl = w.c + adjC * k;
+    return {
+      label: formatTick(timeframe, i, N),
+      total: +t.toFixed(2),
+      institution: +inst.toFixed(2),
+      client: +cl.toFixed(2),
+    };
+  });
+}
+
+/* -------- CHART_COLORS + module-level formatters（引用稳定，避免 Recharts 每帧 new function） -------- */
 const CHART_COLORS = {
   total: "#60a5fa",      // 总仓位 - 蓝 (primary-ish)
   institution: "#f97316", // 机构 - 橙 (warning-ish)
@@ -171,37 +220,86 @@ const CHART_COLORS = {
   yieldClient: "#10b981", // 客户收益率 - 翠绿
 };
 
+const VALUE_LEGEND_MAP: Record<string, { label: string; color: string }> = {
+  total: { label: "总仓位价值", color: CHART_COLORS.total },
+  institution: { label: "机构资产价值", color: CHART_COLORS.institution },
+  client: { label: "客户资产价值", color: CHART_COLORS.client },
+};
+
+const YIELD_LEGEND_MAP: Record<string, { label: string; color: string }> = {
+  total: { label: "资产总收益率", color: CHART_COLORS.yieldTotal },
+  institution: { label: "机构总收益率", color: CHART_COLORS.yieldInst },
+  client: { label: "客户总收益率", color: CHART_COLORS.yieldClient },
+};
+
+const formatCompactMoney = (v: number) =>
+  "$" + v.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 2 });
+
+const formatCompactMoneyY = (v: number) =>
+  "$" + v.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+
+const formatCompactTrend = (v: number) =>
+  v.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 2,
+  });
+
+const valueTooltipFormatter = (v: number, n: string) => {
+  const cfg = VALUE_LEGEND_MAP[n];
+  return [formatCompactMoney(v), cfg?.label ?? n];
+};
+
+const valueLegendFormatter = (v: string) => {
+  const cfg = VALUE_LEGEND_MAP[v];
+  return cfg ? <span style={{ color: cfg.color, fontWeight: 500 }}>{cfg.label}</span> : v;
+};
+
+const yieldTooltipFormatter = (v: number, n: string) => {
+  const cfg = YIELD_LEGEND_MAP[n];
+  return [
+    <span key={n} style={{ color: cfg?.color, fontWeight: 600 }}>
+      {v >= 0 ? "+" : ""}
+      {v.toFixed(2)}%
+    </span>,
+    cfg?.label ?? n,
+  ];
+};
+
+const yieldLegendFormatter = (v: string) => {
+  const cfg = YIELD_LEGEND_MAP[v];
+  return cfg ? <span style={{ color: cfg.color, fontWeight: 500 }}>{cfg.label}</span> : v;
+};
+
+type ValueDataPoint = { label: string; total: number; institution: number; client: number };
+type YieldDataPoint = { label: string; total: number; institution: number; client: number };
+
 function ValueChart({
-  seed,
   currentMarketValueTotal,
   institutionValue,
   clientValue,
   totalAUMCost,
   institutionCost,
   clientCost,
+  timeframe,
+  onTimeframeChange,
+  valueDataByTimeframe,
 }: {
-  seed: number;
   currentMarketValueTotal: number;
   institutionValue: number;
   clientValue: number;
   totalAUMCost: number;
   institutionCost: number;
   clientCost: number;
+  timeframe: Timeframe;
+  onTimeframeChange: (t: Timeframe) => void;
+  valueDataByTimeframe: Record<Timeframe, ValueDataPoint[]>;
 }) {
-  const [tf, setTf] = useState<Timeframe>("1M");
-  const data = useMemo(
-    () => synthesizeHistory(currentMarketValueTotal, institutionValue, clientValue, tf, seed),
-    [currentMarketValueTotal, institutionValue, clientValue, tf, seed]
-  );
+  const data = valueDataByTimeframe[timeframe];
   const totalDelta = currentMarketValueTotal - totalAUMCost;
   const instDelta = institutionValue - institutionCost;
   const clientDelta = clientValue - clientCost;
-  const formatMoney = (v: number) =>
-    "$" +
-    v.toLocaleString(undefined, {
-      notation: "compact",
-      maximumFractionDigits: 2,
-    });
 
   return (
     <ChartShell
@@ -219,8 +317,8 @@ function ValueChart({
           />
         </div>
       }
-      timeframe={tf}
-      onTimeframeChange={setTf}
+      timeframe={timeframe}
+      onTimeframeChange={onTimeframeChange}
     >
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
@@ -250,9 +348,7 @@ function ValueChart({
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
             axisLine={{ stroke: "hsl(var(--border) / 0.7)" }}
             tickLine={false}
-            tickFormatter={(v) =>
-              "$" + v.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 })
-            }
+            tickFormatter={formatCompactMoneyY}
             width={60}
           />
           <Tooltip
@@ -264,29 +360,12 @@ function ValueChart({
               boxShadow: "0 10px 40px -10px hsl(0 0% 0% / 0.6)",
             }}
             labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
-            formatter={(v: number, n: string) => {
-              const map: Record<string, string> = {
-                total: "总仓位价值",
-                institution: "机构资产价值",
-                client: "客户资产价值",
-              };
-              return [formatMoney(v), map[n] ?? n];
-            }}
+            formatter={valueTooltipFormatter}
           />
           <Legend
             iconType="circle"
             wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
-            formatter={(v: string) => {
-              const map: Record<string, { label: string; color: string }> = {
-                total: { label: "总仓位价值", color: CHART_COLORS.total },
-                institution: { label: "机构资产价值", color: CHART_COLORS.institution },
-                client: { label: "客户资产价值", color: CHART_COLORS.client },
-              };
-              const cfg = map[v];
-              return (
-                <span style={{ color: cfg.color, fontWeight: 500 }}>{cfg.label}</span>
-              );
-            }}
+            formatter={valueLegendFormatter}
           />
           <Line
             type="monotone"
@@ -351,70 +430,27 @@ function ValueChart({
 
 /* -------- 收益率曲线图 -------- */
 function YieldChart({
-  seed,
   totalPnLPercent,
   institutionPnLPercent,
   allClientsPnLPercent,
   totalPnL,
   institutionPnL,
   allClientsPnL,
+  timeframe,
+  onTimeframeChange,
+  yieldDataByTimeframe,
 }: {
-  seed: number;
   totalPnLPercent: number;
   institutionPnLPercent: number;
   allClientsPnLPercent: number;
   totalPnL: number;
   institutionPnL: number;
   allClientsPnL: number;
+  timeframe: Timeframe;
+  onTimeframeChange: (t: Timeframe) => void;
+  yieldDataByTimeframe: Record<Timeframe, YieldDataPoint[]>;
 }) {
-  const [tf, setTf] = useState<Timeframe>("1M");
-  const data = useMemo(() => {
-    const N = TIMEFRAME_POINTS[tf];
-    const rnd = mulberry32(seed + TIMEFRAME_POINTS[tf] * 11);
-    const vol =
-      tf === "1D"
-        ? 1.2
-        : tf === "1W"
-        ? 2.5
-        : tf === "1M"
-        ? 5
-        : tf === "3M"
-        ? 10
-        : tf === "6M"
-        ? 16
-        : 28;
-    const walk: { t: number; i: number; c: number }[] = [];
-    for (let idx = 0; idx < N; idx++) {
-      const k = (idx + 1) / N;
-      walk.push({
-        t: totalPnLPercent * k + (rnd() - 0.5) * vol,
-        i: institutionPnLPercent * k + (rnd() - 0.5) * vol * 1.2,
-        c: allClientsPnLPercent * k + (rnd() - 0.5) * vol * 0.85,
-      });
-    }
-    /* 让最后一点等于当前百分比 */
-    const last = walk[walk.length - 1];
-    const adjT = totalPnLPercent - last.t;
-    const adjI = institutionPnLPercent - last.i;
-    const adjC = allClientsPnLPercent - last.c;
-    return walk.map((w, i) => {
-      const t = w.t + adjT * ((i + 1) / N);
-      const inst = w.i + adjI * ((i + 1) / N);
-      const cl = w.c + adjC * ((i + 1) / N);
-      return {
-        label: formatTick(tf, i, N),
-        total: +t.toFixed(2),
-        institution: +inst.toFixed(2),
-        client: +cl.toFixed(2),
-      };
-    });
-  }, [
-    totalPnLPercent,
-    institutionPnLPercent,
-    allClientsPnLPercent,
-    tf,
-    seed,
-  ]);
+  const data = yieldDataByTimeframe[timeframe];
 
   return (
     <ChartShell
@@ -433,8 +469,8 @@ function YieldChart({
           />
         </div>
       }
-      timeframe={tf}
-      onTimeframeChange={setTf}
+      timeframe={timeframe}
+      onTimeframeChange={onTimeframeChange}
     >
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
@@ -476,36 +512,12 @@ function YieldChart({
               boxShadow: "0 10px 40px -10px hsl(0 0% 0% / 0.6)",
             }}
             labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
-            formatter={(v: number, n: string) => {
-              const map: Record<string, { label: string; color: string }> = {
-                total: { label: "资产总收益率", color: CHART_COLORS.yieldTotal },
-                institution: { label: "机构总收益率", color: CHART_COLORS.yieldInst },
-                client: { label: "客户总收益率", color: CHART_COLORS.yieldClient },
-              };
-              const cfg = map[n];
-              return [
-                <span style={{ color: cfg.color, fontWeight: 600 }}>
-                  {v >= 0 ? "+" : ""}
-                  {v.toFixed(2)}%
-                </span>,
-                cfg.label,
-              ];
-            }}
+            formatter={yieldTooltipFormatter}
           />
           <Legend
             iconType="circle"
             wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
-            formatter={(v: string) => {
-              const map: Record<string, { label: string; color: string }> = {
-                total: { label: "资产总收益率", color: CHART_COLORS.yieldTotal },
-                institution: { label: "机构总收益率", color: CHART_COLORS.yieldInst },
-                client: { label: "客户总收益率", color: CHART_COLORS.yieldClient },
-              };
-              const cfg = map[v];
-              return (
-                <span style={{ color: cfg.color, fontWeight: 500 }}>{cfg.label}</span>
-              );
-            }}
+            formatter={yieldLegendFormatter}
           />
           <Line
             type="monotone"
@@ -649,7 +661,7 @@ function ChartShell({
 }
 
 /* -------- Chart 下方的 mini stat tile -------- */
-function MiniStat({
+const MiniStat = memo(function MiniStat({
   label,
   value,
   formatter,
@@ -666,6 +678,10 @@ function MiniStat({
   icon: any;
   trendAmount?: number;
 }) {
+  const trendStr = useMemo(() => {
+    if (typeof trendAmount !== "number") return null;
+    return (trendAmount >= 0 ? "+" : "") + formatCompactTrend(trendAmount);
+  }, [trendAmount]);
   return (
     <div
       className="rounded-xl border p-3 bg-card/70"
@@ -689,20 +705,14 @@ function MiniStat({
                 : "text-foreground"
             )}
           />
-          {typeof trendAmount === "number" ? (
+          {trendStr !== null ? (
             <p
               className={cn(
                 "text-[11px] font-mono font-semibold",
-                trendAmount >= 0 ? "text-success" : "text-danger"
+                (trendAmount ?? 0) >= 0 ? "text-success" : "text-danger"
               )}
             >
-              {trendAmount >= 0 ? "+" : ""}
-              {trendAmount.toLocaleString(undefined, {
-                style: "currency",
-                currency: "USD",
-                notation: "compact",
-                maximumFractionDigits: 2,
-              })}
+              {trendStr}
             </p>
           ) : null}
         </div>
@@ -715,16 +725,15 @@ function MiniStat({
       </div>
     </div>
   );
-}
+});
 
 /* -------- 导出顶层组件 -------- */
 export function DashboardCharts({
   summary,
-  seedTick = 0,
 }: {
   summary: PortfolioSummary;
-  seedTick?: number;
 }) {
+  const [timeframe, setTimeframe] = useState<Timeframe>("1M");
   /* 派生当前价值：机构 = 原始机构投入 + 累计补仓 + 机构盈亏； 客户 = 原始客户投入 + 客户盈亏 */
   const institutionValue = useMemo(
     () =>
@@ -741,7 +750,7 @@ export function DashboardCharts({
   const institutionCost = summary.totalSubordinate + summary.totalMarginCalls;
   const clientCost = summary.totalPriority;
 
-  /* ================= 需求2 修复：曲线 seed 从 tick 脱离 ================= * 原先 seed = 1337 + seedTick，而 seedTick 每 3 秒 +1， * 导致 mulberry32 的合成历史每 3 秒被重新 seed → 曲线每隔几秒抖动。 *  * 新规则：seed 直接派生自 summary 的数值 hash（价格/仓位真正变动时才变）， * 和 seedTick 完全解耦。股价不动 = summary 数值不动 = seed 不动 = 曲线不动。 */
+  /* 稳定 seed：派生自 summary 数值 hash（价格/仓位真正变动时才变） */
   const stableSeed = useMemo(() => {
     const raw = [
       summary.currentMarketValueTotal.toFixed(2),
@@ -766,25 +775,62 @@ export function DashboardCharts({
     summary.totalMarginCalls,
   ]);
 
+  /* ================ 性能核心：6 Timeframe 全量数据一次性预计算缓存 ================ * 之前：切 Tab → setState → useMemo 重新跑合成（mulberry32 N 次循环）→ 卡顿 * 现在：summary/seed 变动时，1 次 useMemo 同时跑 1D/1W/1M/3M/6M/1Y × 2 图 = 12 条 * 总点数 ≈ (24+7+30+13+26+52)*2 = 304 点，成本可忽略；Tab 切换只是读取 Record 索引 = O(1) 无计算 * 同时共享 timeframe：资产图点 1M → 收益率图同步到 1M，UX 更自然 */
+  const { valueDataByTimeframe, yieldDataByTimeframe } = useMemo(() => {
+    const v = {} as Record<Timeframe, ValueDataPoint[]>;
+    const y = {} as Record<Timeframe, YieldDataPoint[]>;
+    const keys: Timeframe[] = ["1D", "1W", "1M", "3M", "6M", "1Y"];
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      v[k] = synthesizeHistory(
+        summary.currentMarketValueTotal,
+        institutionValue,
+        clientValue,
+        k,
+        stableSeed
+      );
+      y[k] = synthesizeYieldHistory(
+        summary.totalPnLPercent,
+        summary.institutionPnLPercent,
+        summary.allClientsPnLPercent,
+        k,
+        stableSeed
+      );
+    }
+    return { valueDataByTimeframe: v, yieldDataByTimeframe: y };
+  }, [
+    summary.currentMarketValueTotal,
+    summary.totalPnLPercent,
+    summary.institutionPnLPercent,
+    summary.allClientsPnLPercent,
+    institutionValue,
+    clientValue,
+    stableSeed,
+  ]);
+
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       <ValueChart
-        seed={stableSeed}
         currentMarketValueTotal={summary.currentMarketValueTotal}
         institutionValue={institutionValue}
         clientValue={clientValue}
         totalAUMCost={summary.totalAUM}
         institutionCost={institutionCost}
         clientCost={clientCost}
+        timeframe={timeframe}
+        onTimeframeChange={setTimeframe}
+        valueDataByTimeframe={valueDataByTimeframe}
       />
       <YieldChart
-        seed={stableSeed}
         totalPnLPercent={summary.totalPnLPercent}
         institutionPnLPercent={summary.institutionPnLPercent}
         allClientsPnLPercent={summary.allClientsPnLPercent}
         totalPnL={summary.totalPnL}
         institutionPnL={summary.institutionPnL}
         allClientsPnL={summary.allClientsPnL}
+        timeframe={timeframe}
+        onTimeframeChange={setTimeframe}
+        yieldDataByTimeframe={yieldDataByTimeframe}
       />
     </div>
   );

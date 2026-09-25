@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import React, { useMemo, useState } from "react";
+import React, { memo, useMemo, useState } from "react";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatCompactNumber } from "@/lib/utils";
 import {
   getBatchMetrics,
@@ -62,7 +62,7 @@ interface BatchCardV2Props {
   viewerUser?: AppSessionUser | null;
 }
 
-export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAGER, viewerUser }: BatchCardV2Props) {
+export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAGER, viewerUser }: BatchCardV2Props) {
   const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
   const metrics = getBatchMetrics(batch);
   const tradingInfo = calculateTradingWindows(batch.signDate);
@@ -652,7 +652,7 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
       />
     </Link>
   );
-}
+});
 
 function StatTile(props: {
   label: string;

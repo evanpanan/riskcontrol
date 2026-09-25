@@ -342,7 +342,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ===== 顶部：OKX 风格仪表盘双折线图 ===== */}
-      <DashboardCharts summary={summary} seedTick={tick} />
+      <DashboardCharts summary={summary} />
 
       {/* ===== 中部：风险阶梯状态分布条 ===== */}
       <Suspense fallback={
