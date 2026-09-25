@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateMockData, resetMockTestData, FINANCE_STORE_KEY, commitBatchFinance, getMockData, reloadMockData } from "../src/lib/mockData";
+import { generateMockData, resetMockTestData, FINANCE_STORE_KEY, commitBatchFinance, getMockData, reloadMockData, refreshMockDataPrices } from "../src/lib/mockData";
 import { initializeBatchFinance, executeInstitutionTopup, summarizeBatchMarginFromClients, settleClientPosition, isTopupBlockedByLegacyLedger, type BatchLike } from "../src/lib/riskEngine";
 
 const records = new Map<string, string>();
@@ -13,10 +13,23 @@ const localStorage = {
   removeItem: (key: string) => records.delete(key),
 };
 Object.assign(globalThis, { window: { localStorage, dispatchEvent() {} }, localStorage });
-const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 0.03, `${a} != ${b}`);
+const near = (a: number, b: number, tol = 0.03) => assert.ok(Math.abs(a - b) / Math.max(1, Math.abs(b)) < tol, `${a} != ${b}`);
 const data = generateMockData();
-assert.equal(data.batches.length, 8);
-assert.equal(data.batches.flatMap((b) => b.clients).length, 78);
+records.set("risk_control_finance_v2", '{"oldLedger":"keep unchanged"}');
+records.set("risk_control_last_notifications", "old-notifications");
+assert.notEqual(FINANCE_STORE_KEY, "risk_control_finance_v2");
+const firstLoad = getMockData();
+assert.ok(firstLoad.batches.every(b => b.stockSymbol === "XMAX"));
+assert.equal(firstLoad.stockHistory.length, 1);
+assert.equal(firstLoad.stockHistory[0].symbol, "XMAX");
+assert.equal(new Set(firstLoad.batches.map(b => b.currentStockPrice)).size, 1);
+refreshMockDataPrices();
+assert.equal(new Set(getMockData().batches.map(b => b.currentStockPrice)).size, 1);
+assert.equal(new Set(getMockData().batches.map(b => b.currentDayChange)).size, 1);
+assert.equal(records.get("risk_control_finance_v2"), '{"oldLedger":"keep unchanged"}');
+assert.equal(records.get("risk_control_last_notifications"), "old-notifications");
+assert.equal(data.batches.length, 12);
+assert.equal(data.batches.flatMap((b) => b.clients).length, 118);
 assert.deepEqual(data.batches.map((b) => b.clients.map((c) => [c.id, c.name, c.investmentAmount])),
   generateMockData().batches.map((b) => b.clients.map((c) => [c.id, c.name, c.investmentAmount])));
 for (const batch of data.batches as BatchLike[]) {
@@ -29,7 +42,10 @@ for (const batch of data.batches as BatchLike[]) {
   assert.equal(Object.keys(batch.finance!.settlements).length, 0);
 }
 const critical = (data.batches as BatchLike[]).filter((b) => summarizeBatchMarginFromClients(b).totalPending > 0);
-assert.equal(critical.length, 2);
+assert.equal(critical.length, 3);
+const sample = critical.find((b) => b.id === "batch-2026-005") ?? critical[0];
+near(sample.currentMarketValue!, sample.initialTotalAmount * 0.75, 0.12);
+near(summarizeBatchMarginFromClients(sample).totalPending, Math.max(0, sample.initialTotalAmount - sample.currentMarketValue!), 0.05);
 for (const original of critical) {
   const batch = structuredClone(original);
   const before = summarizeBatchMarginFromClients(batch).totalPending;
@@ -61,7 +77,7 @@ assert.equal(records.get(FINANCE_STORE_KEY), "{}");
 assert.equal(records.get("risk_control_client_status_v1"), "legacy-status");
 failKey = "";
 const result = resetMockTestData();
-assert.equal(result.clients, 78);
+assert.equal(result.clients, 118);
 assert.equal(records.get("risk_control_settings"), '{"vipClient":45}');
 assert.equal(records.get("rbac_mock_session_v1"), "preserve-session");
 assert.equal(records.get("risk_control_logo_v1"), "preserve-logo");
@@ -86,4 +102,4 @@ assert.throws(() => commitBatchFinance(reloaded, draft => executeInstitutionTopu
 const stableStore = records.get(FINANCE_STORE_KEY);
 reloadMockData();
 assert.equal(records.get(FINANCE_STORE_KEY), stableStore);
-console.log("PASS: fresh 8 batches / 78 clients, deterministic identities, exact principal, two topup scenarios, single/batch topups, settlement, reset backup, preserved settings, quota failure, stale-tab rejection and persistence.");
+console.log("PASS: fresh 12 batches / 118 clients, deterministic identities, exact principal, two topup scenarios, single/batch topups, settlement, reset backup, preserved settings, quota failure, stale-tab rejection and persistence.");

@@ -64,7 +64,7 @@ export interface NotificationResult {
   logError?: string;
 }
 
-export const LAST_NOTIFICATIONS_KEY = "risk_control_last_notifications";
+export const LAST_NOTIFICATIONS_KEY = "risk_control_xmax_notifications_v1";
 
 export interface NotificationLogEntry {
   id: string;
@@ -125,7 +125,7 @@ export function buildMarginCallNotification(
     type: "MARGIN_CALL",
     severity: "CRITICAL",
     title: `【紧急补仓警报】批次 ${batch.batchNumber} 已触发补仓机制`,
-    message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前市值跌幅达到 ${(
+    message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前仓位价值跌幅达到 ${(
       marginCall.dropPercent * 100
     ).toFixed(2)}%，已触发 20% 补仓预警线。请立即处理补仓事宜。需补仓金额：${(
       Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)) / 1000000

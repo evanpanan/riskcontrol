@@ -481,6 +481,66 @@ export function addClientPosition(batch: BatchLike, client: ClientLike): void {
   syncBatchFinance(batch);
 }
 
+export function updateClientPosition(batch: BatchLike, clientId: string, patch: Partial<ClientLike>): void {
+  initializeBatchFinance(batch);
+  const f = batch.finance!;
+  if (f.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再修改客户。");
+  const client = batch.clients?.find((c) => c.id === clientId);
+  if (!client) throw new Error("未找到该客户。");
+  if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可修改。");
+  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再修改客户。");
+  if (patch.investmentAmount !== undefined) {
+    const newAmt = Number(patch.investmentAmount);
+    if (!Number.isFinite(newAmt) || newAmt <= 0) throw new Error("客户本金无效。");
+    const price = client.entryStockPrice ?? batch.stockPriceAtStart;
+    if (!(price > 0)) throw new Error("当前成交价无效。");
+    const delta = newAmt - Number(client.investmentAmount || 0);
+    if (Math.abs(delta) > 0.005) {
+      if (f.settlements[clientId]) throw new Error("已结算客户不可调整本金。");
+      const capitalDelta = delta / PRIORITY_RATIO;
+      f.originalCapital += capitalDelta;
+      f.originalPriority += delta;
+      f.remainingCapital += capitalDelta;
+      f.originalShares += capitalDelta / price;
+      f.remainingShares += capitalDelta / price;
+    }
+    (client as any).investmentAmount = newAmt;
+    (client as any).initialInvestment = newAmt;
+  }
+  if (patch.name !== undefined) (client as any).name = String(patch.name);
+  if (patch.bdManager !== undefined) (client as any).bdManager = String(patch.bdManager);
+  if (patch.signDate !== undefined) (client as any).signDate = new Date(String(patch.signDate));
+  if (patch.status !== undefined) (client as any).status = patch.status;
+  if (patch.profitSplitClient !== undefined) (client as any).profitSplitClient = Number(patch.profitSplitClient);
+  if (patch.profitSplitInstitution !== undefined) (client as any).profitSplitInstitution = Number(patch.profitSplitInstitution);
+  (client as any).updatedAt = new Date();
+  f.revision++;
+  syncBatchFinance(batch);
+}
+
+export function removeClientPosition(batch: BatchLike, clientId: string): void {
+  initializeBatchFinance(batch);
+  const f = batch.finance!;
+  if (f.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再删除客户。");
+  const idx = batch.clients?.findIndex((c) => c.id === clientId) ?? -1;
+  if (idx < 0) throw new Error("未找到该客户。");
+  const client = batch.clients![idx];
+  if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可删除。");
+  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再删除客户。");
+  const price = (client as any).entryStockPrice ?? batch.stockPriceAtStart;
+  if (!(price > 0)) throw new Error("当前成交价无效。");
+  const capital = Number(client.investmentAmount || 0) / PRIORITY_RATIO;
+  f.originalCapital = Math.max(0, f.originalCapital - capital);
+  f.originalPriority = Math.max(0, f.originalPriority - Number(client.investmentAmount || 0));
+  f.remainingCapital = Math.max(0, f.remainingCapital - capital);
+  f.originalShares = Math.max(0, f.originalShares - capital / price);
+  f.remainingShares = Math.max(0, f.remainingShares - capital / price);
+  if (f.settlements[clientId]) delete f.settlements[clientId];
+  batch.clients!.splice(idx, 1);
+  f.revision++;
+  syncBatchFinance(batch);
+}
+
 export function calculateRealtimeClientMetrics(client: Client, batch: BatchLike, currentMarketValue: number) {
   const estimated = calculateClientSettlement(client, batch, currentMarketValue, batch.currentStockPrice ?? batch.stockPriceAtStart);
   const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;

@@ -401,10 +401,9 @@ export function ClientTable({
                   ) : (
                     <Link
                       href={`/bd/${encodeURIComponent(client.bdManager)}`}
-                      className="inline-flex items-center gap-2 text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
+                      className="text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
                       title={`查看 ${client.bdManager} 的所有客户`}
                     >
-                      <ClientAvatar name={client.bdManager} size="xs" />
                       <span>{client.bdManager}</span>
                     </Link>
                   )}
@@ -863,93 +862,27 @@ export function ClientTable({
                           </TooltipContent>
                         </Tooltip>
                       )}
-                      {client.status === ClientStatus.ACTIVE && institutionRole && (
-                        <>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2.5 text-[11px] hover:border-warning hover:text-warning"
-                                disabled={!onClientStatusChange}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onClientStatusChange?.(client.id, ClientStatus.EXIT_REQUESTED);
-                                }}
-                              >
-                                <LogOut className="h-3.5 w-3.5" />
-                                申请退出
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-[11px]">向风控发起客户退出申请，等待结算</p>
-                            </TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2.5 text-[11px]"
-                                disabled={!onClientStatusChange}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onClientStatusChange?.(client.id, ClientStatus.SETTLED);
-                                }}
-                              >
-                                <CheckSquare className="h-3.5 w-3.5" />
-                                标记结算
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-[11px]">确认资金已转出，标记客户已结算</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </>
-                      )}
-                      {client.status === ClientStatus.EXIT_REQUESTED && institutionRole && (
-                        <>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2.5 text-[11px] text-muted-foreground hover:text-foreground"
-                                disabled={!onClientStatusChange}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onClientStatusChange?.(client.id, ClientStatus.ACTIVE);
-                                }}
-                              >
-                                <RotateCcw className="h-3.5 w-3.5" />
-                                撤销
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-[11px]">取消客户退出申请</p>
-                            </TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2.5 text-[11px]"
-                                disabled={!onClientStatusChange}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onClientStatusChange?.(client.id, ClientStatus.SETTLED);
-                                }}
-                              >
-                                <CheckSquare className="h-3.5 w-3.5" />
-                                确认结算
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-[11px]">确认资金已转出，标记客户已结算归档</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </>
+                      {client.status !== ClientStatus.SETTLED && institutionRole && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="h-7 gap-1.5 px-2.5 text-[11px]"
+                              disabled={!onClientStatusChange}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onClientStatusChange?.(client.id, ClientStatus.SETTLED);
+                              }}
+                            >
+                              <CheckSquare className="h-3.5 w-3.5" />
+                              标记结算
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p className="text-[11px]">确认资金已转出，标记客户已结算（视为退出）</p>
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                       {client.status === ClientStatus.SETTLED && (
                         <>

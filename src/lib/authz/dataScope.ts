@@ -199,3 +199,21 @@ export function filterBdStatsByRole(
 export function filterMarginCallsByRole<T>(mcs: T[], _user: AppSessionUser): T[] {
   return mcs;
 }
+
+/** 是否允许「新建批次 / 创建批次」：
+ *  - ADMIN / RISK_MANAGER / OPERATIONS：✅ 允许
+ *  - BD_MANAGER（商务经理）：❌ 严禁创建批次（需求 2）
+ *  - ANALYST：❌ 仅研究只读
+ */
+export function canCreateBatch(role: AppRole | null | undefined): boolean {
+  if (!role) return false;
+  return (
+    role === APP_ROLES.ADMIN ||
+    role === APP_ROLES.RISK_MANAGER ||
+    role === APP_ROLES.OPERATIONS
+  );
+}
+
+export function canEditClient(role: AppRole | null | undefined): boolean {
+  return canCreateBatch(role);
+}

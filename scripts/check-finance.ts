@@ -6,6 +6,7 @@ import {
   calculateClientSettlement, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition,
 } from "../src/lib/riskEngine";
 import { commitBatchFinance, FINANCE_STORE_KEY } from "../src/lib/mockData";
+import { formatPercent } from "../src/lib/utils";
 
 const storage = new Map<string, string>();
 let storageFailure = false;
@@ -65,10 +66,22 @@ test("80% inclusive threshold and locked per-client allocation", () => {
 
 test("second 20% decline creates a new round and preserves the old ledger", () => {
   const b = batch();
+  near(getBatchMetrics(b).currentMarketValue, 800000);
+  assert.equal(formatPercent(-Math.abs(getBatchMetrics(b).dropPercent)), "-20.00%");
   const oldId = summarizeBatchMarginFromClients(b).roundId;
   executeInstitutionTopup(b, { amount: 200000 });
+  near(getBatchMetrics(b).currentMarketValue, 1000000);
+  near(getBatchMetrics(b).dropPercent, 0);
+  b.currentStockPrice = 79;
+  syncBatchFinance(b);
+  // Stock is 21% below entry, but the recapitalized account is only down 1.25%.
+  near(getBatchMetrics(b).dropPercent, 1.25);
+  near(summarizeBatchMarginFromClients(b).totalPending, 0);
   b.currentStockPrice = 64;
   syncBatchFinance(b);
+  near(getBatchMetrics(b).currentMarketValue, 800000);
+  near(getBatchMetrics(b).dropPercent, 20);
+  assert.equal(formatPercent(-Math.abs(getBatchMetrics(b).dropPercent)), "-20.00%");
   const summary = summarizeBatchMarginFromClients(b);
   assert.notEqual(summary.roundId, oldId);
   near(summary.totalPending, 200000);

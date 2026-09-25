@@ -125,6 +125,9 @@ export function RiskAlertDialog({
             </p>
           </DialogTitle>
         </DialogHeader>
+        {process.env.NODE_ENV === "development" && <p className="text-[11px] text-muted-foreground">
+          XMAX 测试场景使用模拟报价，不代表实时行情。
+        </p>}
 
         <div className="flex-1 overflow-y-auto mt-4 space-y-2 pr-1">
           {alerts.map((a) => (
@@ -164,22 +167,22 @@ export function RiskAlertDialog({
                   </div>
                   <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
                     <div>
-                      <p className="text-muted-foreground">跌幅</p>
+                      <p className="text-muted-foreground">账户跌幅</p>
                       <p className={cn(
                         "font-mono font-bold",
                           a.dropPercent >= 20 ? "text-danger" : "text-warning"
                       )}>
-                        {formatPercent(a.dropPercent)}
+                        {formatPercent(-Math.abs(a.dropPercent))}
                       </p>
                     </div>
                     <div>
-                      <p className="text-muted-foreground">初始市值</p>
+                      <p className="text-muted-foreground">账户资金基准</p>
                       <p className="font-mono font-semibold">
                         {formatCurrency(a.initialTotalAmount)}
                       </p>
                     </div>
                     <div>
-                      <p className="text-muted-foreground">当前市值</p>
+                      <p className="text-muted-foreground">当前账户总资产</p>
                       <p className="font-mono font-semibold">
                         {formatCurrency(a.currentMarketValue)}
                       </p>
@@ -196,6 +199,7 @@ export function RiskAlertDialog({
                           ? formatCurrency(a.requiredMarginCall)
                           : `${a.clientCount} 位`}
                       </p>
+                      {a.requiredMarginCall > 0 && <p className="text-[10px] text-muted-foreground">本轮触发时锁定的剩余缺口</p>}
                     </div>
                   </div>
                 </div>
@@ -223,7 +227,7 @@ export function RiskAlertDialog({
 
         <div className="flex items-center justify-between gap-2 pt-4 mt-1 border-t border-border/50">
           <p className="text-[10.5px] text-muted-foreground font-mono">
-            可在「系统设置 → 风险预警 & 实时联动」中关闭弹窗
+            总资产含机构补仓仓位；跌至资金基准的 80% 及以下触发补仓。部分退出后基准同比缩减。
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onDismissAll}>

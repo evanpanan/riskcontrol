@@ -2,6 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { FINANCE_STORE_KEY, getMockData, reloadMockData } from "@/lib/mockData";
+import { calculatePortfolioSummary } from "@/lib/riskEngine";
+import { formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -41,7 +45,6 @@ const NAV_ITEMS: NavItem[] = [
     title: "风险警报中心",
     icon: AlertTriangle,
     href: "/alerts",
-    badge: { text: "3", variant: "danger" },
     description: "补仓预警 & 通知日志",
     scope: "institution",
   },
@@ -60,10 +63,10 @@ const NAV_ITEMS: NavItem[] = [
     scope: "all",
   },
   {
-    title: "行情分析",
+    title: "数据分析",
     icon: LineChart,
     href: "/market",
-    description: "股票行情 & 波动监控",
+    description: "机构 & 风控多维图表",
     scope: "institution",
   },
 ];
@@ -88,6 +91,26 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { user } = useCurrentUser();
   const isBD = isBDManager(user);
+  const [summary, setSummary] = useState<ReturnType<typeof calculatePortfolioSummary> | null>(null);
+  const institution = hasInstitutionView(user);
+  useEffect(() => {
+    if (!institution) { setSummary(null); return; }
+    const update = (reload = false) => {
+      try { setSummary(calculatePortfolioSummary((reload ? reloadMockData() : getMockData()).batches)); }
+      catch { setSummary(null); }
+    };
+    const onFinance = () => update();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === FINANCE_STORE_KEY || event.key === null) update(true);
+    };
+    update();
+    window.addEventListener("risk-control:finance-changed", onFinance);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("risk-control:finance-changed", onFinance);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [institution]);
 
   return (
     <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border/60 bg-card/50 backdrop-blur-sm">
@@ -168,6 +191,11 @@ export function AppSidebar() {
                   {item.badge.text}
                 </Badge>
               )}
+              {!item.badge && item.href === "/alerts" && summary && (summary.criticalCount + summary.warningCount) > 0 && (
+                <Badge variant="danger" className="ml-auto">
+                  {summary.criticalCount + summary.warningCount}
+                </Badge>
+              )}
             </Link>
           );
         })}
@@ -206,11 +234,11 @@ export function AppSidebar() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-muted-foreground">机构累计补仓</span>
-                <span className="text-sm font-bold text-warning">$2.45M</span>
+                <span className="text-xs font-bold text-warning tabular-nums">{summary ? formatCurrency(summary.totalMarginCalls) : "--"}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-muted-foreground">在管资产总额</span>
-                <span className="text-sm font-bold text-success">$18.05M</span>
+                <span className="text-xs font-bold text-success tabular-nums">{summary ? formatCurrency(summary.totalAUM) : "--"}</span>
               </div>
             </div>
           </div>

@@ -87,7 +87,7 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
           <div className="flex items-start justify-between mb-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="font-mono text-[11px] text-muted-foreground tracking-wide">
+                <span className="font-mono text-[12px] font-bold tracking-wide text-foreground">
                   {batch.batchNumber}
                 </span>
                 <Badge
@@ -105,23 +105,6 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
                     <><Unlock className="h-2.5 w-2.5" /> 开放期</>
                   )}
                 </Badge>
-              </div>
-              <div className="flex items-baseline gap-2 min-w-0">
-                <h3 className="text-xl font-bold tracking-tight truncate">
-                  {batch.stockSymbol}
-                </h3>
-                {batch.stockName && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="text-xs text-muted-foreground truncate max-w-[140px]">
-                        {batch.stockName}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{batch.stockName}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
               </div>
             </div>
 
@@ -166,7 +149,7 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                当前市值
+                当前仓位价值
               </p>
               <p className={cn(
                 "text-sm font-bold font-mono",
@@ -274,20 +257,27 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
             </div>
           )}
 
-          {/* P&L SPLIT MINI TAGS — 机构/客户分层盈利（需求4） */}
+          {/* P&L SPLIT MINI TAGS — 机构盈利/客户盈利 */}
           <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/40">
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10.5px] font-mono",
+                  "flex flex-col items-start gap-0.5 px-2.5 py-1.5 rounded-lg border",
                   split.institutionTotalPnL >= 0
                     ? "bg-success/5 border-success/20 text-success"
                     : "bg-danger/5 border-danger/20 text-danger"
                 )}>
-                  <Landmark className="h-3 w-3 shrink-0" />
-                  <span className="truncate font-semibold">
-                    机 {split.institutionTotalPnL >= 0 ? "+" : ""}
-                    {split.institutionTotalPnL.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 2, style: "currency", currency: "USD" }).replace("USD", "")}
+                  <div className="flex items-center gap-1 w-full">
+                    <Landmark className="h-3 w-3 shrink-0" />
+                    <span className="text-[10px] font-medium text-muted-foreground shrink-0">机构盈利</span>
+                  </div>
+                  <span className="text-[11px] font-bold font-mono tabular-nums break-all leading-tight">
+                    {split.institutionTotalPnL >= 0 ? "+" : ""}
+                    {formatCurrency(split.institutionTotalPnL)}
+                  </span>
+                  <span className="text-[9.5px] font-mono tabular-nums opacity-90 leading-tight">
+                    {split.institutionTotalPnLPercent >= 0 ? "+" : ""}
+                    {split.institutionTotalPnLPercent.toFixed(2)}%
                   </span>
                 </div>
               </TooltipTrigger>
@@ -302,15 +292,22 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <div className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10.5px] font-mono justify-self-end",
+                  "flex flex-col items-end gap-0.5 px-2.5 py-1.5 rounded-lg border",
                   split.clientTotalPnL >= 0
                     ? "bg-success/5 border-success/20 text-success"
                     : "bg-warning/5 border-warning/25 text-warning"
                 )}>
-                  <UserCheck className="h-3 w-3 shrink-0" />
-                  <span className="truncate font-semibold">
-                    客 {split.clientTotalPnL >= 0 ? "+" : ""}
-                    {split.clientTotalPnL.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 2, style: "currency", currency: "USD" }).replace("USD", "")}
+                  <div className="flex items-center gap-1 w-full justify-end">
+                    <UserCheck className="h-3 w-3 shrink-0" />
+                    <span className="text-[10px] font-medium text-muted-foreground shrink-0">客户盈利</span>
+                  </div>
+                  <span className="text-[11px] font-bold font-mono tabular-nums break-all leading-tight">
+                    {split.clientTotalPnL >= 0 ? "+" : ""}
+                    {formatCurrency(split.clientTotalPnL)}
+                  </span>
+                  <span className="text-[9.5px] font-mono tabular-nums opacity-90 leading-tight">
+                    {split.clientTotalPnLPercent >= 0 ? "+" : ""}
+                    {split.clientTotalPnLPercent.toFixed(2)}%
                   </span>
                 </div>
               </TooltipTrigger>
@@ -326,9 +323,14 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
           {/* Clients & Footer */}
           <div className="flex items-center justify-between pt-3 mt-1 border-t border-border/40">
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <Users className="h-3.5 w-3.5" />
-                <span className="font-medium">{batch.clients?.length || 0} 位客户</span>
+              <div className="flex flex-col items-start gap-0.5">
+                <div className="flex items-center gap-1">
+                  <Users className="h-3.5 w-3.5" />
+                  <span className="font-medium">{batch.clients?.length || 0} 位客户</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground/80 font-mono tabular-nums pl-4.5">
+                  已退出 {((batch.clients || []) as any[]).filter(c => c?.status === "SETTLED").length} 位
+                </span>
               </div>
               {batch.marginCalls && batch.marginCalls.length > 0 && (
                 <div className="flex items-center gap-1 text-warning">

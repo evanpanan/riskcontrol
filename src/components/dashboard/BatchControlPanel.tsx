@@ -16,8 +16,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { useState, useMemo } from "react";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
+import { canCreateBatch } from "@/lib/authz/dataScope";
 import {
   Search,
   Filter,
@@ -29,6 +31,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { BatchGridCard } from "./BatchGridCard";
+import { toast } from "sonner";
 
 interface BatchControlPanelProps {
   batches: (Batch & { clients?: Client[]; marginCalls?: MarginCall[] })[];
@@ -44,6 +47,8 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("ALL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [sortBy, setSortBy] = useState("riskDesc");
+  const { role, user } = useCurrentUser();
+  const allowCreateBatch = canCreateBatch(role);
 
   const filteredBatches = useMemo(() => {
     let list = [...batches];
@@ -97,7 +102,7 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="批次号 / 股票代码..."
+            placeholder="批次号 / 客户 / 商务经理 / 签约年份..."
             className="pl-9 h-10"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -180,10 +185,19 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
             </TooltipContent>
           </Tooltip>
 
-          <Button size="sm" className="gap-1.5 h-10 shrink-0">
-            <Plus className="h-4 w-4" />
-            新建批次
-          </Button>
+          {allowCreateBatch && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="sm" className="gap-1.5 h-10 shrink-0" onClick={() => toast.info("创建批次入口：请前往「批次管理」或点击右上角新建按钮。系统设置→批次规则可调整默认参数。")}>
+                  <Plus className="h-4 w-4" />
+                  新建批次
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>创建新批次（仅 ADMIN / 风控总监 / 运营 可用）</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
 
           {criticalCount > 0 && (
             <Badge variant="danger" className="gap-1 h-10 px-3 animate-breath-danger">
@@ -214,19 +228,21 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
       ) : (
         <div className="border border-border/50 rounded-xl overflow-hidden bg-card">
           <div className="grid grid-cols-12 px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/50 bg-secondary/30">
-            <div className="col-span-2">批次 / 股票</div>
+            <div className="col-span-2">批次号</div>
             <div className="col-span-1 text-right">股价 / 日涨跌</div>
             <div className="col-span-1 text-center">状态</div>
             <div className="col-span-1 text-right">初始金额</div>
-            <div className="col-span-1 text-right">当前市值</div>
+            <div className="col-span-1 text-right">当前仓位价值</div>
             <div className="col-span-2 text-center">安全缓冲</div>
             <div className="col-span-1 text-right">补仓</div>
             <div className="col-span-1 text-right">盈亏</div>
-            <div className="col-span-1 text-center">客户</div>
+            <div className="col-span-2 text-center">客户</div>
           </div>
           <div className="divide-y divide-border/40">
             {filteredBatches.map((batch) => {
               const mv = batch.currentMarketValue || batch.initialTotalAmount;
+              const clientCount = batch.clients?.length || 0;
+              const settledCount = ((batch.clients || []) as any[]).filter(c => c?.status === "SETTLED").length;
               return (
                 <div
                   key={batch.id}
@@ -236,8 +252,10 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
                   )}
                 >
                   <div className="col-span-2 min-w-0">
-                    <p className="font-mono text-xs text-muted-foreground">{batch.batchNumber}</p>
-                    <p className="font-bold tracking-tight truncate">{batch.stockSymbol}</p>
+                    <p className="font-bold tracking-tight truncate">{batch.batchNumber}</p>
+                    <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
+                      {formatDate(batch.signDate)} 签约
+                    </p>
                   </div>
                   <div className="col-span-1 text-right font-mono text-sm">
                     <p className="font-semibold">${batch.currentStockPrice?.toFixed(2)}</p>
@@ -291,8 +309,11 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
                     {((batch.totalPnLPercent || 0) >= 0 ? "+" : "")}
                     {(batch.totalPnLPercent || 0).toFixed(2)}%
                   </div>
-                  <div className="col-span-1 text-center text-sm">
-                    {batch.clients?.length || 0}
+                  <div className="col-span-2 text-center text-sm flex flex-col items-center gap-0.5">
+                    <span className="font-semibold leading-tight">在管 {clientCount} 位</span>
+                    <span className="text-[10.5px] text-muted-foreground font-mono tabular-nums leading-tight">
+                      已退出 {settledCount} 位
+                    </span>
                   </div>
                 </div>
               );

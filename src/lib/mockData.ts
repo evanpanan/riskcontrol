@@ -8,6 +8,11 @@ import {
   ClientStatus,
 } from "@prisma/client";
 import {
+  XMAX_HALF_YEAR_PRICE_SERIES,
+  RECOMMENDED_BATCH_SIGN_DATES,
+  XMAX_CURRENT_LIVE_PRICE,
+} from "./xmax-price-series";
+import {
   calculateBatchRiskMetrics,
   calculateInvestmentSplit,
   calculateProfitSplitRatio,
@@ -18,6 +23,7 @@ import {
   type BatchLike,
 } from "./riskEngine";
 import { mergeClientStatusOnClient } from "./clientStatusStore";
+import { getNYSEInfo } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
 
 export interface MockDataSet {
@@ -25,16 +31,8 @@ export interface MockDataSet {
   stockHistory: StockHistory[];
 }
 
-const STOCKS = [
-  { symbol: "NVDA", name: "NVIDIA Corporation", basePrice: 115.21 },
-  { symbol: "TSLA", name: "Tesla, Inc.", basePrice: 243.27 },
-  { symbol: "AAPL", name: "Apple Inc.", basePrice: 226.73 },
-  { symbol: "MSFT", name: "Microsoft Corporation", basePrice: 412.15 },
-  { symbol: "META", name: "Meta Platforms, Inc.", basePrice: 571.43 },
-  { symbol: "GOOGL", name: "Alphabet Inc.", basePrice: 160.27 },
-  { symbol: "AMZN", name: "Amazon.com, Inc.", basePrice: 181.55 },
-  { symbol: "AMD", name: "Advanced Micro Devices, Inc.", basePrice: 151.64 },
-];
+// Scenario quote only, not a live market price. All batches share this symbol.
+const STOCKS = [{ symbol: "XMAX", name: "XMAX", basePrice: 10 }];
 
 export const BD_MANAGERS = ["李晓明 (Evan Li)", "王思远 (Sylvia Wang)", "张志强 (Jack Zhang)", "刘佳 (Jennifer Liu)"];
 
@@ -55,7 +53,7 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-const MOCK_BASE_SEED = 20260922;
+const MOCK_BASE_SEED = 20260923;
 
 function createSeededRandom(seedOffset: number) {
   const rand = mulberry32(MOCK_BASE_SEED + seedOffset);
@@ -76,7 +74,25 @@ export function generateMockData(): MockDataSet {
   const batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[] = [];
   const stockHistory: StockHistory[] = [];
 
-  const BASE_SIGN_DATE = new Date("2025-03-06T00:00:00.000Z");
+  // ===== 根据真实 XMAX 历史价格，快速查找 signDate 对应 close =====
+  const priceLookup = new Map<string, number>();
+  for (const [d, close] of XMAX_HALF_YEAR_PRICE_SERIES) priceLookup.set(d, close);
+  const sortedDates = Array.from(priceLookup.keys()).sort();
+  const findClosestClose = (targetDateStr: string): number => {
+    if (priceLookup.has(targetDateStr)) return priceLookup.get(targetDateStr)!;
+    // 找最近交易日 <= targetDate
+    const targetTs = new Date(targetDateStr + "T00:00:00.000Z").getTime();
+    let best = sortedDates[0];
+    for (const d of sortedDates) {
+      if (d <= targetDateStr) best = d;
+      else break;
+    }
+    return priceLookup.get(best) ?? XMAX_CURRENT_LIVE_PRICE;
+    void targetTs;
+  };
+
+  // 当前最新价：所有批次共享
+  const currentStockPrice = XMAX_CURRENT_LIVE_PRICE;
 
   STOCKS.forEach((stock, sIdx) => {
     const rng = createSeededRandom(1000 + sIdx);
@@ -84,78 +100,87 @@ export function generateMockData(): MockDataSet {
       id: `sh-${stock.symbol}`,
       symbol: stock.symbol,
       name: stock.name,
-      usageCount: rng.int(1, 5),
-      lastUsed: deterministicOffsetDate(BASE_SIGN_DATE, 120 + rng.int(0, 30), rng.rand() * 12),
-      createdAt: deterministicOffsetDate(BASE_SIGN_DATE, -30 - rng.int(0, 30), rng.rand() * 8),
+      usageCount: RECOMMENDED_BATCH_SIGN_DATES.length,
+      lastUsed: new Date(RECOMMENDED_BATCH_SIGN_DATES[RECOMMENDED_BATCH_SIGN_DATES.length - 1] + "T12:00:00.000Z"),
+      createdAt: deterministicOffsetDate(new Date(RECOMMENDED_BATCH_SIGN_DATES[0] + "T00:00:00.000Z"), -30 - rng.int(0, 30), rng.rand() * 8),
       updatedAt: deterministicOffsetDate(now, -5 - rng.int(0, 3), rng.rand() * 6),
     });
   });
 
-  for (let i = 0; i < 8; i++) {
+  // ===== 每批次投资额档位池（保证 <10万 与 >10万 都有） =====
+  // 分档：
+  //   小额档 (30%概率)：$2万 ~ $9.5万  (客户层面 <10万)
+  //   中额档 (50%概率)：$10万 ~ $30万
+  //   大额档 (20%概率)：$30万 ~ $70万
+  // 批次总 initialTotal = 客户之和，因此客户档混合后自动产生 各种 total amount
+  const CLIENT_INVESTMENT_BUCKETS = [
+    // 小额 <10万
+    { min: 20000, max: 60000, weight: 2 },
+    { min: 60000, max: 95000, weight: 2 },
+    // 中额 10万~30万
+    { min: 100000, max: 180000, weight: 3 },
+    { min: 180000, max: 300000, weight: 2 },
+    // 大额 30万+
+    { min: 300000, max: 500000, weight: 1 },
+  ];
+  const pickClientInvestment = (batchRng: ReturnType<typeof createSeededRandom>) => {
+    const totalW = CLIENT_INVESTMENT_BUCKETS.reduce((s,b)=>s+b.weight, 0);
+    let r = batchRng.rand() * totalW;
+    for (const b of CLIENT_INVESTMENT_BUCKETS) {
+      if (r < b.weight) return batchRng.float(b.min, b.max, 2);
+      r -= b.weight;
+    }
+    return batchRng.float(80000, 200000, 2);
+  };
+
+  const TOTAL_BATCHES = RECOMMENDED_BATCH_SIGN_DATES.length; // 24
+
+  for (let i = 0; i < TOTAL_BATCHES; i++) {
     const stock = STOCKS[i % STOCKS.length];
-    const batchRng = createSeededRandom(10000 + i * 97);
-    const signDate = deterministicOffsetDate(BASE_SIGN_DATE, i * 14 + batchRng.int(0, 3), batchRng.rand() * 12);
+    const batchRng = createSeededRandom(20000 + i * 211);
+    const signDateISO = RECOMMENDED_BATCH_SIGN_DATES[i];
+    const signDate = new Date(signDateISO + "T00:00:00.000Z");
     const maturityDate = new Date(signDate);
     maturityDate.setUTCMonth(maturityDate.getUTCMonth() + 24);
 
-    const initialAmounts = [1000000, 2000000, 750000, 5000000, 3000000, 1500000, 800000, 4000000];
-    const initialTotalAmount = initialAmounts[i];
-    const split = calculateInvestmentSplit(initialTotalAmount);
+    // 每批次客户数：20~30（按用户要求）
+    const numClients = batchRng.int(20, 30);
 
-    const priceDropScenarios = [0.05, 0.12, 0.18, 0.24, 0.02, 0.16, 0.08, 0.21];
-    const dropPercent = priceDropScenarios[i];
+    // 生成客户 + 投资额（保证 <10万 与 >10万 混杂）
+    const clients: Client[] = [];
+    let initialTotalAmountCents = 0;
+    const weights = Array.from({ length: numClients }, () => batchRng.int(1, 12));
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
 
-    const stockPriceAtStart = stock.basePrice;
-    const currentStockPrice = Number((stock.basePrice * (1 - dropPercent + (batchRng.rand() - 0.5) * 0.02)).toFixed(2));
-    const currentDayChange = Number(((batchRng.rand() - 0.5) * 4).toFixed(2));
-    const currentDayChangePercent = Number((currentDayChange / stockPriceAtStart * 100).toFixed(2));
-
-    const totalShares = calculateTotalShares(initialTotalAmount, stockPriceAtStart);
-    const currentMarketValue = calculateCurrentMarketValue(stockPriceAtStart, currentStockPrice, totalShares);
-
-    const metrics = calculateBatchRiskMetrics(initialTotalAmount, currentMarketValue, 0);
-
-    const cumulativeMarginCalls = 0;
-    const marginCalls: MarginCall[] = [];
-
-    const metricsWithMargin = calculateBatchRiskMetrics(
-      initialTotalAmount,
-      currentMarketValue,
-      cumulativeMarginCalls
-    );
-
-    const tradingInfo = calculateTradingWindows(signDate);
-    let status: BatchStatus = BatchStatus.LOCKED;
-    if (tradingInfo.monthsElapsed >= 24) {
-      status = BatchStatus.CLOSED;
-    } else if (tradingInfo.isLocked) {
-      status = BatchStatus.LOCKED;
-    } else {
-      status = BatchStatus.TRADING_OPEN;
+    // 预先确定每个客户的 investmentAmount，满足 <10万 和 >10万 都有
+    const clientAmounts: number[] = [];
+    // 先强制塞至少 7位 <10万，至少 8位 >10万，其余随机
+    const minSmall = Math.max(1, Math.floor(numClients * 0.30));
+    const minLarge = Math.max(1, Math.floor(numClients * 0.25));
+    for (let c = 0; c < numClients; c++) {
+      let amt: number;
+      if (c < minSmall) {
+        amt = batchRng.float(20000, 95000, 2);
+      } else if (c < minSmall + minLarge) {
+        amt = batchRng.float(110000, 480000, 2);
+      } else {
+        amt = pickClientInvestment(batchRng);
+      }
+      clientAmounts.push(amt);
+    }
+    // shuffle 让大小额均匀分布
+    for (let k = clientAmounts.length - 1; k > 0; k--) {
+      const j = Math.floor(batchRng.rand() * (k + 1));
+      [clientAmounts[k], clientAmounts[j]] = [clientAmounts[j], clientAmounts[k]];
     }
 
-    const clients: Client[] = [];
-    const clientCounts = [8, 12, 5, 15, 10, 6, 4, 18];
-    const numClients = clientCounts[i];
-    const priorityPool = split.priorityAmount;
-
-    const weights = Array.from({ length: numClients }, () => batchRng.int(1, 12));
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-    let remainingCents = Math.round(priorityPool * 100);
     for (let c = 0; c < numClients; c++) {
-      const clientRng = createSeededRandom(100000 + i * 1000 + c);
-      // Allocate in cents; the last client receives the exact remainder.
-      const cents = c === numClients - 1 ? remainingCents
-        : Math.floor(Math.round(priorityPool * 100) * weights[c] / totalWeight);
-      remainingCents -= cents;
-      const investmentAmount = cents / 100;
+      const clientRng = createSeededRandom(200000 + i * 1000 + c);
+      const investmentAmount = Number(clientAmounts[c].toFixed(2));
+      initialTotalAmountCents += Math.round(investmentAmount * 100);
 
       const profitSplit = calculateProfitSplitRatio(investmentAmount, true);
-
       const clientSignDate = deterministicOffsetDate(signDate, clientRng.int(0, 3), clientRng.rand() * 24);
-
-      const clientStatus = ClientStatus.ACTIVE;
-
       const lastName = CLIENT_LAST_NAMES[clientRng.int(0, CLIENT_LAST_NAMES.length - 1)];
       const firstName = CLIENT_FIRST_NAMES[clientRng.int(0, CLIENT_FIRST_NAMES.length - 1)];
       const clientName = `${lastName}${firstName}`;
@@ -172,13 +197,69 @@ export function generateMockData(): MockDataSet {
         profitSplitInstitution: profitSplit.institution * 100,
         realtimePnL: 0,
         estimatedExitAmount: 0,
-        status: clientStatus,
+        status: ClientStatus.ACTIVE,
         settledAt: null,
         settlementNote: null,
         createdAt: clientSignDate,
         updatedAt: now,
       });
     }
+
+    const initialTotalAmount = initialTotalAmountCents / 100;
+    const split = calculateInvestmentSplit(initialTotalAmount);
+
+    // 入场价 = signDate 当日 XMAX 真实收盘价
+    const stockPriceAtStart = Number(findClosestClose(signDateISO).toFixed(4));
+
+    const totalShares = calculateTotalShares(initialTotalAmount, stockPriceAtStart);
+    const currentMarketValue = calculateCurrentMarketValue(
+      stockPriceAtStart,
+      currentStockPrice,
+      totalShares
+    );
+
+    // 补仓次数：按真实跌幅决定（风险等级由 calculateBatchRiskMetrics 计算）
+    // 若 riskLevel=CRITICAL => 1 次补仓，WARNING => 0 或 1 次，其余 0
+    const prelimMetrics = calculateBatchRiskMetrics(initialTotalAmount, currentMarketValue, 0);
+    let cumulativeMarginCalls = 0;
+    if (prelimMetrics.riskLevel === RiskLevel.CRITICAL) {
+      cumulativeMarginCalls = batchRng.int(1, 2);
+    } else if (prelimMetrics.riskLevel === RiskLevel.WARNING) {
+      cumulativeMarginCalls = batchRng.rand() < 0.35 ? 1 : 0;
+    }
+    const marginCalls: MarginCall[] = [];
+    for (let m = 0; m < cumulativeMarginCalls; m++) {
+      const callDate = new Date(now.getTime() - (m + 1) * 86400000 - batchRng.int(0, 5) * 86400000);
+      marginCalls.push({
+        id: `mc-${MOCK_BASE_SEED}-${i}-${m}`,
+        batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
+        requiredAmount: Number(prelimMetrics.requiredMarginCall.toFixed(2)),
+        fulfilledAmount: m === cumulativeMarginCalls - 1 ? 0 : Number(prelimMetrics.requiredMarginCall.toFixed(2)),
+        status: m === cumulativeMarginCalls - 1 ? "PENDING" : "FULFILLED",
+        createdAt: callDate,
+        updatedAt: callDate,
+        triggeredBy: "STOCK_DROP",
+        triggeredAt: callDate,
+      });
+    }
+
+    const finalMetrics = calculateBatchRiskMetrics(
+      initialTotalAmount,
+      currentMarketValue,
+      cumulativeMarginCalls
+    );
+
+    const tradingInfo = calculateTradingWindows(signDate);
+    let status: BatchStatus = BatchStatus.LOCKED;
+    if (tradingInfo.monthsElapsed >= 24) {
+      status = BatchStatus.CLOSED;
+    } else if (tradingInfo.isLocked) {
+      status = BatchStatus.LOCKED;
+    } else {
+      status = BatchStatus.TRADING_OPEN;
+    }
+
+    const currentDayChangePercent = Number(((currentStockPrice / stockPriceAtStart - 1) * 100).toFixed(2));
 
     batches.push({
       id: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
@@ -195,17 +276,124 @@ export function generateMockData(): MockDataSet {
       maturityDate,
       totalShares,
       currentMarketValue,
-      totalPnL: metricsWithMargin.totalPnL,
-      totalPnLPercent: metricsWithMargin.totalPnLPercent,
+      totalPnL: finalMetrics.totalPnL,
+      totalPnLPercent: finalMetrics.totalPnLPercent,
       cumulativeMarginCalls,
       status,
-      riskLevel: metrics.riskLevel,
+      riskLevel: finalMetrics.riskLevel,
       nextTradingWindow: tradingInfo.nextTradingDate,
       clients,
       marginCalls,
       createdAt: signDate,
       updatedAt: now,
     });
+  }
+
+  // ===== 跨批次重复客户注入 =====
+  const MULTI_BATCH_CLIENTS: Array<{
+    name: string;
+    bdManager: string;
+    participations: Array<{
+      batchIndex: number;
+      investmentAmount: number;
+      signOffsetDays: number;
+      signOffsetHours?: number;
+    }>;
+  }> = [
+    {
+      // 张霞 (Jennifer Liu) → 跨 001/009/017 三个批次（2026-03 / 2026-05 / 2026-07）
+      name: "张霞",
+      bdManager: "刘佳 (Jennifer Liu)",
+      participations: [
+        { batchIndex: 0, investmentAmount: 168500.75, signOffsetDays: 2, signOffsetHours: 8 },
+        { batchIndex: 8, investmentAmount: 94200.0, signOffsetDays: 3, signOffsetHours: 14 },
+        { batchIndex: 16, investmentAmount: 272400.5, signOffsetDays: 4, signOffsetHours: 10 },
+      ],
+    },
+    {
+      // 张勇 (Jack Zhang) → 跨 003/013 两个批次
+      name: "张勇",
+      bdManager: "张志强 (Jack Zhang)",
+      participations: [
+        { batchIndex: 2, investmentAmount: 385700.22, signOffsetDays: 5, signOffsetHours: 10 },
+        { batchIndex: 12, investmentAmount: 124800.0, signOffsetDays: 7, signOffsetHours: 16 },
+      ],
+    },
+    {
+      // 王芳 (Sylvia Wang) → 跨 005/019 两个批次
+      name: "王芳",
+      bdManager: "王思远 (Sylvia Wang)",
+      participations: [
+        { batchIndex: 4, investmentAmount: 54300.0, signOffsetDays: 2, signOffsetHours: 9 },
+        { batchIndex: 18, investmentAmount: 112300.0, signOffsetDays: 5, signOffsetHours: 11 },
+      ],
+    },
+    {
+      // 李娜 (Evan Li) → 跨 007/015/023 三个批次
+      name: "李娜",
+      bdManager: "李晓明 (Evan Li)",
+      participations: [
+        { batchIndex: 6, investmentAmount: 78200.0, signOffsetDays: 1, signOffsetHours: 15 },
+        { batchIndex: 14, investmentAmount: 236500.0, signOffsetDays: 3, signOffsetHours: 9 },
+        { batchIndex: 22, investmentAmount: 45800.30, signOffsetDays: 6, signOffsetHours: 14 },
+      ],
+    },
+  ];
+
+  for (const person of MULTI_BATCH_CLIENTS) {
+    for (let p = 0; p < person.participations.length; p++) {
+      const part = person.participations[p];
+      const target = batches[part.batchIndex];
+      if (!target) continue;
+      const bRng = createSeededRandom(990000 + person.name.charCodeAt(0) + part.batchIndex * 17 + p);
+      const batchSignDate = target.signDate;
+      const clientSignDate = deterministicOffsetDate(
+        batchSignDate,
+        part.signOffsetDays,
+        part.signOffsetHours ?? bRng.rand() * 18
+      );
+      const profitSplit = calculateProfitSplitRatio(part.investmentAmount, true);
+      const nextIdx = target.clients.length;
+      const clone: Client = {
+        id: `client-mb-${MOCK_BASE_SEED}-${person.name}-${part.batchIndex}-${p}`,
+        batchId: target.id,
+        name: person.name,
+        investmentAmount: part.investmentAmount,
+        bdManager: person.bdManager,
+        bdUserId: null,
+        signDate: clientSignDate,
+        profitSplitClient: profitSplit.client * 100,
+        profitSplitInstitution: profitSplit.institution * 100,
+        realtimePnL: 0,
+        estimatedExitAmount: 0,
+        status: ClientStatus.ACTIVE,
+        settledAt: null,
+        settlementNote: null,
+        createdAt: clientSignDate,
+        updatedAt: now,
+      };
+      target.clients.push(clone);
+      const extraPriority = part.investmentAmount;
+      const extraSubTotal = calculateInvestmentSplit(target.initialTotalAmount + extraPriority);
+      target.initialTotalAmount = target.initialTotalAmount + extraPriority;
+      target.priorityAmount = extraSubTotal.priorityAmount;
+      target.subordinateAmount = extraSubTotal.subordinateAmount;
+      target.totalShares = calculateTotalShares(target.initialTotalAmount, target.stockPriceAtStart);
+      target.currentMarketValue = calculateCurrentMarketValue(
+        target.stockPriceAtStart,
+        Number(target.currentStockPrice),
+        target.totalShares
+      );
+      const reMetrics = calculateBatchRiskMetrics(
+        target.initialTotalAmount,
+        target.currentMarketValue,
+        target.cumulativeMarginCalls
+      );
+      target.totalPnL = reMetrics.totalPnL;
+      target.totalPnLPercent = reMetrics.totalPnLPercent;
+      target.riskLevel = reMetrics.riskLevel;
+      void nextIdx;
+    }
   }
 
   return { batches, stockHistory };
@@ -412,7 +600,8 @@ export function clearMockMarginPatches(): void {
 
 let cachedMockData: MockDataSet | null = null;
 
-export const FINANCE_STORE_KEY = "risk_control_finance_v2";
+// Keep the previous multi-symbol ledger untouched; never import it into XMAX fixtures.
+export const FINANCE_STORE_KEY = "risk_control_finance_xmax_v1";
 type FinanceRecord = { fingerprint: string; clientFingerprints?: Record<string, string>; batch: BatchLike };
 type FinanceStore = Record<string, FinanceRecord>;
 
@@ -422,7 +611,7 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
     throw new Error("仅允许在本地开发预览中重置测试数据。");
   }
   const keys = [FINANCE_STORE_KEY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
-    "risk_control_last_notifications", "risk_control_alert_ack_v1"];
+    "risk_control_xmax_notifications_v1", "risk_control_xmax_alert_ack_v1"];
   const storage = window.localStorage;
   const backup = Object.fromEntries(keys.map((key) => [key, storage.getItem(key)]));
   const backupKey = `risk_control_test_backup_${Date.now()}`;
@@ -437,6 +626,23 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
     finance.revision = Math.max(Date.now(), (previous[batch.id]?.batch.finance?.revision ?? 0) + 1);
     reviveBatch(batch);
     store[batch.id] = financeRecord(batch);
+  }
+  // 保留用户通过「创建批次」对话框新增的非经典批次（不在基础 12 条测试数据中）
+  const canonicalIds = new Set(fresh.batches.map((b) => b.id));
+  for (const [id, record] of Object.entries(previous)) {
+    if (canonicalIds.has(id)) continue;
+    if (!record || typeof record !== "object") continue;
+    const rec = record as any;
+    if (!rec?.batch || !rec.fingerprint) continue;
+    const revived = reviveBatch(structuredClone(rec.batch)) as typeof fresh.batches[number];
+    if (!revived || typeof revived !== "object") continue;
+    try { syncBatchFinance(revived); } catch { /* ignore */ }
+    const batchLike = revived as BatchLike;
+    if (batchLike.finance) {
+      batchLike.finance.revision = Math.max(Date.now(), (batchLike.finance.revision ?? 0) + 1);
+    }
+    store[id] = financeRecord(revived);
+    fresh.batches.push(revived);
   }
   // Both writes precede removal. A quota failure cannot destroy the old active ledger.
   storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
@@ -508,14 +714,59 @@ export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLik
   return result;
 }
 
+/**
+ * 开发环境遇到批次身份升级（客户数/批次数量变化导致 fingerprint 不匹配）时，
+ * 自动备份旧账本并生成新的一套 12 批次测试数据，避免首页硬崩。
+ * - 仅在 NODE_ENV=development 生效；
+ * - 若旧账本中存在已实际结算 (settlements)、或任何补仓已 fulfilled (fulfilledAmount>0)、
+ *   或存在非 legacy 的真实交易 (trades.some(t.source!=='legacy'))，则视为真实账目资料，拒绝自动覆盖。
+ * 返回 didReset=true 时调用方应清缓存并重新加载 mock data。
+ */
+export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: string; reason?: string } {
+  if (typeof window === "undefined" || process.env.NODE_ENV !== "development") return { didReset: false };
+  const store: Record<string, unknown> = (() => {
+    try { return JSON.parse(window.localStorage.getItem(FINANCE_STORE_KEY) || "{}"); } catch { return {}; }
+  })();
+  const existing = Object.values(store);
+  if (!existing.length) return { didReset: false };
+  const looksPristine = existing.every((entry: any) => {
+    const finance = entry?.batch?.finance;
+    if (!finance) return true;
+    // 没有任何客户结算
+    if (Object.keys(finance.settlements ?? {}).length) return false;
+    // 所有补仓轮次均未实际 fulfilled（也就是说从来没真正做过机构补仓记账）
+    if ((finance.rounds ?? []).some((r: any) => Number(r.fulfilledAmount ?? 0) > 0.005)) return false;
+    // 没有任何非 legacy 的手动记账交易
+    if ((finance.trades ?? []).some((t: any) => (t.source ?? "legacy") !== "legacy")) return false;
+    return true;
+  });
+  if (!looksPristine) {
+    return { didReset: false, reason: "存在真实结算/补仓记录，拒绝自动覆盖。请联系管理员核对账本。" };
+  }
+  try {
+    const { backupKey } = resetMockTestData();
+    return { didReset: true, backupKey };
+  } catch (e) {
+    return { didReset: false, reason: e instanceof Error ? e.message : "重置失败" };
+  }
+}
+
 export function getMockData(): MockDataSet {
   if (!cachedMockData) {
-    const loaded = applyPersistedClientMarginPatches(generateMockData());
+    const loaded = generateMockData();
     const store = readFinanceStore();
+    let autoResetHandled = false;
     for (const batch of loaded.batches) {
       const saved = store[batch.id];
       if (saved) {
         if (saved.fingerprint !== batchFingerprint(batch) || saved.batch.finance?.version !== 2) {
+          if (!autoResetHandled) {
+            const upgrade = tryAutoUpgradeTestLedger();
+            if (upgrade.didReset) {
+              cachedMockData = null;
+              return getMockData();
+            }
+          }
           throw new Error("资金账本与批次身份不匹配，请联系管理员核对，勿重复补仓。");
         }
         for (const c of saved.batch.clients ?? []) {
@@ -556,6 +807,22 @@ export function getMockData(): MockDataSet {
         reviveBatch(batch);
       }
     }
+    // 账本中存在但不在基础测试批次列表中的用户创建的新批次（如管理员通过创建批次对话框新增）
+    if (typeof window !== "undefined") {
+      const existingIds = new Set(loaded.batches.map((b) => b.id));
+      for (const [id, record] of Object.entries(store)) {
+        if (existingIds.has(id)) continue;
+        if (!record || typeof record !== "object") continue;
+        const rec = record as any;
+        if (!rec.batch || !rec.fingerprint) continue;
+        const extra = reviveBatch(structuredClone(rec.batch)) as typeof loaded.batches[number];
+        if (extra && typeof extra === "object") {
+          try { syncBatchFinance(extra); } catch { /* ignore */ }
+          loaded.batches.push(extra);
+          existingIds.add(id);
+        }
+      }
+    }
     // Persist initial round IDs once so concurrent tabs refer to the same obligations.
     if (typeof window !== "undefined") {
       for (const batch of loaded.batches) {
@@ -578,20 +845,170 @@ export function reloadMockData(): MockDataSet {
 }
 
 export function refreshMockDataPrices(): MockDataSet {
+  const nyse = getNYSEInfo();
+  if (!nyse.shouldBreathe) {
+    return getMockData();
+  }
   const data = getMockData();
   const now = new Date();
-
-  data.batches.forEach((batch) => {
-    if (!batch.currentStockPrice) return;
-    const changePercent = (Math.random() - 0.5) * 0.03;
-    const newPrice = Number((batch.currentStockPrice * (1 + changePercent)).toFixed(2));
-    commitBatchFinance(batch, (draft) => {
-      draft.currentStockPrice = newPrice;
-      draft.currentDayChange = Number((changePercent * 100).toFixed(2));
-      draft.updatedAt = now;
-      syncBatchFinance(draft);
-    });
+  const symbolsQueried = new Set<string>();
+  data.batches.forEach((b) => {
+    const sym = (b.stockSymbol || "").trim().toUpperCase();
+    if (sym) symbolsQueried.add(sym);
   });
-
+  const symbolArray = Array.from(symbolsQueried);
+  if (!(symbolArray.length > 0 && typeof window !== "undefined")) {
+    return data;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2800);
+  (async () => {
+    const quotes = new Map<string, { price: number; changePercent: number }>();
+    try {
+      for (const sym of symbolArray) {
+        try {
+          const res = await fetch(`/api/quote/realtime?symbol=${encodeURIComponent(sym)}`, {
+            signal: controller.signal,
+            headers: { Accept: "application/json" },
+          });
+          if (!res.ok) continue;
+          const d: any = await res.json();
+          if (!d || d.error) continue;
+          const price = Number(d.price);
+          const changePct = Number(d.changePct);
+          if (Number.isFinite(price) && price > 0 && Number.isFinite(changePct)) {
+            quotes.set(sym, { price: Number(price.toFixed(2)), changePercent: Number(changePct.toFixed(2)) });
+          }
+        } catch {}
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (quotes.size === 0) return;
+    const latest = getMockData();
+    const dispatchedIds: string[] = [];
+    for (const batch of latest.batches) {
+      if (!batch.currentStockPrice) continue;
+      const sym = (batch.stockSymbol || "").trim().toUpperCase();
+      const found = sym ? quotes.get(sym) : null;
+      if (!found) continue;
+      const newPrice = found.price;
+      const newChg = found.changePercent;
+      if (Math.abs(newPrice - batch.currentStockPrice) <= 1e-6 && Math.abs(newChg - (batch.currentDayChange ?? 0)) <= 1e-6) {
+        continue;
+      }
+      try {
+        commitBatchFinance(batch, (draft) => {
+          draft.currentStockPrice = newPrice;
+          draft.currentDayChange = newChg;
+          draft.updatedAt = now;
+          syncBatchFinance(draft);
+        });
+        dispatchedIds.push(batch.id);
+      } catch {}
+    }
+  })();
   return data;
 }
+
+export interface NewBatchInput {
+  batchNumber?: string;
+  stockSymbol?: string;
+  stockName?: string;
+  signDate?: string | Date;
+  initialTotalAmount?: number;
+  maturityDate?: string | Date;
+  startingDropPercent?: number;
+  currentStockPrice?: number;
+  status?: BatchStatus;
+}
+
+/**
+ * 管理员级创建一个全新批次（空批次，无客户），仅用于新增批次操作；
+ * 权限判断放在调用方（客户端）校验：仅 ADMIN / RISK_MANAGER / OPERATIONS 才能调用本函数。
+ * 完成后会持久化到账本 & 触发 reloadMockData()，并派发 "risk-control:finance-changed"。
+ */
+export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client[]; marginCalls: MarginCall[] }) {
+  if (typeof window === "undefined") {
+    throw new Error("请在已登录的浏览器页面中创建批次。");
+  }
+  const now = new Date();
+  const existing = getMockData();
+  const stockSymbol = (input.stockSymbol || "XMAX").trim().toUpperCase() || "XMAX";
+  const stockName = (input.stockName || stockSymbol).trim() || stockSymbol;
+  const maxNum = existing.batches.reduce((m, b) => {
+    const m2 = String(b.batchNumber || "").match(/-(\d{3})$/);
+    if (!m2) return m;
+    return Math.max(m, Number(m2[1] || 0));
+  }, 0);
+  const nextNum = Math.max(maxNum + 1, existing.batches.length + 1);
+  const numPad = String(nextNum).padStart(3, "0");
+  const batchNumber = (input.batchNumber || `BATCH-${input.signDate ? new Date(input.signDate).getUTCFullYear() : 2026}-${numPad}`).trim();
+  const signDate = input.signDate ? new Date(input.signDate) : new Date();
+  const maturity = (() => {
+    if (input.maturityDate) return new Date(input.maturityDate);
+    const d = new Date(Date.UTC(signDate.getUTCFullYear(), signDate.getUTCMonth(), signDate.getUTCDate()));
+    d.setUTCFullYear(d.getUTCFullYear() + 2);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return d;
+  })();
+  const initialTotalAmount = Math.max(1, Number(input.initialTotalAmount) || 1);
+  const split = calculateInvestmentSplit(initialTotalAmount);
+  const stockBasePrice = (() => {
+    if (Number(input.currentStockPrice) > 0) return Number(input.currentStockPrice);
+    if (typeof STOCKS?.[0]?.basePrice === "number" && STOCKS[0].basePrice > 0) return STOCKS[0].basePrice;
+    return 10;
+  })();
+  const dropPercent = Number.isFinite(Number(input.startingDropPercent)) ? Number(input.startingDropPercent) : 0;
+  const stockPriceAtStart = Number((stockBasePrice / (1 - dropPercent)).toFixed(4));
+  const currentStockPrice = stockBasePrice;
+  const totalShares = calculateTotalShares(initialTotalAmount, stockPriceAtStart);
+  const currentMarketValue = calculateCurrentMarketValue(stockPriceAtStart, currentStockPrice, totalShares);
+  const metrics = calculateBatchRiskMetrics(initialTotalAmount, currentMarketValue, 0);
+  const tradingInfo = calculateTradingWindows(signDate);
+  let status: BatchStatus;
+  if (input.status && Object.values(BatchStatus).includes(input.status)) status = input.status as BatchStatus;
+  else if (tradingInfo.monthsElapsed >= 24) status = BatchStatus.CLOSED;
+  else if (tradingInfo.isLocked) status = BatchStatus.LOCKED;
+  else status = BatchStatus.TRADING_OPEN;
+  const id = `batch-${signDate.getUTCFullYear()}-${numPad}-${Math.random().toString(36).slice(2, 8)}`;
+  const newBatch: Batch & { clients: Client[]; marginCalls: MarginCall[] } = {
+    id,
+    batchNumber,
+    stockSymbol,
+    stockName,
+    stockPriceAtStart,
+    currentStockPrice,
+    currentDayChange: 0,
+    initialTotalAmount,
+    priorityAmount: split.priorityAmount,
+    subordinateAmount: split.subordinateAmount,
+    signDate,
+    maturityDate: maturity,
+    totalShares,
+    currentMarketValue,
+    totalPnL: metrics.totalPnL,
+    totalPnLPercent: metrics.totalPnLPercent,
+    cumulativeMarginCalls: 0,
+    status,
+    riskLevel: metrics.riskLevel,
+    nextTradingWindow: tradingInfo.nextTradingDate,
+    clients: [],
+    marginCalls: [],
+    createdAt: now,
+    updatedAt: now,
+    // 兼容 Prisma Batch 字段，若未定义则填默认值：
+  } as any;
+  // 持久化到账本
+  const store = readFinanceStore();
+  initializeBatchFinance(newBatch);
+  (newBatch as any).finance.revision = 1;
+  store[newBatch.id] = financeRecord(newBatch);
+  window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+  // 合并现有批次列表并刷新缓存
+  cachedMockData = null;
+  const fresh = getMockData();
+  window.dispatchEvent(new CustomEvent("risk-control:finance-changed", { detail: { batchId: newBatch.id, op: "createBatch" } }));
+  return fresh.batches.find((b) => b.id === newBatch.id) || newBatch;
+}
+

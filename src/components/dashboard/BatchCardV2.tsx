@@ -34,7 +34,6 @@ import {
   AlertTriangle,
   Flame,
   Gauge,
-  Landmark,
   Lock,
   Mail,
   MessageCircle,
@@ -42,13 +41,13 @@ import {
   Building2,
   DollarSign,
   Unlock,
-  UserCheck,
   Users,
   Wallet,
   Zap,
   Archive,
   CheckCircle2,
   Sparkles,
+  TrendingUp,
 } from "lucide-react";
 
 export type BatchLike = Batch & {
@@ -127,19 +126,53 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
     };
   }, []);
 
+  const isLocked = tradingInfo.isLocked;
+  const windowOpen = tradingInfo.isTradingWindow;
+
+  const baseCapital = (batch as any).finance?.remainingCapital ?? batch.initialTotalAmount ?? 0;
+  const totalPnL = mv - baseCapital;
+  const totalPnLPct = baseCapital > 0 ? (totalPnL / baseCapital) * 100 : 0;
+  const isProfitable = metrics.totalPnLPercent > 0.01;
+
   const chrome = isAllSettled
     ? "border-border/60 border-2 border-dashed bg-secondary/10 grayscale opacity-70 hover:opacity-80 transition-all"
     : isCritical
     ? "card-chrome-crit animate-card-crit"
     : isWarning
     ? "card-chrome-warn animate-card-warn"
-    : "card-chrome hover:border-primary/30 hover:-translate-y-0.5 transition-all duration-300";
+    : isProfitable
+    ? "card-chrome-success hover:-translate-y-0.5 transition-all duration-300"
+    : "card-chrome-normal hover:-translate-y-0.5 transition-all duration-300";
 
-  const isLocked = tradingInfo.isLocked;
-  const windowOpen = tradingInfo.isTradingWindow;
+  // gauge 覆盖：击穿(-∞,-20%]、预警(-20%,-15%]、正常(-15%,0]、盈利(0%,+∞)
+  // 方向：左端点 0% = 绿色 低风险 (drop=0 回本/安全) → 右端点 20% = 红色 已击穿 (drop=-20 补仓线)
+  // 线性映射：drop=0 → 0%, drop=-5 → 25%, drop=-10 → 50%, drop=-15 → 75%, drop≤-20 → 100%
+  // 盈利态(drop>0) 仍然钉在左端 0%（最安全）
+  let drop = totalPnLPct; // drop = 账户总盈亏百分比（负数=下跌，正数=盈利）
+  let pointer = 0;
+  if (drop >= 0) pointer = 0;
+  else if (drop >= -5) pointer = (-drop / 5) * 25;          // 0 → 25
+  else if (drop >= -10) pointer = 25 + (((-drop) - 5) / 5) * 25;  // 25 → 50
+  else if (drop >= -15) pointer = 50 + (((-drop) - 10) / 5) * 25; // 50 → 75
+  else if (drop >= -20) pointer = 75 + (((-drop) - 15) / 5) * 25; // 75 → 100
+  else pointer = 100;
+  pointer = Math.max(0, Math.min(100, pointer));
 
-  const safetyPct = Math.max(0, 20 - metrics.dropPercent);
-  const gaugePct = Math.min(100, Math.max(0, (Math.max(0, 20 - Math.abs(metrics.dropPercent)) / 20) * 100));
+  const stageLabel = isProfitable
+    ? "盈利中"
+    : isCritical
+    ? "已击穿"
+    : drop <= -15
+    ? `预警 缓冲 ${(drop + 20).toFixed(1)}%`
+    : `正常 缓冲 ${(drop + 20).toFixed(1)}%`;
+
+  const stageColor = isProfitable
+    ? "text-success"
+    : isCritical
+    ? "text-danger"
+    : drop <= -15
+    ? "text-warning"
+    : "text-success";
 
   const statusBadge = isAllSettled ? (
     <Badge variant="secondary" className="gap-1 h-6 text-[10px] rounded-md border-border/60">
@@ -193,28 +226,20 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
     <Link
       href={`/batch/${batch.id}`}
       className={cn(
-        "group relative rounded-2xl overflow-hidden cursor-pointer flex flex-col block min-h-[520px]",
+        "group relative rounded-2xl overflow-hidden cursor-pointer flex flex-col min-h-[520px]",
         chrome
       )}
       onClick={handleClick}
       prefetch={true}
     >
-      {/* ===== Header：股票符号 + 批次编号 ===== */}
-      <div className="px-5 pt-5 pb-4 flex items-start justify-between gap-3">
+      {/* ===== Header：批次编号 + 状态 ===== */}
+      <div className="px-5 pt-[23px] pb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 mb-1.5">
-            <p className="text-[10px] font-mono text-muted-foreground tracking-wider">
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-bold tracking-tight text-foreground">
               {batch.batchNumber}
             </p>
             {statusBadge}
-          </div>
-          <div className="flex items-baseline gap-2">
-            <h3 className="text-lg font-bold tracking-tight leading-none">
-              {batch.stockSymbol}
-            </h3>
-            <p className="text-[11px] text-muted-foreground truncate max-w-[140px]">
-              {batch.stockName}
-            </p>
           </div>
         </div>
         {riskBadge}
@@ -274,82 +299,153 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
             <Users className="h-3 w-3" />
             批次客户数
           </div>
-          <p className="text-[11px] font-mono font-semibold tabular-nums">
-            {batch.clients?.length ?? 0} 位
-          </p>
+          <div className="flex flex-col items-end justify-end">
+            <p className="text-[11px] font-mono font-semibold tabular-nums leading-tight">
+              {batch.clients?.length ?? 0} 位
+            </p>
+            {settledCount > 0 && (
+              <p className="text-[9.5px] font-mono tabular-nums text-muted-foreground/85 leading-tight mt-0.5">
+                已退出 {settledCount} 位
+              </p>
+            )}
+            {settledCount === 0 && (
+              <p className="text-[9.5px] font-mono tabular-nums text-muted-foreground/60 leading-tight mt-0.5">
+                已退出 0 位
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* ===== 距离补仓线 水位线 ===== */}
+      {/* ===== 风险程度（左=0% 绿=低风险 → 右=20% 红=已击穿）===== */}
       <div className="px-5 pb-4">
-        <div className="flex items-center justify-between text-[10px] mb-1.5">
+        <div className="flex items-center justify-between text-[10px] mb-1.5 gap-2">
           <div className="flex items-center gap-1 text-muted-foreground">
-            <Gauge className="h-3 w-3" />
-            距离 20% 补仓线
-          </div>
-          <span
-            className={cn(
-              "font-mono font-bold tabular-nums",
-              isCritical ? "text-danger" : isWarning ? "text-warning" : "text-success"
+            {isProfitable ? (
+              <>
+                <TrendingUp className="h-3 w-3 text-success" />
+                <span>风险程度 · 账户收益率</span>
+              </>
+            ) : (
+              <>
+                <Gauge className="h-3 w-3" />
+                <span>风险程度</span>
+              </>
             )}
-          >
-            {isCritical ? "已击穿" : `缓冲 ${safetyPct.toFixed(1)}%`}
-          </span>
+          </div>
+          {isProfitable ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums leading-tight">
+                  <span className={cn("font-bold text-[11px]", stageColor)}>
+                    盈利中 +{totalPnLPct.toFixed(2)}%
+                  </span>
+                  <span className="text-[10px] text-success/90 whitespace-nowrap overflow-hidden text-ellipsis max-w-[180px]">
+                    +{formatCurrency(totalPnL)}
+                  </span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px] space-y-0.5">
+                <p>当前仓位价值 {formatCurrency(mv)}</p>
+                <p>初始总投资 {formatCurrency(baseCapital)}</p>
+                <p>已实现盈利 +{formatCurrency(totalPnL)}（+{totalPnLPct.toFixed(2)}%）</p>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap", stageColor)}>
+              {stageLabel}
+            </span>
+          )}
         </div>
-        <div className="relative h-2 w-full rounded-full overflow-hidden bg-secondary/60">
-          <div className="absolute inset-y-0 left-0 right-0 risk-water-track opacity-70" />
+        {/* 外层 wrapper：relative + 无 overflow，让圆圈完整展示不被裁切 */}
+        <div className="relative w-full py-[3px]">
+          {/* 进度条本体：relative + h-2 + overflow-hidden，渐变/灰罩相对它定位；圆圈不依赖它 */}
+          <div className="relative h-2 w-full rounded-full overflow-hidden bg-secondary/60">
+            {/* 三段背景：左绿(0%=安全) → 中橙 → 右红(20%=击穿) */}
+            <div className="absolute inset-y-0 left-0 w-[50%] bg-gradient-to-r from-success/95 via-success/70 to-warning/70" />
+            <div className="absolute inset-y-0 left-[50%] w-[25%] bg-gradient-to-r from-warning/75 to-warning/60" />
+            <div className="absolute inset-y-0 left-[75%] w-[25%] bg-gradient-to-r from-warning/65 via-danger/70 to-danger/95" />
+            {/* 灰罩：危险区在 pointer 右侧 → 盖 pointer→100% 段（已击穿/预警态表示"已越过的风险区"） */}
+            {!isProfitable && (
+              <div
+                className="absolute inset-y-0 bg-background/40 backdrop-blur-[1px]"
+                style={{ left: "0%", right: `${100 - pointer}%` }}
+              />
+            )}
+          </div>
+          {/* 圆圈标记：在外层 wrapper 内定位（无 overflow），完整显示；左右边界 clamp 避免贴边被卡片容器裁切 */}
           <div
-            className="absolute inset-y-0 right-0 bg-foreground/10 backdrop-blur-sm"
-            style={{ width: `${100 - gaugePct}%` }}
-          />
-          <div className="absolute top-0 bottom-0 w-[1.5px] bg-warning-foreground/80" style={{ left: "25%" }} />
-          <div className="absolute top-0 bottom-0 w-[1.5px] bg-danger-foreground/90" style={{ left: "0%" }} />
-          <div
-            className="absolute -top-1 -translate-x-1/2 pointer-events-none transition-all duration-700"
-            style={{ left: `${gaugePct}%` }}
+            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-700"
+            style={{
+              left: `max(8px, min(calc(100% - 8px), ${pointer}%))`,
+            }}
           >
             <div
               className={cn(
-                "h-4 w-[2px] rounded-sm",
-                isCritical
-                  ? "bg-danger shadow-[0_0_12px_-2px_hsl(var(--danger))]"
-                  : isWarning
-                  ? "bg-warning shadow-[0_0_10px_-2px_hsl(var(--warning))]"
-                  : "bg-success shadow-[0_0_10px_-2px_hsl(var(--success))]"
-              )}
-            />
-            <div
-              className={cn(
-                "absolute -bottom-0.5 -translate-x-1/2 h-2 w-2 rounded-full border-2 border-background",
-                isCritical
+                "h-4 w-4 rounded-full border-[2.5px] border-white shadow-[0_0_6px_rgba(0,0,0,0.5)] ring-1 ring-black/10",
+                isProfitable
+                  ? "bg-success"
+                  : isCritical
                   ? "bg-danger"
-                  : isWarning
+                  : drop <= -15
                   ? "bg-warning"
                   : "bg-success"
               )}
             />
           </div>
         </div>
-        <div className="mt-1 flex justify-between text-[9px] font-mono text-muted-foreground/80">
+        {/* 底部两端：左 0% 绿=安全 / 右 20% 红=击穿 */}
+        <div className="mt-1 flex justify-between text-[9px] font-mono tabular-nums">
+          <span className="text-success font-semibold">0%</span>
           <span className="text-danger font-semibold">20%</span>
-          <span className="text-warning">15%</span>
-          <span className="text-success">0%</span>
         </div>
       </div>
 
       {/* ===== Stats row ===== */}
-      <div className="px-5 pb-4 grid grid-cols-3 gap-3">
+      <div className="px-5 pb-4 grid grid-cols-3 gap-2">
         <StatTile
-          label="当前市值"
+          label="当前仓位价值"
           valueNode={
-            <FlashNumber value={mv} formatter="dollarCompact" className="text-[11px] font-bold font-mono" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="w-full overflow-hidden">
+                  <FlashNumber value={mv} formatter="dollarCompact" className="text-[12px] font-bold font-mono whitespace-nowrap" />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px] space-y-0.5">
+                <p>当前仓位价值 {formatCurrency(mv)}</p>
+                <p>需补仓金额 {formatCurrency(adjustedRequired)}</p>
+                <p>合计 {formatCurrency(mv + adjustedRequired)}</p>
+                <p className="text-muted-foreground/80 pt-0.5 border-t border-border/40">
+                  = 初始总投资 {formatCurrency((batch as any).finance?.remainingCapital ?? batch.initialTotalAmount ?? 0)}
+                </p>
+              </TooltipContent>
+            </Tooltip>
           }
         />
         <StatTile
           label="需补仓"
-          value={adjustedRequired}
-          formatter="dollarCompact"
           accent={adjustedRequired > 0 ? (hasSingleTopups ? "warning" : (isCritical ? "danger" : "warning")) : "muted"}
+          valueNode={
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="w-full overflow-hidden">
+                  <span className={cn(
+                    "text-[12px] font-bold font-mono whitespace-nowrap",
+                    adjustedRequired > 0 ? (hasSingleTopups ? "text-warning" : (isCritical ? "text-danger" : "text-warning")) : "text-muted-foreground"
+                  )}>
+                    {adjustedRequired > 0 ? "+" : ""}${formatCompactNumber(adjustedRequired)}
+                  </span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[11px] space-y-0.5">
+                <p>需补仓金额 {formatCurrency(adjustedRequired)}</p>
+                <p className="text-muted-foreground/80 pt-0.5 border-t border-border/40">
+                  当前仓位价值 {formatCurrency(mv)} + 需补仓 = 初始总投资
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          }
           subNode={
             hasSingleTopups ? (
               <div className="flex items-center gap-1 text-[9px] font-mono text-success/90 mt-0.5">
@@ -369,23 +465,21 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
               : 0
           }
           formatter="number"
-          valueClassName="text-[12px] font-bold tabular-nums"
+          valueClassName="text-[13px] font-bold tabular-nums"
           icon={<Users className="h-3 w-3" />}
         />
       </div>
 
       {/* ===== P&L split ===== */}
-      <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3.5">
-        <div className="grid grid-cols-2 gap-3.5">
+      <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3">
+        <div className="grid grid-cols-2 gap-2.5">
           <PnLChip
-            icon={Landmark}
-            label="机构"
+            label="机构盈利"
             pnl={split.institutionTotalPnL}
             pnlPercent={split.institutionTotalPnLPercent}
           />
           <PnLChip
-            icon={UserCheck}
-            label="客户"
+            label="客户盈利"
             pnl={split.clientTotalPnL}
             pnlPercent={split.clientTotalPnLPercent}
           />
@@ -393,13 +487,13 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
       </div>
 
       {/* ===== Footer ===== */}
-      <div className="mt-auto px-5 pb-5 pt-3 flex flex-col items-stretch gap-3 border-t border-border/40">
-        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground min-w-0 flex-wrap">
-          <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      <div className="mt-auto px-5 py-3 flex flex-col items-stretch gap-3 border-t border-border/40 justify-end">
+        <div className="flex items-center justify-between gap-3 text-[11px] min-w-0">
+          <span className="inline-flex items-center gap-1 whitespace-nowrap text-muted-foreground shrink-0">
             <Building2 className="h-3 w-3 shrink-0" />
-            {formatDate(batch.signDate).slice(5)} → {formatDate(batch.maturityDate).slice(5)}
+            {formatDate(batch.signDate)} → {formatDate(batch.maturityDate)}
           </span>
-          {(batch.cumulativeMarginCalls ?? 0) > 0 && (
+          {(batch.cumulativeMarginCalls ?? 0) > 0 && adjustedRequired <= 0 ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex items-center gap-1 text-warning whitespace-nowrap shrink-0">
@@ -409,92 +503,94 @@ export function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAG
               </TooltipTrigger>
               <TooltipContent>累计补仓 {formatCurrency(batch.cumulativeMarginCalls ?? 0)}</TooltipContent>
             </Tooltip>
+          ) : null}
+          {adjustedRequired > 0 ? (
+            <div className="flex items-center justify-end gap-2 min-w-0 shrink-0" onClick={(e) => e.preventDefault()}>
+              <RoleGate
+                allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
+                auditResource={`batch:notify_email:${batch.id}`}
+                auditAction="ui_component_denied"
+              >
+                <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80 shrink-0"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      try {
+                        toast.success(await notifyBatchChannel(batch as any, "email"));
+                      } catch (err) {
+                        toast.error(err instanceof Error ? err.message : "通知失败");
+                      }
+                    }}
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>一键 Email 通知商务经理 及风控</TooltipContent>
+              </Tooltip>
+              </RoleGate>
+              <RoleGate
+                allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
+                auditResource={`batch:notify_wa:${batch.id}`}
+                auditAction="ui_component_denied"
+              >
+                <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80 shrink-0"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      try { toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
+                      catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
+                    }}
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>一键 WhatsApp 提醒</TooltipContent>
+              </Tooltip>
+              </RoleGate>
+              <RoleGate
+                allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
+                auditResource={`batch:fulfill_mc:${batch.id}`}
+                auditAction="ui_component_denied"
+              >
+              <Button
+                size="sm"
+                variant="danger"
+                className="h-8 px-3 whitespace-nowrap gap-1.5 rounded-lg text-[11px] font-semibold shrink-0"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (isTopupBlockedByLegacyLedger(batch as any)) {
+                    window.location.assign(`/batch/${encodeURIComponent(batch.id)}`);
+                    return;
+                  }
+                  setShowFulfillDialog(true);
+                }}
+              >
+                <Zap className="h-3.5 w-3.5" />
+                {isTopupBlockedByLegacyLedger(batch as any) ? "查看核对与处理" : "处理补仓"}
+              </Button>
+              </RoleGate>
+            </div>
+          ) : (
+            <div
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground group-hover:text-primary transition-colors whitespace-nowrap shrink-0"
+              onClick={(e) => e.preventDefault()}
+            >
+              查看详情
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-0.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </div>
           )}
         </div>
-
-        {adjustedRequired > 0 ? (
-          <div className="flex items-center justify-end gap-2 w-full min-w-0" onClick={(e) => e.preventDefault()}>
-            <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-              auditResource={`batch:notify_email:${batch.id}`}
-              auditAction="ui_component_denied"
-            >
-              <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    try {
-                      toast.success(await notifyBatchChannel(batch as any, "email"));
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : "通知失败");
-                    }
-                  }}
-                >
-                  <Mail className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>一键 Email 通知商务经理 及风控</TooltipContent>
-            </Tooltip>
-            </RoleGate>
-            <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-              auditResource={`batch:notify_wa:${batch.id}`}
-              auditAction="ui_component_denied"
-            >
-              <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    try { toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
-                    catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
-                  }}
-                >
-                  <MessageCircle className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>一键 WhatsApp 提醒</TooltipContent>
-            </Tooltip>
-            </RoleGate>
-            <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-              auditResource={`batch:fulfill_mc:${batch.id}`}
-              auditAction="ui_component_denied"
-            >
-            <Button
-              size="sm"
-              variant="danger"
-              className="h-9 flex-1 min-w-0 whitespace-nowrap gap-1.5 rounded-lg text-xs font-semibold"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (isTopupBlockedByLegacyLedger(batch as any)) {
-                  window.location.assign(`/batch/${encodeURIComponent(batch.id)}`);
-                  return;
-                }
-                setShowFulfillDialog(true);
-              }}
-            >
-              <Zap className="h-3.5 w-3.5" />
-              {isTopupBlockedByLegacyLedger(batch as any) ? "查看核对与处理" : "处理补仓"}
-            </Button>
-            </RoleGate>
-          </div>
-        ) : (
-          <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground group-hover:text-primary transition-colors ml-auto shrink-0">
-            查看详情
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-hover:translate-x-0.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-          </div>
-        )}
       </div>
       <ConfirmDialog
         open={showFulfillDialog}
@@ -577,71 +673,46 @@ function StatTile(props: {
       ? "text-success"
       : "text-foreground";
   return (
-    <div className="rounded-lg border border-border/50 bg-card/60 px-3 py-2.5">
-      <div className="flex items-center gap-1 text-[9.5px] text-muted-foreground uppercase tracking-wider font-medium">
+    <div className="rounded-lg border border-border/50 bg-card/60 px-3 py-2.5 min-h-[64px] flex flex-col">
+      <div className="flex items-center gap-1 text-[9.5px] text-muted-foreground uppercase tracking-wider font-medium shrink-0">
         {props.icon}
         {props.label}
       </div>
-      <div className="mt-1 min-h-[16px] flex items-center">
+      <div className="mt-1.5 flex-1 flex items-center min-w-0 w-full">
         {props.valueNode
-          ? props.valueNode
+          ? <div className="w-full min-w-0">{props.valueNode}</div>
           : props.value !== undefined && (
               <FlashNumber
                 value={props.value}
                 formatter={props.formatter || "dollarCompact"}
-                className={cn("font-mono", accent, props.valueClassName)}
+                className={cn("font-mono whitespace-nowrap", accent, props.valueClassName)}
                 digits={0}
               />
             )}
       </div>
-      {props.subNode}
+      {props.subNode && <div className="shrink-0">{props.subNode}</div>}
     </div>
   );
 }
 
 function PnLChip(props: {
-  icon: any;
   label: string;
   pnl: number;
   pnlPercent: number;
 }) {
-  const Icon = props.icon;
   const positive = props.pnl >= 0;
   const z = props.pnl === 0;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className="flex items-center justify-between gap-2 rounded-md bg-background/50 border border-border/40 px-3 py-2 hover:border-primary/30 transition-colors">
-          <div className="flex items-center gap-1.5 min-w-0 shrink-0">
-            <Icon
-              className={cn(
-                "h-3.5 w-3.5 shrink-0",
-                z ? "text-muted-foreground" : positive ? "text-success" : "text-danger"
-              )}
-            />
-            <span className="text-[10.5px] text-muted-foreground font-medium whitespace-nowrap">
+        <div className="flex flex-col justify-center gap-1.5 rounded-md bg-background/55 border border-border/45 px-3 py-2.5 hover:border-primary/30 transition-colors min-h-[64px] w-full">
+          <div className="flex items-center justify-between w-full shrink-0 gap-2">
+            <span className="text-[10.5px] text-muted-foreground font-medium whitespace-nowrap shrink-0">
               {props.label}
             </span>
-          </div>
-          <div className="flex flex-col items-end min-w-0">
             <span
               className={cn(
-                "text-[11px] font-bold font-mono leading-none whitespace-nowrap overflow-hidden text-ellipsis max-w-full",
-                z ? "text-muted-foreground" : positive ? "text-success" : "text-danger"
-              )}
-            >
-              {positive && !z ? "+" : ""}
-              {props.pnl.toLocaleString(undefined, {
-                notation: "compact",
-                maximumFractionDigits: 2,
-                minimumFractionDigits: 1,
-                style: "currency",
-                currency: "USD",
-              })}
-            </span>
-            <span
-              className={cn(
-                "text-[9.5px] font-mono leading-none mt-1 whitespace-nowrap",
+                "text-[11px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0",
                 z ? "text-muted-foreground/80" : positive ? "text-success/90" : "text-danger/90"
               )}
             >
@@ -649,10 +720,22 @@ function PnLChip(props: {
               {props.pnlPercent.toFixed(2)}%
             </span>
           </div>
+          <div className="flex items-baseline min-w-0 w-full">
+            <span
+              className={cn(
+                "text-[14px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums w-full",
+                z ? "text-muted-foreground" : positive ? "text-success" : "text-danger"
+              )}
+            >
+              {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}
+            </span>
+          </div>
         </div>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="start" className="text-[11px]">
-        {props.label}端累计 {props.label === "客户" ? "保本+分成" : "劣后+补仓"}
+        <p className="font-semibold mb-0.5">{props.label}（累计）</p>
+        <p>金额 {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}</p>
+        <p>收益率 {props.pnlPercent >= 0 && !z ? "+" : ""}{props.pnlPercent.toFixed(2)}%</p>
       </TooltipContent>
     </Tooltip>
   );

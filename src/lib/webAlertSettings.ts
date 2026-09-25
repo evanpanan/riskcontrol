@@ -45,7 +45,7 @@ export function getWebAlertSettings(): WebAlertSettings {
   }
 }
 
-const ACK_KEY = "risk_control_alert_ack_v1";
+const ACK_KEY = "risk_control_xmax_alert_ack_v1";
 
 export type AckShape = Record<string, number>;
 

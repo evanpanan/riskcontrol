@@ -94,3 +94,34 @@ invalidate stale-tab revisions. Never reset on ordinary application startup.
 ### Resolution
 - Rebuilt the local preview with 8 batches and 78 clients; removed the temporary reset page.
 - Added tests for clean fixtures, topups, settlement, backup, storage failure and stale tabs.
+
+## [LRN-20260922-001] correction
+
+**Logged**: 2026-09-22
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Risk alerts must show signed account declines, not positive magnitudes or stock returns.
+
+### Details
+The engine uses a positive decline magnitude for comparisons; the signed formatter
+displayed it with a plus. Use the same account metrics for the amount and the percentage.
+Institution recapitalization increases assets, not the original funding baseline.
+After 1M -> 800K -> 1M, another decline to 800K must create the next round.
+The XMAX-only test set requires one shared quote across batches with different costs.
+
+### Suggested Action
+Keep magnitude semantics in the engine and render declines with negative signs.
+Partition replacement test ledgers, notifications and acknowledgements; preserve old
+records without importing them into a different symbol. Identify batches by ID in tests.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/components/dashboard/RiskAlertDialog.tsx, src/lib/mockData.ts, scripts/check-finance.ts
+- Tags: account-risk, sign, single-symbol, fixtures
+
+### Resolution
+- Verified account-vs-stock divergence, second-round threshold, shared quotes and old ledger isolation.
+- Removed the redundant custom notification header close button.

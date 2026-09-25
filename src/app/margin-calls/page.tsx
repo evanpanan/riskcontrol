@@ -255,7 +255,7 @@ export default function MarginCallsPage() {
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="批次号 / 股票代码"
+                  placeholder="批次号 / 客户 / 签约年份"
                   className="pl-8 h-9 w-[200px] text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -285,9 +285,9 @@ export default function MarginCallsPage() {
         <CardContent className="pt-0">
           <div className="border border-border/50 rounded-xl overflow-hidden">
             <div className="grid grid-cols-12 px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30 border-b border-border/50">
-              <div className="col-span-2">批次 / 股票</div>
+              <div className="col-span-2">批次号</div>
               <div className="col-span-1 text-center">触发时间</div>
-              <div className="col-span-1 text-right">触发时市值</div>
+              <div className="col-span-1 text-right">触发时仓位价值</div>
               <div className="col-span-1 text-right">跌幅</div>
               <div className="col-span-1 text-right">应补金额</div>
               <div className="col-span-1 text-right">已到账</div>

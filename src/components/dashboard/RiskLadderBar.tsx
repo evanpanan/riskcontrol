@@ -13,10 +13,24 @@ import {
   Layers,
   Lock,
   PlayCircle,
+  PlusCircle,
+  Calendar,
   TrendingUp as TrendingUpIcon,
   MousePointerClick,
+  LineChart,
 } from "lucide-react";
 import { useEffect } from "react";
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Line,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 
 export type LadderAnchorTarget = "profit" | "normal" | "warning" | "critical";
 
@@ -112,6 +126,46 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
     .filter((b) => b.riskLevel === RiskLevel.WARNING)
     .slice(0, 3);
 
+  // ====== 近 6 月月度新增批次统计（4月 / 5月 / 6月 / 7月 / 8月 / 9月）======
+  const monthlySeries = (() => {
+    const byMonthKey = new Map<string, { label: string; count: number; cumAUM: number }>();
+    for (const b of batches) {
+      const d = new Date(b.signDate ?? b.createdAt ?? 0);
+      if (!isFinite(d.valueOf())) continue;
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth() + 1;
+      const key = `${y}-${String(m).padStart(2, "0")}`;
+      const existing = byMonthKey.get(key) ?? { label: `${y}年${m}月`, count: 0, cumAUM: 0 };
+      existing.count += 1;
+      existing.cumAUM += Number(b.initialTotalAmount ?? b.currentMarketValue ?? 0);
+      byMonthKey.set(key, existing);
+    }
+    const keysSorted = Array.from(byMonthKey.keys()).sort();
+    const last6 = keysSorted.slice(-6);
+    const maxCount = Math.max(1, ...last6.map((k) => byMonthKey.get(k)!.count));
+    let runningTotal = 0;
+    return last6.map((key, idx) => {
+      const item = byMonthKey.get(key)!;
+      runningTotal += item.count;
+      const [_y, _m] = key.split("-");
+      return {
+        key,
+        label: `${Number(_m)}月`,
+        monthFullLabel: item.label,
+        count: item.count,
+        cumAUM: item.cumAUM,
+        heightPct: Math.round((item.count / maxCount) * 100),
+        runningTotal,
+        isLast: idx === last6.length - 1,
+        yearLabel: idx === 0 || _m === "01" ? _y : undefined,
+      };
+    });
+  })();
+  const thisMonthLabel = monthlySeries[monthlySeries.length - 1]?.monthFullLabel ?? "";
+  const thisMonthCount = monthlySeries[monthlySeries.length - 1]?.count ?? 0;
+  const lastMonthCount = monthlySeries[monthlySeries.length - 2]?.count ?? 0;
+  const sixMonthCreatedTotal = monthlySeries.reduce((s, m) => s + m.count, 0);
+
   const handleSeg = (t: LadderAnchorTarget) => {
     jumpTo(t);
     if (onJump) onJump(t);
@@ -121,20 +175,14 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
     <Card className="card-chrome overflow-hidden">
       <CardContent className="p-5 lg:p-6">
         {/* ===== Header row with 4 mini KPIs ===== */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 mb-5">
           <MiniTile
             icon={Layers}
             label="在管批次"
             value={summary.totalBatches}
             formatter="number"
+            digits={0}
             sub={`${summary.totalClients} 位客户`}
-          />
-          <MiniTile
-            icon={Gauge}
-            label="资产总规模"
-            value={summary.totalAUM}
-            formatter="currency"
-            sub="优先 70% · 劣后 30%"
           />
           <MiniTile
             icon={Lock}
@@ -149,9 +197,20 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
             label="需关注批次"
             value={summary.warningCount + summary.criticalCount}
             formatter="number"
+            digits={0}
             sub={`预警 ${summary.warningCount} · 击穿 ${summary.criticalCount}`}
             iconVariant="danger"
             highlight={summary.criticalCount > 0}
+          />
+          <MiniTile
+            icon={PlusCircle}
+            label={`${thisMonthLabel} 新增批次`}
+            value={thisMonthCount}
+            formatter="number"
+            digits={0}
+            sub={`上月 +${lastMonthCount} · 近 6 月共 +${sixMonthCreatedTotal}`}
+            iconVariant="success"
+            highlight={thisMonthCount > 0}
           />
         </div>
 
@@ -178,57 +237,51 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("critical")}
-                className="group relative flex items-center justify-start px-4 text-white bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-white bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${critW}%` }}
                 aria-label={`击穿批次 ${critCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
-                  <Flame className="h-3.5 w-3.5 shrink-0" />
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                  <Flame className="h-3 w-3 shrink-0" />
                   击穿 {critCount}
                 </div>
               </button>
               <button
                 type="button"
                 onClick={() => handleSeg("warning")}
-                className="group relative flex items-center justify-center px-3 text-white bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-white bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${warnW}%` }}
                 aria-label={`预警批次 ${warnCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
                   预警 {warnCount}
                 </div>
               </button>
               <button
                 type="button"
                 onClick={() => handleSeg("normal")}
-                className="group relative flex items-center justify-center px-3 text-white bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-white bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${normalW}%` }}
                 aria-label={`正常批次 ${normalCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-sm">
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                  <CheckCircle2 className="h-3 w-3 shrink-0" />
                   正常 {normalCount}
                 </div>
               </button>
               <button
                 type="button"
                 onClick={() => handleSeg("profit")}
-                className="group relative flex items-center justify-end px-4 text-white bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-white bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${profitW}%` }}
                 aria-label={`盈利批次 ${profitCount}，点击直达`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold min-w-0 truncate drop-shadow-md">
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-md">
                   盈利 {profitCount}
-                  <TrendingUpIcon className="h-3.5 w-3.5 shrink-0" />
+                  <TrendingUpIcon className="h-3 w-3 shrink-0" />
                 </div>
               </button>
-            </div>
-
-            <div className="absolute -bottom-0 left-0 right-0 flex text-[10px] font-mono text-foreground/95 px-3 pb-1 pointer-events-none">
-              <span className="drop-shadow-sm">0%</span>
-              <span className="ml-auto mr-[25%] drop-shadow-sm">15%</span>
-              <span className="ml-auto drop-shadow-sm">20%</span>
             </div>
           </div>
         </div>
@@ -267,6 +320,7 @@ function MiniTile(props: {
   label: string;
   value: any;
   formatter?: "currency" | "percent" | "number";
+  digits?: number;
   sub?: string;
   iconVariant?: "primary" | "success" | "warning" | "danger" | "secondary";
   highlight?: boolean;
@@ -295,6 +349,7 @@ function MiniTile(props: {
               <FlashNumber
                 value={typeof props.value === "number" ? props.value : 0}
                 formatter={props.formatter}
+                digits={props.digits}
                 className="text-lg font-bold tracking-tight"
               />
             )}
@@ -351,7 +406,7 @@ function FocusPanel(props: {
           当前无 {props.accent === "danger" ? "击穿" : "预警"} 批次
         </div>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
           {props.batches.map((b) => {
             const initAmt = b.initialTotalAmount ?? 0;
             const curMV = b.currentMarketValue ?? initAmt;
@@ -373,12 +428,8 @@ function FocusPanel(props: {
                   className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-background/60 transition-colors text-left"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] text-muted-foreground w-16 shrink-0">
+                    <span className="font-mono text-[11px] font-semibold w-32 shrink-0">
                       {b.batchNumber}
-                    </span>
-                    <span className="font-semibold tracking-tight">{b.stockSymbol}</span>
-                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
-                      {b.stockName}
                     </span>
                   </div>
                   <FlashNumber

@@ -36,8 +36,8 @@ function assert(cond: any, msg: string): void {
   console.log(`✅ OK  : ${msg}`);
 }
 
-function batchClientsBySymbol(batches: typeof data.batches, symbol: string) {
-  const b = batches.find(x => x.stockSymbol === symbol);
+function batchClientsById(batches: typeof data.batches, id: string) {
+  const b = batches.find(x => x.id === id);
   if (!b) return { batch: null, clients: [] as ClientLike[] };
   return {
     batch: b,
@@ -103,11 +103,11 @@ test('T2.2 BD_LIXIAOMING 客户管理仅返回自己名下，数量应与其他 
   assert(outLxm.length > 0, 'BD_LIXIAOMING 至少 1 个客户');
 });
 
-// --- T3: filterBatchDetailClientsByRole (AMD batch-008) ---
-test('T3.1 AMD CRIT 批次详情 RISK 视角 = 18 位客户全量，无脱敏占位', () => {
-  const { clients: amdClients } = batchClientsBySymbol(data.batches, 'AMD');
-  assert(amdClients.length === 18, `AMD 批次原始客户数 ${amdClients.length} === 18`);
-  const r = filterBatchDetailClientsByRole(amdClients, userRisk);
+// --- T3: filterBatchDetailClientsByRole (XMAX批次008 batch-008) ---
+test('T3.1 XMAX批次008 CRIT 批次详情 RISK 视角 = 18 位客户全量，无脱敏占位', () => {
+  const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
+  assert(batch008Clients.length === 18, `XMAX批次008 批次原始客户数 ${batch008Clients.length} === 18`);
+  const r = filterBatchDetailClientsByRole(batch008Clients, userRisk);
   assert(r.visibleOwnCount === 18, `Risk 视角 visibleOwnCount=18`);
   assert(r.redactedCount === 0, `Risk 视角 redactedCount=0`);
   assert(r.totalOriginalCount === 18, `totalOriginalCount 保留原值 18`);
@@ -115,11 +115,11 @@ test('T3.1 AMD CRIT 批次详情 RISK 视角 = 18 位客户全量，无脱敏占
   assert(!(r.mergedRows[0] as any).__redacted, 'Risk 视角返回行无 __redacted 标记');
 });
 
-test('T3.2 AMD CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅自己客户真实，其他脱敏占位', () => {
-  const { clients: amdClients } = batchClientsBySymbol(data.batches, 'AMD');
-  const r = filterBatchDetailClientsByRole(amdClients, userLiujia);
-  const realLiujiaCount = amdClients.filter(c => c.bdManager === userLiujia.bdManagerFullName).length;
-  console.log(`  ℹ️  AMD真实刘佳客户数: ${realLiujiaCount} / redacted: ${18 - realLiujiaCount}`);
+test('T3.2 XMAX批次008 CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅自己客户真实，其他脱敏占位', () => {
+  const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
+  const r = filterBatchDetailClientsByRole(batch008Clients, userLiujia);
+  const realLiujiaCount = batch008Clients.filter(c => c.bdManager === userLiujia.bdManagerFullName).length;
+  console.log(`  ℹ️  XMAX批次008真实刘佳客户数: ${realLiujiaCount} / redacted: ${18 - realLiujiaCount}`);
   assert(r.totalOriginalCount === 18, `totalOriginalCount 仍=18（总行数保留防 BD 猜其他 BD 客户量级）`);
   assert(r.mergedRows.length === 18, `mergedRows 长度=18（=真实N + 脱敏M，防猜）`);
   assert(r.visibleOwnCount === realLiujiaCount, `visibleOwnCount=${realLiujiaCount}`);
@@ -137,12 +137,12 @@ test('T3.2 AMD CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅自己客�
   assert(redactedIds.size === redactedRows.length, `脱敏行 id 唯一（redacted-i-xxx），React key 不冲突`);
 });
 
-// --- T4: filterBatchDetailClientsByRole MSFT 验证同样逻辑 ---
-test('T4.1 MSFT 击穿批次 BD_ZHANGZHIQ 视角 = 保留 15 行', () => {
-  const { clients: msftClients } = batchClientsBySymbol(data.batches, 'MSFT');
-  assert(msftClients.length === 15, `MSFT 原始客户数=15`);
-  const r = filterBatchDetailClientsByRole(msftClients, userZhangzhiq);
-  assert(r.mergedRows.length === 15, `MSFT ZhangZhiq mergedRows=15`);
+// --- T4: filterBatchDetailClientsByRole XMAX批次004 验证同样逻辑 ---
+test('T4.1 XMAX批次004 击穿批次 BD_ZHANGZHIQ 视角 = 保留 15 行', () => {
+  const { clients: batch004Clients } = batchClientsById(data.batches, 'batch-2026-004');
+  assert(batch004Clients.length === 15, `XMAX批次004 原始客户数=15`);
+  const r = filterBatchDetailClientsByRole(batch004Clients, userZhangzhiq);
+  assert(r.mergedRows.length === 15, `XMAX批次004 ZhangZhiq mergedRows=15`);
   assert(r.totalOriginalCount === 15, `totalOriginalCount=15`);
 });
 
@@ -182,10 +182,10 @@ test('T6.1 BD_LIUJIA 视角 BD 分布 = 仅 1 条自己 + 其他 N-1 位聚合�
   }
 });
 
-// --- T7: filterBdStats AMD 局部批次 ---
-test('T7.1 AMD 批次局部 BD 分布 BD_LIXIAOMING = 自己 + 其他 3 聚合', () => {
-  const { clients: amdClients } = batchClientsBySymbol(data.batches, 'AMD');
-  const bdMap = aggregateBdMap(amdClients);
+// --- T7: filterBdStats XMAX批次008 局部批次 ---
+test('T7.1 XMAX批次008 批次局部 BD 分布 BD_LIXIAOMING = 自己 + 其他 3 聚合', () => {
+  const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
+  const bdMap = aggregateBdMap(batch008Clients);
   const r = filterBdStatsByRole(bdMap, userLixiaoming);
   assert(r.visibleEntries.length === 1 || (r.visibleEntries.length === 0 && r.aggregatedOthers), '或自己 0 客户时 visible=0 仅聚合');
   if (r.visibleEntries.length > 0) {
@@ -224,12 +224,12 @@ test('T9.1 构造虚构 BD "虚构 BD"（名下 0），filterBatchDetailClientsB
 });
 
 // --- T10: 数据泄漏检测 — BD 视角 mergedRows 中的脱敏行不包含任何原始客户姓名/金额 ---
-test('T10.1 泄漏检测：BD_LIUJIA AMD mergedRows 脱敏行 无原始客户姓名或 bdManager 泄露', () => {
-  const { clients: amdClients } = batchClientsBySymbol(data.batches, 'AMD');
-  const r = filterBatchDetailClientsByRole(amdClients, userLiujia);
+test('T10.1 泄漏检测：BD_LIUJIA XMAX批次008 mergedRows 脱敏行 无原始客户姓名或 bdManager 泄露', () => {
+  const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
+  const r = filterBatchDetailClientsByRole(batch008Clients, userLiujia);
   const redactedRows = r.mergedRows.filter((row: any) => row.__redacted) as any[];
   const originalOtherClientNames = new Set(
-    amdClients.filter(c => c.bdManager !== userLiujia.bdManagerFullName).map(c => c.name)
+    batch008Clients.filter(c => c.bdManager !== userLiujia.bdManagerFullName).map(c => c.name)
   );
   for (const row of redactedRows) {
     assert(
@@ -246,11 +246,11 @@ console.log(`\n\n=====================================================`);
 console.log(`🎉 验收完成: ${passCount}/10 子测试全部通过`);
 console.log(`   T1 全量 RISK          ✅`);
 console.log(`   T2 BD 客户管理隔离    ✅`);
-console.log(`   T3 AMD 批次保留总行数 ✅（含占位行防猜）`);
-console.log(`   T4 MSFT 批次逻辑      ✅`);
+console.log(`   T3 XMAX批次008 批次保留总行数 ✅（含占位行防猜）`);
+console.log(`   T4 XMAX批次004 批次逻辑      ✅`);
 console.log(`   T5 RISK BD 分布全量   ✅`);
 console.log(`   T6 BD 分布 3 人聚合   ✅（无其他 BD 姓名）`);
-console.log(`   T7 AMD 局部 BD 分布   ✅`);
+console.log(`   T7 XMAX批次008 局部 BD 分布   ✅`);
 console.log(`   T8 补仓记录全行可见   ✅`);
 console.log(`   T9 边缘 0 客户 BD     ✅`);
 console.log(`   T10 泄漏检测          ✅`);

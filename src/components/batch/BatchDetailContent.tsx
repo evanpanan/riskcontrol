@@ -1022,7 +1022,6 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                   >
                     <option value="ALL">全部状态</option>
                     <option value="ACTIVE">持仓中</option>
-                    <option value="EXIT_REQUESTED">申请退出</option>
                     <option value="SETTLED">已结算</option>
                   </select>
                   <select

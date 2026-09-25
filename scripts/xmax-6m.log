@@ -1,0 +1,3 @@
+GET https://api.nasdaq.com/api/quote/XMAX/historical?assetclass=stocks&fromdate=2026-02-26&limit=304
+rows= 145 status= 200
+Nasdaq: 144 candles, from 2026-02-26 to 2026-09-22

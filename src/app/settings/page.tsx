@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +11,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -56,8 +58,12 @@ import {
   RotateCcw,
   Upload,
   Globe,
+  LineChart,
+  TrendingUp,
+  TrendingDown,
+  HelpCircle,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
@@ -69,6 +75,16 @@ import {
 } from "@/lib/riskRecipients";
 import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
 import type { notificationReadiness } from "@/lib/server/notificationDelivery";
+import {
+  LIVE_QUOTE_SETTINGS_KEY,
+  DEFAULT_LIVE_QUOTE,
+  getLiveQuoteSettings,
+  setLiveQuoteSettings,
+  fetchQuoteBrowser,
+  getNYSEInfo,
+} from "@/lib/liveQuote";
+import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
+import { QUOTE_PROVIDERS } from "@/lib/quote/providers";
 
 const LS_KEY = "risk_control_settings";
 const RECIPIENTS_LS_KEY = "risk_control_recipients";
@@ -251,6 +267,37 @@ export default function SettingsPage() {
   const [confirmation, setConfirmation] = useState<{ title: string; run: () => void } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [form, setForm] = useState<SettingsFormState>(() => DEFAULT_FORM);
+  const [quote, setQuote] = useState<LiveQuoteSettings>(() => ({ ...DEFAULT_LIVE_QUOTE }));
+  const [quoteTick, setQuoteTick] = useState(0);
+  const [quoteLive, setQuoteLive] = useState<BrowserQuote | null>(null);
+  const [quoteFetching, setQuoteFetching] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setQuoteTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (!hydrated) return;
+    let cancelled = false;
+    setQuoteFetching(true);
+    (async () => {
+      try {
+        const q = await fetchQuoteBrowser(quote.symbol);
+        if (!cancelled) setQuoteLive(q);
+      } finally {
+        if (!cancelled) setQuoteFetching(false);
+      }
+    })();
+    const t2 = setInterval(async () => {
+      try {
+        const q = await fetchQuoteBrowser(quote.symbol);
+        if (!cancelled) setQuoteLive(q);
+      } catch {}
+    }, Math.max(3000, Math.min(60_000, Number(quote.refreshSec) * 1000)));
+    return () => {
+      cancelled = true;
+      clearInterval(t2);
+    };
+  }, [hydrated, quote.symbol, quote.refreshSec]);
   useEffect(() => {
     setHydrated(true);
     try {
@@ -263,6 +310,15 @@ export default function SettingsPage() {
           emergencyPhone: parsed.emergencyPhone === "+852-9123-4567" ? "" : parsed.emergencyPhone ?? "",
         }));
       }
+    } catch (e) {}
+    try {
+      setQuote(getLiveQuoteSettings());
+      const onChange = (e: Event) => {
+        const ce = e as CustomEvent<LiveQuoteSettings>;
+        if (ce?.detail) setQuote({ ...DEFAULT_LIVE_QUOTE, ...ce.detail });
+      };
+      window.addEventListener("risk-control:quote-changed", onChange as any);
+      return () => window.removeEventListener("risk-control:quote-changed", onChange as any);
     } catch (e) {}
   }, []);
   useEffect(() => {
@@ -342,6 +398,42 @@ export default function SettingsPage() {
   const [rForm, setRForm] = useState<RecipientFormState>(emptyForm());
   const [rErrors, setRErrors] = useState<Record<string, string>>({});
   const [rWA, setRWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
+
+  // 通知渠道帮助 Dialog（需求4：? 按钮 → 弹窗显示详细配置方法）
+  type HelpTopic = "email-webhook" | "whatsapp-webhook" | null;
+  const [helpOpen, setHelpOpen] = useState<HelpTopic>(null);
+  const HELP_CONTENT: Record<Exclude<HelpTopic, null>, { title: string; icon: "mail" | "wa"; steps: { h: string; p: string }[]; tips: string[] }> = {
+    "email-webhook": {
+      title: "Email 通知渠道配置指南",
+      icon: "mail",
+      steps: [
+        { h: "① 服务器端：在 Resend/SendGrid 配置发件域（DKIM + SPF）", p: "登录服务商控制台，添加已验证发件域名，完成 DNS TXT 记录部署，确保退信与 spam 评分在可控范围。服务端主配置使用真实 API Key，此 Key 仅存放于服务器 ENV。" },
+        { h: "② 服务端：写入 /api/notify/send 环境变量", p: "例如服务器 .env：RESEND_API_KEY=re_xxx、DEFAULT_FROM_EMAIL=风控通知 <noreply@institution.com>、FROM_DOMAIN=institution.com。完成后「检查服务配置」按钮会提示就绪。" },
+        { h: "③ 可选：填入本页 Email Webhook 做审计分流（不填走服务器默认）", p: "用于 Make / n8n / 自建转发器，自定义抄送、钉钉群同步、自动写 log。格式必须是完整 HTTPS URL，不允许直接第三方 API Key 链接。" },
+        { h: "④ 收件人侧：配置「默认风控收件人」+「风控收件人管理」+ 一键发送测试", p: "先填默认邮箱；在下方风控收件人里逐个增删改；点击「发送测试邮件」核对真实收件箱是否 3 分钟内收到。服务商控制台 Log 也可查投递状态。" },
+      ],
+      tips: [
+        "投递失败 90% 情况是域名未验证/DKIM 未生效，请先在服务商查看 Log",
+        "免费额度超限时会降级为页面内通知，不会重复扣费",
+        "同一事件 30 分钟内去重：同批次 + 同风险等级不会重复发邮件",
+      ],
+    },
+    "whatsapp-webhook": {
+      title: "WhatsApp Business 通知渠道配置指南",
+      icon: "wa",
+      steps: [
+        { h: "① Meta 后台：开通 WhatsApp Business Platform，审核企业号码", p: "登录 Meta Business Manager，创建 WhatsApp 业务账户，完成企业号码验证（需能接收电话/短信验证码）。号码审核通过后方可对外发消息。" },
+        { h: "② 服务端：配置 Twilio / Meta Cloud API 凭据（ENV 写入）", p: "推荐 Twilio：TWILIO_ACCOUNT_SID、TWILIO_AUTH_TOKEN、TWILIO_WA_FROM=whatsapp:+852xxxxxxxxx。或 Meta Cloud API：WA_PHONE_NUMBER_ID、WA_ACCESS_TOKEN、WA_BUSINESS_ID。再次强调：凭据仅写服务器 ENV。" },
+        { h: "③ 可选：在本页填写 WhatsApp Webhook（Make / n8n 自定义）", p: "仅用于自行搭建审计转发，不能直接填 https://graph.facebook.com。不填则默认走服务器第 ② 步主配置。" },
+        { h: "④ 用户侧：「紧急联系人电话」填写带区号完整号码 + 发起模板对话", p: "号码格式 = 区号-本地号，例如 +852-91234567。若首次触发测试失败，通常因对方未同意消息模板（Meta 24 小时窗口政策），需要用户先主动发一条消息或先通过审核模板。" },
+      ],
+      tips: [
+        "Meta Cloud API 24 小时窗口：用户不回复 → 不能主动发非模板消息，建议使用已审核模板",
+        "同一事件 30 分钟内去重，避免 WhatsApp 被举报封号",
+        "未填号码的风控收件人不会触发 WA 推送，仅会走 Email 渠道",
+      ],
+    },
+  };
 
   // 系统账号管理
   const [users, setUsers] = useState<SystemAppUser[]>(() => []);
@@ -607,12 +699,22 @@ export default function SettingsPage() {
     </div>
     <h1 className="text-2xl font-bold tracking-tight">系统设置</h1>
     <p className="text-sm text-muted-foreground">
-      配置风控参数、通知渠道与 API 集成
+      按分类管理风控、行情、通知、账号等系统配置
     </p>
   </div>
 
-  <div className="grid gap-6 grid-cols-1 lg:grid-cols-3">
-    <div className="lg:col-span-2 space-y-6">
+  <Tabs defaultValue="risk" className="w-full">
+    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 h-auto p-1.5 gap-1.5">
+      <TabsTrigger value="risk" className="h-9 gap-1.5"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
+      <TabsTrigger value="market" className="h-9 gap-1.5"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
+      <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
+      <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
+      <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
+      <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
+    </TabsList>
+
+    <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
       {/* Risk Thresholds */}
       <Card className="border-border/50">
         <CardHeader className="pb-3">
@@ -841,6 +943,90 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
+    {/* 分成档位配置 */}
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2">
+          <Settings className="h-4 w-4" />
+          分成档位配置
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-3">
+        <p className="text-xs text-muted-foreground">仅对保存后新签约的客户生效。老客户沿用签约比例，已结算金额保持冻结。</p>
+        <label className="block text-xs text-muted-foreground">
+          VIP 本金门槛（美元，含等于）
+          <Input type="number" min="0.01" step="0.01" value={Number.isFinite(form.vipThreshold) ? form.vipThreshold : ""}
+            onChange={(e) => setForm({ ...form, vipThreshold: e.target.value === "" ? NaN : Number(e.target.value) })}
+            className="mt-1 font-mono tabular-nums" />
+        </label>
+        {[
+          { threshold: form.vipThreshold, client: form.vipClient, inst: 100 - form.vipClient, label: "VIP 档位" },
+          { threshold: 0, client: form.normalClient, inst: 100 - form.normalClient, label: "普通档位" },
+        ].map((tier, idx) => (
+          <div
+            key={idx}
+            className={cn(
+              "rounded-xl border p-4 space-y-3",
+              idx === 0
+                ? "bg-primary/5 border-primary/30"
+                : "bg-secondary/30 border-border/50"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <Badge
+                variant={idx === 0 ? "primary" : "secondary"}
+                className="text-[10px]"
+              >
+                {tier.label}
+              </Badge>
+              <span className="text-[11px] font-mono text-muted-foreground">
+                {idx === 0 ? "≥" : "<"} ${Number(form.vipThreshold).toLocaleString()}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-1">客户</p>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    min="0" max="100" step="0.01"
+                    value={Number.isFinite(tier.client) ? tier.client : ""}
+                    onChange={(e) => setForm({ ...form, [idx === 0 ? "vipClient" : "normalClient"]: e.target.value === "" ? NaN : Number(e.target.value) })}
+                    className="h-9 font-mono font-bold text-xs pr-8"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                    %
+                  </span>
+                </div>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-1">机构</p>
+                <div className="relative">
+                  <Input
+                    type="number"
+                    value={Number.isFinite(tier.inst) ? tier.inst : ""}
+                    readOnly
+                    className="h-9 font-mono font-bold text-xs pr-8"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                    %
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+        <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => save("分成配置")}>
+          <Save className="h-3.5 w-3.5" />
+          保存分成配置
+        </Button>
+      </CardContent>
+    </Card>
+      </div>
+    </TabsContent>
+
+    <TabsContent value="notify" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
     {/* Notification Channels */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -880,7 +1066,13 @@ export default function SettingsPage() {
                 <Mail className="h-4 w-4 text-primary" />
               </div>
               <div>
-                <p className="font-semibold text-sm">Email Webhook</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="font-semibold text-sm">Email Webhook</p>
+                  <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
+                    onClick={() => setHelpOpen("email-webhook")} title="如何配置 Email 通知渠道？">
+                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
                 <p className="text-[11px] text-muted-foreground">
                   用于触发补仓警报时，通知风控人员与 商务经理
                 </p>
@@ -908,7 +1100,13 @@ export default function SettingsPage() {
                 <MessageCircle className="h-4 w-4 text-success" />
               </div>
               <div>
-                <p className="font-semibold text-sm">WhatsApp Business Webhook</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="font-semibold text-sm">WhatsApp Business Webhook</p>
+                  <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
+                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 通知渠道？">
+                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
                 <p className="text-[11px] text-muted-foreground">
                   紧急警报通过 WhatsApp 发送至相关人员手机
                 </p>
@@ -1104,6 +1302,192 @@ export default function SettingsPage() {
         </div>
       </CardContent>
     </Card>
+      </div>
+    </TabsContent>
+
+    <TabsContent value="market" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
+    {/* 实时股票行情（TopBar 展示 & 系统设置） */}
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2">
+          <LineChart className="h-4 w-4 text-primary" />
+          实时股票行情 · TopBar 显示
+        </CardTitle>
+        <p className="text-[11px] text-muted-foreground mt-1">
+          设置后在网站顶部「实时连接」旁边展示股票代码、最新价格与当日涨跌幅。
+          系统自动从 3 个免费公开数据源按优先级抓取（Yahoo Finance → Nasdaq → Stooq），任一成功即返回；失败时自动降级为最近一次成功的缓存价格或兜底价格，不影响顶部展示。
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-5">
+        <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
+          <div className="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
+            <div>
+              <p className="font-semibold text-sm">TopBar 实时预览</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                保存设置后，顶部导航「实时连接中」右侧会出现行情徽章（下方为当前配置的实时预览，每秒微调、每 {quote.refreshSec} 秒重新请求真实价格）。
+              </p>
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                {QUOTE_PROVIDERS.map((p) => (
+                  <Badge key={p.id} variant="outline" className="gap-1 text-[10.5px]">
+                    <RadioTower className="h-2.5 w-2.5" />
+                    {p.label}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            {(() => {
+              const symbol = (quote.symbol || "XMAX").trim().toUpperCase();
+              const price = quoteLive ? Number(quoteLive.price) : 41.88;
+              const chg = quoteLive ? Number(quoteLive.changePct) : 0.36;
+              const up = chg >= 0;
+              const nyse = getNYSEInfo();
+              return (
+                <div className="shrink-0 inline-flex items-center gap-2.5 pl-3 pr-4 py-2 rounded-full border border-border/50 bg-background shadow-sm">
+                  <span className="relative flex h-2.5 w-2.5 shrink-0">
+                    {nyse.shouldBreathe && (
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-success opacity-60 animate-ping" />
+                    )}
+                    <span className={cn("relative inline-flex rounded-full h-2.5 w-2.5", nyse.shouldBreathe ? "bg-success" : "bg-muted")} />
+                  </span>
+                  <div className="flex items-baseline gap-2">
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-wider leading-none">
+                        {symbol}
+                      </span>
+                    </div>
+                    <span className="font-mono font-bold text-lg tabular-nums tracking-tight">
+                      ${Number(price || 0).toFixed(2)}
+                    </span>
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-mono font-semibold",
+                        up ? quote.colorUp : quote.colorDown,
+                        up ? "bg-success/10" : "bg-danger/10"
+                      )}
+                    >
+                      {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                      {up ? "+" : ""}
+                      {Number(chg || 0).toFixed(2)}%
+                    </span>
+                    {quoteLive?.provider && (
+                      <Badge variant="secondary" className="text-[10px] h-5">
+                        {quoteLive.provider}
+                        {quoteLive.source !== "LIVE" && ` · ${quoteLive.source === "CACHE" ? "缓存" : "离线"}`}
+                      </Badge>
+                    )}
+                    {quoteFetching && (
+                      <Badge variant="outline" className="text-[10px] h-5 font-mono">
+                        UPDATING...
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <Label className="text-xs">股票代码 Symbol（必填，将作为顶部唯一展示字段）</Label>
+            <Input
+              className="mt-1.5 font-mono text-sm"
+              placeholder="例：XMAX / AAPL / 0700.HK"
+              value={quote.symbol || ""}
+              onChange={(e) => setQuote({ ...quote, symbol: String(e.target.value || "").toUpperCase() })}
+            />
+            <p className="text-[10.5px] text-muted-foreground mt-1.5">
+              美股用 ticker，港股带 <code>.HK</code>，A 股带 <code>.SS / .SZ</code>；系统会依次请求 3 个公开源，命中第一个即返回。
+            </p>
+          </div>
+          <div>
+            <Label className="text-xs">刷新间隔（秒）</Label>
+            <Input
+              className="mt-1.5 font-mono"
+              type="number"
+              min={1}
+              max={3600}
+              step={1}
+              value={String(quote.refreshSec)}
+              onChange={(e) => setQuote({ ...quote, refreshSec: Math.max(1, Math.min(3600, Number(e.target.value) || 8)) })}
+            />
+          </div>
+          <div className="md:col-span-2 flex flex-wrap items-center gap-4">
+            <label className="inline-flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-input"
+                checked={!!quote.showOnTopBar}
+                onChange={(e) => setQuote({ ...quote, showOnTopBar: !!e.target.checked })}
+              />
+              <span>在顶部导航（TopBar）展示行情</span>
+            </label>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">涨跌配色：</span>
+              <span className={cn("inline-flex items-center gap-1 rounded px-2 py-0.5 bg-success/10", quote.colorUp)}>
+                <TrendingUp className="h-3 w-3" /> 上涨 {quote.colorUp.replace("text-", "")}
+              </span>
+              <span className={cn("inline-flex items-center gap-1 rounded px-2 py-0.5 bg-danger/10", quote.colorDown)}>
+                <TrendingDown className="h-3 w-3" /> 下跌 {quote.colorDown.replace("text-", "")}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-3 border-t border-border/40 flex items-center gap-3 flex-wrap">
+          <Button
+            className="gap-1.5"
+            onClick={() => {
+              try {
+                if (!quote.symbol || !quote.symbol.trim()) {
+                  toast.error("请先填写股票代码 Symbol（如 AAPL）");
+                  return;
+                }
+                const next: LiveQuoteSettings = {
+                  ...DEFAULT_LIVE_QUOTE,
+                  ...quote,
+                  symbol: quote.symbol.trim().toUpperCase(),
+                  refreshSec: Math.max(1, Math.min(3600, Number(quote.refreshSec) || 8)),
+                };
+                setLiveQuoteSettings(next);
+                setQuote(next);
+                setSaved("quote");
+                setTimeout(() => setSaved(null), 2200);
+                toast.success(
+                  `已保存：${next.symbol}（刷新 ${next.refreshSec}s，TopBar 展示 = ${next.showOnTopBar ? "开启" : "关闭"}）`
+                );
+              } catch (e) {
+                console.error(e);
+                toast.error("保存行情设置失败，请检查浏览器存储。");
+              }
+            }}
+          >
+            <Save className="h-4 w-4" />
+            保存行情设置（即时生效）
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              setLiveQuoteSettings({ ...DEFAULT_LIVE_QUOTE });
+              setQuote({ ...DEFAULT_LIVE_QUOTE });
+              toast.success("已恢复默认行情设置。");
+            }}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            恢复默认
+          </Button>
+          {saved === "quote" && (
+            <Badge variant="success" className="gap-1 text-[10px]">
+              <CheckCircle2 className="h-2.5 w-2.5" />
+              已保存 · TopBar 已同步
+            </Badge>
+          )}
+        </div>
+      </CardContent>
+    </Card>
 
     {/* Data Source */}
     <Card className="border-border/50">
@@ -1181,9 +1565,11 @@ export default function SettingsPage() {
         </div>
       </CardContent>
     </Card>
-  </div>
+      </div>
+    </TabsContent>
 
-  <div className="space-y-6">
+    <TabsContent value="brand" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
     {/* Branding Logo */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -1251,7 +1637,11 @@ export default function SettingsPage() {
         {saved === "logo" && <Badge variant="success" className="gap-1 text-[10px] w-fit"><CheckCircle2 className="h-2.5 w-2.5" />Logo 已保存</Badge>}
       </CardContent>
     </Card>
+      </div>
+    </TabsContent>
 
+    <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -1357,86 +1747,11 @@ export default function SettingsPage() {
         )}
       </CardContent>
     </Card>
+      </div>
+    </TabsContent>
 
-    <Card className="border-border/50">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-bold flex items-center gap-2">
-          <Settings className="h-4 w-4" />
-          分成档位配置
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-3">
-        <p className="text-xs text-muted-foreground">仅对保存后新签约的客户生效。老客户沿用签约比例，已结算金额保持冻结。</p>
-        <label className="block text-xs text-muted-foreground">
-          VIP 本金门槛（美元，含等于）
-          <Input type="number" min="0.01" step="0.01" value={Number.isFinite(form.vipThreshold) ? form.vipThreshold : ""}
-            onChange={(e) => setForm({ ...form, vipThreshold: e.target.value === "" ? NaN : Number(e.target.value) })}
-            className="mt-1 font-mono tabular-nums" />
-        </label>
-        {[
-          { threshold: form.vipThreshold, client: form.vipClient, inst: 100 - form.vipClient, label: "VIP 档位" },
-          { threshold: 0, client: form.normalClient, inst: 100 - form.normalClient, label: "普通档位" },
-        ].map((tier, idx) => (
-          <div
-            key={idx}
-            className={cn(
-              "rounded-xl border p-4 space-y-3",
-              idx === 0
-                ? "bg-primary/5 border-primary/30"
-                : "bg-secondary/30 border-border/50"
-            )}
-          >
-            <div className="flex items-center justify-between">
-              <Badge
-                variant={idx === 0 ? "primary" : "secondary"}
-                className="text-[10px]"
-              >
-                {tier.label}
-              </Badge>
-              <span className="text-[11px] font-mono text-muted-foreground">
-                {idx === 0 ? "≥" : "<"} ${Number(form.vipThreshold).toLocaleString()}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <p className="text-[10px] text-muted-foreground mb-1">客户</p>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    min="0" max="100" step="0.01"
-                    value={Number.isFinite(tier.client) ? tier.client : ""}
-                    onChange={(e) => setForm({ ...form, [idx === 0 ? "vipClient" : "normalClient"]: e.target.value === "" ? NaN : Number(e.target.value) })}
-                    className="h-9 font-mono font-bold text-xs pr-8"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
-                    %
-                  </span>
-                </div>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground mb-1">机构</p>
-                <div className="relative">
-                  <Input
-                    type="number"
-                    value={Number.isFinite(tier.inst) ? tier.inst : ""}
-                    readOnly
-                    className="h-9 font-mono font-bold text-xs pr-8"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
-                    %
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-        <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => save("分成配置")}>
-          <Save className="h-3.5 w-3.5" />
-          保存分成配置
-        </Button>
-      </CardContent>
-    </Card>
-
+    <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+      <div className="space-y-6">
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1462,8 +1777,9 @@ export default function SettingsPage() {
         ))}
       </CardContent>
     </Card>
-  </div>
-</div>
+      </div>
+    </TabsContent>
+  </Tabs>
 
 {/* ========== 新增/编辑收件人 Dialog ========== */}
 <Dialog open={dlgOpen} onOpenChange={setDlgOpen}>
@@ -1743,6 +2059,49 @@ export default function SettingsPage() {
   title={confirmation?.title}
   onConfirm={() => confirmation?.run()}
 />
+
+{/* ====== 通知渠道配置帮助 Dialog（需求4）====== */}
+<Dialog
+  open={!!helpOpen}
+  onOpenChange={(o) => { if (!o) setHelpOpen(null); }}
+>
+  <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-y-auto">
+    <DialogHeader>
+      <DialogTitle className="flex items-center gap-2">
+        {helpOpen === "email-webhook" ? <Mail className="h-4 w-4 text-primary" /> : <MessageCircle className="h-4 w-4 text-success" />}
+        {helpOpen ? HELP_CONTENT[helpOpen].title : ""}
+      </DialogTitle>
+      <DialogDescription className="text-[11.5px]">
+        按顺序完成 4 步即可获得稳定的外部通知；API 凭据只写服务器环境变量，不填入本页任何输入框。
+      </DialogDescription>
+    </DialogHeader>
+    {helpOpen && (
+      <div className="space-y-5 pt-1">
+        <ol className="space-y-4">
+          {HELP_CONTENT[helpOpen].steps.map((s, i) => (
+            <li key={i} className="space-y-1.5">
+              <p className="text-xs font-semibold tracking-wide text-foreground">{s.h}</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{s.p}</p>
+            </li>
+          ))}
+        </ol>
+        <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 space-y-1.5">
+          <p className="text-[11px] font-semibold text-warning flex items-center gap-1.5">
+            <AlertTriangle className="h-3 w-3" />
+            注意事项 & 常见问题
+          </p>
+          <ul className="list-disc list-inside space-y-1 text-[11px] text-muted-foreground leading-relaxed">
+            {HELP_CONTENT[helpOpen].tips.map((t, i) => <li key={i}>{t}</li>)}
+          </ul>
+        </div>
+      </div>
+    )}
+    <DialogFooter>
+      <Button variant="outline" onClick={() => setHelpOpen(null)}>我知道了</Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
 </div>
   </AuthGuard>
   );

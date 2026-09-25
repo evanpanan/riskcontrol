@@ -1,10 +1,11 @@
 "use client";
 
 import { Suspense, useMemo, useState, useEffect, useRef } from "react";
-import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
+import { getMockData, refreshMockDataPrices, reloadMockData } from "@/lib/mockData";
 import { calculatePortfolioSummary, getBatchMetrics, summarizeBatchMarginFromClients } from "@/lib/riskEngine";
 import { toast } from "sonner";
 import { KPICard } from "@/components/dashboard/KPICard";
+import { DashboardCharts } from "@/components/dashboard/DashboardCharts";
 import { RiskLadderBar } from "@/components/dashboard/RiskLadderBar";
 import { BatchCardV2 } from "@/components/dashboard/BatchCardV2";
 import { RiskAlertDialog, RiskAlertItem } from "@/components/dashboard/RiskAlertDialog";
@@ -23,12 +24,11 @@ import {
   Landmark,
   UserCheck,
   Flame,
-  Layers3,
-  ArrowDownUp,
   Calendar,
   RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { getNYSEInfo } from "@/lib/liveQuote";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -40,12 +40,36 @@ import {
 
 export default function DashboardPage() {
   const { user, role } = useCurrentUser();
-  const mockDataRef = useRef(getMockData());
+  const [hydrated, setHydrated] = useState(false);
+  const [mockError, setMockError] = useState<Error | null>(null);
+  const mockDataRef = useRef<ReturnType<typeof getMockData> | null>(null);
+  if (!mockDataRef.current) {
+    try {
+      mockDataRef.current = getMockData();
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      const devMode =
+        process.env.NODE_ENV === "development" ||
+        (typeof window !== "undefined" &&
+          /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host));
+      if (devMode && typeof window !== "undefined" && (window as any).__RISK_RESET_TEST_DATA__) {
+        try {
+          (window as any).__RISK_RESET_TEST_DATA__(true);
+          reloadMockData();
+          mockDataRef.current = getMockData();
+        } catch {
+          setMockError(err);
+        }
+      } else {
+        setMockError(err);
+      }
+    }
+  }
   const [tick, setTick] = useState(0);
-  const rawBatches = useMemo(() => [...mockDataRef.current.batches], [tick]);
+  const rawBatches = useMemo(() => [...(mockDataRef.current?.batches ?? [])], [tick, hydrated]);
   const batches = useMemo(() => filterBatchesForUser(rawBatches, user ?? null), [rawBatches, user]);
-  const stockHistory = useMemo(() => mockDataRef.current.stockHistory, [tick]);
-  const summary = calculatePortfolioSummary(batches);
+  const stockHistory = useMemo(() => mockDataRef.current?.stockHistory ?? [], [tick, hydrated]);
+  const summary = useMemo(() => calculatePortfolioSummary(batches), [batches]);
   const lockedCount = batches.filter((b) => b.status === "LOCKED").length;
   const tradingCount = batches.length - lockedCount;
   const totalClients = useMemo(
@@ -53,9 +77,9 @@ export default function DashboardPage() {
     [batches]
   );
 
-  const [stockFilter, setStockFilter] = useState<string>("ALL");
   const [yearFilter, setYearFilter] = useState<string>("ALL");
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
+  const [riskLevelFilter, setRiskLevelFilter] = useState<string>("ALL");
 
   const pad = (n: number) => n.toString().padStart(2, "0");
   const toMonthKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
@@ -65,6 +89,8 @@ export default function DashboardPage() {
     const s = getWebAlertSettings();
     if (!s.realtimeTickEnabled) return;
     const id = setInterval(() => {
+      const nyse = getNYSEInfo();
+      if (!nyse.shouldBreathe) return;
       try { refreshMockDataPrices(); } catch (err) {
         toast.error(err instanceof Error ? err.message : "行情更新失败");
         clearInterval(id);
@@ -83,7 +109,6 @@ export default function DashboardPage() {
 
   // ===== 风险预警弹窗 ACK & 构建alert列表 =====
   const [alerts, setAlerts] = useState<RiskAlertItem[]>([]);
-  const [hydrated, setHydrated] = useState(false);
   const [webAlertSettings, setWebAlertSettings] = useState<ReturnType<typeof getWebAlertSettings>>({
     webAlertEnabled: true,
     webAlertSound: true,
@@ -100,6 +125,19 @@ export default function DashboardPage() {
     const onStorage = () => {
       acksRef.current = getAlertAcks();
       setWebAlertSettings(getWebAlertSettings());
+      try {
+        mockDataRef.current = getMockData();
+        setTick((t) => t + 1);
+      } catch (err) {
+        const devMode =
+          process.env.NODE_ENV === "development" ||
+          /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
+        if (devMode && (window as any).__RISK_RESET_TEST_DATA__) {
+          (window as any).__RISK_RESET_TEST_DATA__(false);
+        } else {
+          toast.error(err instanceof Error ? err.message : "账本状态异常");
+        }
+      }
     };
     window.addEventListener("storage", onStorage);
     const id = setInterval(onStorage, 4000);
@@ -117,15 +155,15 @@ export default function DashboardPage() {
       currentDayChange?: number;
     })[]) {
       const margin = summarizeBatchMarginFromClients(b);
-      const isCritical = b.riskLevel === RiskLevel.CRITICAL || margin.totalPending > 0;
-      const isWarning = b.riskLevel === RiskLevel.WARNING;
+      const m = getBatchMetrics(b);
+      const isCritical = m.riskLevel === RiskLevel.CRITICAL || margin.totalPending > 0;
+      const isWarning = m.riskLevel === RiskLevel.WARNING;
       if (!isCritical && !isWarning) continue;
       if (webAlertSettings.webAlertCriticalOnly && !isCritical) continue;
       const alertKey = margin.totalPending > 0 ? `${b.id}:${margin.roundId}` : `${b.id}:warning`;
       if (acks[alertKey] && Date.now() - acks[alertKey] < 1000 * 60 * 30) continue;
-      const initAmt = b.initialTotalAmount ?? 0;
-      const curMV = (b as any).currentMarketValue ?? initAmt;
-      const m = getBatchMetrics(b);
+      const initAmt = (b as import("@/lib/riskEngine").BatchLike).finance?.remainingCapital ?? b.initialTotalAmount ?? 0;
+      const curMV = m.currentMarketValue;
       next.push({
         alertKey,
         batchId: b.id,
@@ -196,36 +234,13 @@ export default function DashboardPage() {
     [monthGroups, yearFilter]
   );
   const yearMonthFilterActive = yearFilter !== "ALL" || monthFilter !== "ALL";
-  const resetStockFilter = () => setStockFilter("ALL");
   const resetYearMonth = () => { setYearFilter("ALL"); setMonthFilter("ALL"); };
 
-  // 构建股票Tab列表（按股票聚合批次）
-  const stockGroups = useMemo(() => {
-    const map: Record<string, { symbol: string; name: string; batches: typeof batches; risk: number }> = {};
-    for (const b of batches) {
-      const key = b.stockSymbol ?? "UNKNOWN";
-      if (!map[key]) {
-        map[key] = { symbol: b.stockSymbol ?? "UNKNOWN", name: b.stockName ?? b.stockSymbol ?? "未知", batches: [], risk: 0 };
-      }
-      map[key].batches.push(b);
-      const w =
-        b.riskLevel === RiskLevel.CRITICAL
-          ? 100
-          : b.riskLevel === RiskLevel.WARNING
-          ? 50
-          : 10;
-      map[key].risk += w;
-    }
-    return Object.values(map).sort((a, b) => b.risk - a.risk);
-  }, [batches]);
-
   const visibleBatches = useMemo(() => {
-    const stockFiltered =
-      stockFilter === "ALL" ? batches : batches.filter((b) => b.stockSymbol === stockFilter);
     const yearFiltered =
       yearFilter === "ALL"
-        ? stockFiltered
-        : stockFiltered.filter(
+        ? batches
+        : batches.filter(
             (b) => new Date(b.signDate).getFullYear().toString() === yearFilter
           );
     const list =
@@ -233,22 +248,33 @@ export default function DashboardPage() {
         ? yearFiltered
         : yearFiltered.filter((b) => toMonthKey(new Date(b.signDate)) === monthFilter);
     const weight: Record<string, number> = {
-      [RiskLevel.CRITICAL]: 3,
-      [RiskLevel.WARNING]: 2,
-      [RiskLevel.NORMAL]: 1,
+      [RiskLevel.CRITICAL]: 4,
+      [RiskLevel.WARNING]: 3,
+      [RiskLevel.NORMAL]: 2,
     };
-    return [...list].sort((a, b) => {
-      const wa = weight[a.riskLevel] ?? 0;
-      const wb = weight[b.riskLevel] ?? 0;
-      if (wa !== wb) return wb - wa;
-      const aMV = a.currentMarketValue ?? a.initialTotalAmount ?? 0;
-      const bMV = b.currentMarketValue ?? b.initialTotalAmount ?? 0;
-      const aDrop = getBatchMetrics(a).dropPercent;
-      const bDrop = getBatchMetrics(b).dropPercent;
-      return aDrop - bDrop;
+    const withMeta = list.map((b) => {
+      const metrics = getBatchMetrics(b);
+      const isProfitable = metrics.totalPnLPercent > 0.01;
+      return {
+        b,
+        isProfitable,
+        baseWeight: isProfitable ? 1 : (weight[b.riskLevel] ?? 2),
+        dropPercent: metrics.dropPercent,
+      };
     });
+    const filtered = riskLevelFilter === "ALL"
+      ? withMeta
+      : riskLevelFilter === "PROFIT"
+        ? withMeta.filter((m) => m.isProfitable)
+        : withMeta.filter((m) => !m.isProfitable && m.b.riskLevel === riskLevelFilter);
+    return filtered
+      .sort((a, z) => {
+        if (a.baseWeight !== z.baseWeight) return z.baseWeight - a.baseWeight;
+        return a.dropPercent - z.dropPercent;
+      })
+      .map((m) => m.b);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batches, stockFilter, yearFilter, monthFilter, tick]);
+  }, [batches, yearFilter, monthFilter, riskLevelFilter, tick]);
 
   const ladderSummary = {
     profitableCount: summary.profitableCount,
@@ -264,6 +290,40 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5 max-w-[1920px] mx-auto">
+      {mockError ? (
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold text-destructive">
+                本地账本校验失败
+              </h3>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                {mockError.message}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground px-4 py-2 text-sm font-semibold hover:bg-destructive/90"
+                onClick={() => {
+                  if (typeof window !== "undefined" && (window as any).__RISK_RESET_TEST_DATA__) {
+                    (window as any).__RISK_RESET_TEST_DATA__(false);
+                  } else {
+                    toast.error("未找到重置脚本，请手动清理 localStorage 后刷新。");
+                  }
+                }}
+              >
+                清空测试数据并重建
+              </button>
+            </div>
+          </div>
+          <div className="rounded-lg bg-background/60 p-3 text-[11.5px] text-muted-foreground space-y-1">
+            <div>· 只会清理「纯测试账本」；存在真实结算 / 已执行补仓的账本不会被自动删除。</div>
+            <div>· 清空前会先备份到 localStorage 里 <code className="font-mono">risk_control_test_backup_*</code> 前缀的 key，随时可回滚。</div>
+            <div>· 也可在 DevTools Console 执行：<code className="font-mono">window.__RISK_RESET_TEST_DATA__()</code></div>
+          </div>
+        </div>
+      ) : null}
+
       {/* PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div className="space-y-1.5">
@@ -281,82 +341,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ===== 顶部：极简风控核心 KPI ===== */}
-      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-        <KPICard
-          title="总管理资产 AUM"
-          value={summary.totalAUM}
-          icon={Building2}
-          iconVariant="primary"
-          footer={
-            <div className="flex items-center justify-between text-[10.5px]">
-              <span className="text-muted-foreground flex items-center gap-1">
-                <Shield className="h-3 w-3" /> 优
-              </span>
-              <span className="font-mono font-semibold">
-                {summary.totalPriority.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 2 })}
-              </span>
-              <span className="text-muted-foreground flex items-center gap-1 ml-2">
-                <Target className="h-3 w-3" /> 劣
-              </span>
-              <span className="font-mono font-semibold">
-                {summary.totalSubordinate.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 2 })}
-              </span>
-            </div>
-          }
-        />
-        <KPICard
-          title="当前总市值"
-          value={summary.currentMarketValueTotal}
-          icon={Layers}
-          iconVariant="secondary"
-          trend={{
-            value: summary.currentMarketValueTotal - summary.totalAUM,
-            label: "vs AUM",
-            formatter: "currency",
-          }}
-        />
-        <KPICard
-          title="机构累计补仓"
-          value={summary.totalMarginCalls}
-          icon={Wallet}
-          iconVariant="warning"
-          footer={
-            <div className="flex items-center justify-between text-[10.5px]">
-              <span className="text-muted-foreground">客户</span>
-              <span className="font-mono font-semibold">{totalClients}</span>
-              <span className="text-muted-foreground ml-2">关注批次</span>
-              <span className="font-mono font-semibold text-warning">
-                {summary.warningCount + summary.criticalCount}
-              </span>
-            </div>
-          }
-        />
-        <KPICard
-          title="组合收益率"
-          value={summary.totalPnLPercent}
-          formatter="percent"
-          icon={summary.totalPnL >= 0 ? TrendingUp : AlertTriangle}
-          iconVariant={summary.totalPnL >= 0 ? "success" : "warning"}
-          trend={{ value: summary.totalPnL, formatter: "currency" }}
-        />
-        <KPICard
-          title="机构收益率"
-          value={summary.institutionPnLPercent}
-          formatter="percent"
-          icon={Landmark}
-          iconVariant={summary.institutionPnL >= 0 ? "success" : "danger"}
-          trend={{ value: summary.institutionPnL, formatter: "currency" }}
-        />
-        <KPICard
-          title="客户收益率"
-          value={summary.allClientsPnLPercent}
-          formatter="percent"
-          icon={UserCheck}
-          iconVariant={summary.allClientsPnL >= 0 ? "success" : "warning"}
-          trend={{ value: summary.allClientsPnL, formatter: "currency" }}
-        />
-      </div>
+      {/* ===== 顶部：OKX 风格仪表盘双折线图 ===== */}
+      <DashboardCharts summary={summary} seedTick={tick} />
 
       {/* ===== 中部：风险阶梯状态分布条 ===== */}
       <Suspense fallback={
@@ -368,19 +354,22 @@ export default function DashboardPage() {
         <RiskLadderBar batches={batches as any} summary={ladderSummary} />
       </Suspense>
 
-      {/* ===== 下部：股票分组选项卡 + 风险排序网格 ===== */}
+      {/* ===== 下部：签约年份筛选 + 风险排序网格 ===== */}
       <div className="space-y-3">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Flame className="h-4 w-4 text-danger" />
             <h2 className="text-sm font-bold tracking-wide">批次监控中心</h2>
             <span className="text-[11px] text-muted-foreground">
-              · 按风险等级自动排序列（击穿 / 预警 / 正常）
+              · 默认排序：需补仓 → 预警 → 正常 → 盈利
             </span>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-success" /> NORMAL {summary.normalCount}
+              <span className="h-2 w-2 rounded-full bg-success" /> PROFIT {summary.profitableCount}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-primary" /> NORMAL {summary.normalCount - summary.profitableCount}
             </span>
             <span className="inline-flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-warning animate-breath-warning" /> WARNING {summary.warningCount}
@@ -391,41 +380,80 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* ===== 股票选项卡 ===== */}
+        {/* ===== 风险状态筛选 ===== */}
         <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1">
-          <StockTab
-            active={stockFilter === "ALL"}
-            onClick={() => setStockFilter("ALL")}
-            left={<Layers3 className="h-3.5 w-3.5" />}
-            label="全部股票"
+          <FilterTab
+            active={riskLevelFilter === "ALL"}
+            onClick={() => setRiskLevelFilter("ALL")}
+            left={<Layers className="h-3.5 w-3.5" />}
+            label="全部状态"
             right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{batches.length}</Badge>}
           />
-          {stockGroups.map((sg) => {
-            const hasCrit = sg.batches.some((b) => b.riskLevel === RiskLevel.CRITICAL);
-            const hasWarn = sg.batches.some((b) => b.riskLevel === RiskLevel.WARNING);
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.CRITICAL}
+            onClick={() => setRiskLevelFilter(RiskLevel.CRITICAL)}
+            left={<Flame className="h-3.5 w-3.5 text-danger" />}
+            label="需补仓（击穿）"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.criticalCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.WARNING}
+            onClick={() => setRiskLevelFilter(RiskLevel.WARNING)}
+            left={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
+            label="接近预警"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.warningCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.NORMAL}
+            onClick={() => setRiskLevelFilter(RiskLevel.NORMAL)}
+            left={<Shield className="h-3.5 w-3.5 text-primary" />}
+            label="正常安全"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.normalCount - summary.profitableCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === "PROFIT"}
+            onClick={() => setRiskLevelFilter("PROFIT")}
+            left={<TrendingUp className="h-3.5 w-3.5 text-success" />}
+            label="盈利批次"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1 text-success border-success/40">{summary.profitableCount}</Badge>}
+          />
+        </div>
+
+        {/* ===== 签约年份选项卡（原股票筛选位置）===== */}
+        <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1">
+          <FilterTab
+            active={!yearMonthFilterActive}
+            onClick={resetYearMonth}
+            left={<Calendar className="h-3.5 w-3.5" />}
+            label="全部年份"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{batches.length}</Badge>}
+          />
+          {yearOptions.slice(1).map((y) => {
+            const yBatches = batches.filter(b => new Date(b.signDate).getFullYear().toString() === y.value);
+            const hasCrit = yBatches.some((b) => b.riskLevel === RiskLevel.CRITICAL);
+            const hasWarn = yBatches.some((b) => b.riskLevel === RiskLevel.WARNING);
             return (
-              <StockTab
-                key={sg.symbol}
-                active={stockFilter === sg.symbol}
-                onClick={() => setStockFilter(sg.symbol)}
+              <FilterTab
+                key={`y-${y.value}`}
+                active={yearFilter === y.value && monthFilter === "ALL"}
+                onClick={() => { setYearFilter(y.value); setMonthFilter("ALL"); }}
                 left={
-                  <ArrowDownUp
+                  <Calendar
                     className={cn(
                       "h-3.5 w-3.5",
                       hasCrit
                         ? "text-danger"
                         : hasWarn
                         ? "text-warning"
-                        : "text-success"
+                        : "text-muted-foreground"
                     )}
                   />
                 }
-                label={sg.symbol}
-                sublabel={sg.name}
+                label={y.label}
                 right={
                   <div className="flex items-center gap-1.5 ml-1.5">
                     <Badge variant="outline" className="h-5 text-[10px] px-2">
-                      {sg.batches.length}
+                      {y.count}
                     </Badge>
                     {hasCrit && (
                       <span className="h-2 w-2 rounded-full bg-danger animate-breath-danger" />
@@ -440,32 +468,9 @@ export default function DashboardPage() {
           })}
         </div>
 
-        {/* ===== 年份选项卡 + 月份选项卡 ===== */}
+        {/* ===== 签约月份选项卡 ===== */}
         <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1 pt-1">
-          <StockTab
-            active={!yearMonthFilterActive}
-            onClick={resetYearMonth}
-            left={<Calendar className="h-3.5 w-3.5" />}
-            label="全部时间"
-            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{batches.length}</Badge>}
-          />
-          {yearGroups.length > 1 && yearOptions.slice(1).map((y) => (
-            <StockTab
-              key={`y-${y.value}`}
-              active={yearFilter === y.value && monthFilter === "ALL"}
-              onClick={() => { setYearFilter(y.value); setMonthFilter("ALL"); }}
-              left={<Calendar className="h-3.5 w-3.5 text-muted-foreground" />}
-              label={y.label}
-              right={
-                <Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">
-                  {y.count}
-                </Badge>
-              }
-            />
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1 pt-1">
-          <StockTab
+          <FilterTab
             active={yearFilter !== "ALL" && monthFilter === "ALL"}
             onClick={() => setMonthFilter("ALL")}
             left={<Calendar className="h-3.5 w-3.5" />}
@@ -477,7 +482,7 @@ export default function DashboardPage() {
             }
           />
           {shownMonthGroups.map((mg) => (
-            <StockTab
+            <FilterTab
               key={mg.key}
               active={monthFilter === mg.key}
               onClick={() => setMonthFilter(mg.key)}
@@ -541,7 +546,7 @@ export default function DashboardPage() {
   );
 }
 
-function StockTab(props: {
+function FilterTab(props: {
   active: boolean;
   onClick: () => void;
   left: React.ReactNode;
