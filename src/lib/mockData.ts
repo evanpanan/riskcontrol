@@ -20,6 +20,7 @@ import {
   calculateCurrentMarketValue,
   initializeBatchFinance,
   syncBatchFinance,
+  settleClientPosition,
   type BatchLike,
 } from "./riskEngine";
 import { mergeClientStatusOnClient } from "./clientStatusStore";
@@ -161,6 +162,7 @@ function resetClientNoAllocator() { lastClientNoAllocator = null; }
 
 export function generateMockData(): MockDataSet {
   const now = new Date();
+  const nowTs = now.getTime();
   const batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[] = [];
   const stockHistory: StockHistory[] = [];
 
@@ -484,6 +486,72 @@ export function generateMockData(): MockDataSet {
       target.riskLevel = reMetrics.riskLevel;
       void nextIdx;
     }
+  }
+
+  // ===== 历史批次模拟结算：BATCH-2026-001 / -002 / -003 中约 30% 客户 SETTLED =====
+  const settleRng = createSeededRandom(2609261542);
+  const priceLookupHist = new Map<string, number>();
+  for (const [d, close] of HISTORICAL_HALF_YEAR_PRICE_SERIES) priceLookupHist.set(d, close);
+  const sortedHist = Array.from(priceLookupHist.keys()).sort();
+  const histFind = (ts: number): number => {
+    let best = sortedHist[0];
+    for (const d of sortedHist) {
+      const dTs = new Date(d + "T00:00:00.000Z").getTime();
+      if (dTs <= ts) best = d;
+      else break;
+    }
+    return priceLookupHist.get(best)!;
+  };
+  for (let bIdx = 0; bIdx < Math.min(3, batches.length); bIdx++) {
+    const b = batches[bIdx] as BatchLike;
+    initializeBatchFinance(b);
+    const f = b.finance;
+    if (f) {
+      f.legacyWarnings = [];
+      for (const r of f.rounds) { if (r.status === "PENDING") { r.status = "FULLFILLED"; r.fulfilledAmount = r.requiredAmount; } }
+      for (const t of f.trades) { t.needsReconciliation = false; }
+    }
+    const sortedClients = [...b.clients].sort((a, c) => new Date(a.signDate).getTime() - new Date(c.signDate).getTime());
+    const settleRatio = [0.38, 0.32, 0.26][bIdx] ?? 0.3;
+    const targetNum = Math.max(2, Math.round(sortedClients.length * settleRatio));
+    const chosen = new Set<string>();
+    for (let ci = 0; ci < targetNum && ci < sortedClients.length; ci++) {
+      const c = sortedClients[ci];
+      chosen.add(c.id);
+    }
+    for (let ci = sortedClients.length - 1; chosen.size < targetNum && ci >= 0; ci--) {
+      chosen.add(sortedClients[ci].id);
+    }
+    let settledCount = 0;
+    for (const client of b.clients) {
+      if (!chosen.has(client.id)) continue;
+      const cSignTs = new Date(client.signDate).getTime();
+      const matureTs = cSignTs + (30 + settleRng.int(0, 35)) * 86400000;
+      const effectiveSettleTs = Math.min(matureTs, nowTs);
+      const settlePrice = Number(histFind(effectiveSettleTs).toFixed(4));
+      if (!(settlePrice > 0)) { console.log("[mock settle] skip no price", client.name, effectiveSettleTs); continue; }
+      const origPrice = Number(b.currentStockPrice ?? 0);
+      (b as any).currentStockPrice = settlePrice;
+      try {
+        settleClientPosition(b, client.id, { operator: "SYSTEM_MOCK" });
+        settledCount++;
+      } catch (settleErr: any) {
+        console.log("[mock settle] fail", b.id, client.name, "price=", settlePrice, "entry=", client.entryStockPrice ?? b.stockPriceAtStart, "err=", settleErr?.message ?? settleErr);
+        (b as any).currentStockPrice = origPrice;
+        continue;
+      }
+      (b as any).currentStockPrice = origPrice;
+    }
+    console.log("[mock settle] batch", b.id, "chosen=", chosen.size, "settled=", settledCount, "/", b.clients.length);
+    syncBatchFinance(b);
+    const reMetrics = calculateBatchRiskMetrics(
+      b.initialTotalAmount,
+      calculateCurrentMarketValue(b.stockPriceAtStart, Number(b.currentStockPrice), b.totalShares),
+      b.cumulativeMarginCalls ?? 0
+    );
+    (b as any).totalPnL = reMetrics.totalPnL;
+    (b as any).totalPnLPercent = reMetrics.totalPnLPercent;
+    (b as any).riskLevel = reMetrics.riskLevel;
   }
 
   return { batches, stockHistory };

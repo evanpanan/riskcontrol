@@ -565,44 +565,113 @@ export function calculateBatchStatus(batch: Batch): BatchStatus {
 }
 
 export interface BatchPnLSplit {
-  clientTotalPnL: number; clientTotalPnLPercent: number;
-  institutionTotalPnL: number; institutionTotalPnLPercent: number;
-  perClient: Map<string, { name: string; pnl: number; pnlPercent: number; isProfitable: boolean }>;
+  clientTotalPnL: number;
+  clientTotalPnLPercent: number;
+  institutionTotalPnL: number;
+  institutionTotalPnLPercent: number;
+  realizedClientPnL: number;
+  realizedInstitutionPnL: number;
+  realizedInstitutionBreakdown: { initial: number; splitShare: number; rescue: number };
+  unrealizedClientPnL: number;
+  unrealizedInstitutionPnL: number;
+  unrealizedInstitutionBreakdown: { initial: number; splitShare: number; rescue: number };
+  perClient: Map<string, {
+    name: string;
+    realizedPnL: number;
+    unrealizedPnL: number;
+    pnl: number;
+    pnlPercent: number;
+    isProfitable: boolean;
+    isSettled: boolean;
+  }>;
   rescueStats: RescueStats | null;
   breakdown: { institutionInitialSubordinatePnL: number; institutionClientSplitShare: number; institutionRescuePnL: number };
 }
 export function calculateBatchPnLSplit(batch: BatchLike, _currentMarketValue: number): BatchPnLSplit {
-  let clientTotalPnL = 0;
-  let institutionClientSplitShare = 0;
+  let realizedClientPnL = 0;
+  let realizedInstitutionInitial = 0;
+  let realizedInstitutionSplitShare = 0;
+  let realizedInstitutionRescue = 0;
+  let unrealizedClientPnL = 0;
+  let unrealizedInstitutionInitial = 0;
+  let unrealizedInstitutionSplitShare = 0;
+  let unrealizedInstitutionRescue = 0;
   const perClient: BatchPnLSplit["perClient"] = new Map();
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
-  let institutionInitialSubordinatePnL = (batch.totalShares * price - batch.initialTotalAmount) * SUBORDINATE_RATIO;
   const rescue = calculateRescueStats(batch, price);
-  let institutionRescuePnL = rescue.rescuePnL;
+  const fullRescuePnL = rescue.rescuePnL;
+  const initialBase = (batch.totalShares * price - batch.initialTotalAmount) * SUBORDINATE_RATIO;
   for (const client of batch.clients ?? []) {
-    const snapshot = batch.finance?.settlements[client.id] ?? client.settlement;
-    const raw = client.investmentAmount * (price / (client.entryStockPrice ?? batch.stockPriceAtStart) - 1);
-    const pnl = snapshot?.clientPnL ?? (client.status === ClientStatus.SETTLED ? client.realtimePnL ?? 0 : money(Math.max(0, raw) * getClientProfitSplit(client).client));
+    const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;
+    const raw = (client.investmentAmount ?? 0) * (price / ((client as ClientLike).entryStockPrice ?? batch.stockPriceAtStart) - 1);
+    const clientShare = getClientProfitSplit(client as ClientLike).client;
     if (snapshot) {
-      institutionInitialSubordinatePnL += snapshot.institutionInitialPnL;
-      institutionRescuePnL += snapshot.institutionRescuePnL;
-      institutionClientSplitShare += snapshot.institutionClientShare;
-    } else if (client.status !== ClientStatus.SETTLED) {
-      // The institution also bears the client's original-position loss under principal protection.
-      institutionClientSplitShare += raw - pnl;
+      realizedClientPnL += snapshot.clientPnL;
+      realizedInstitutionInitial += snapshot.institutionInitialPnL;
+      realizedInstitutionRescue += snapshot.institutionRescuePnL;
+      realizedInstitutionSplitShare += snapshot.institutionClientShare;
+      perClient.set(client.id, {
+        name: client.name,
+        realizedPnL: snapshot.clientPnL,
+        unrealizedPnL: 0,
+        pnl: snapshot.clientPnL,
+        pnlPercent: (client.investmentAmount ?? 0) > 0 ? snapshot.clientPnL / (client.investmentAmount ?? 0) * 100 : 0,
+        isProfitable: snapshot.clientPnL > 0,
+        isSettled: true,
+      });
     } else {
-      // Legacy positions remain unverified; reconcile provisional account PnL without inventing a payout.
-      institutionClientSplitShare += raw - pnl;
+      const pnl = client.status === ClientStatus.SETTLED
+        ? client.realtimePnL ?? 0
+        : Math.max(0, raw) * clientShare;
+      const institutionShareFromRaw = raw - pnl;
+      unrealizedClientPnL += pnl;
+      unrealizedInstitutionSplitShare += institutionShareFromRaw;
+      perClient.set(client.id, {
+        name: client.name,
+        realizedPnL: 0,
+        unrealizedPnL: pnl,
+        pnl,
+        pnlPercent: (client.investmentAmount ?? 0) > 0 ? pnl / (client.investmentAmount ?? 0) * 100 : 0,
+        isProfitable: pnl > 0,
+        isSettled: false,
+      });
     }
-    clientTotalPnL += pnl;
-    perClient.set(client.id, { name: client.name, pnl, pnlPercent: client.investmentAmount > 0 ? pnl / client.investmentAmount * 100 : 0, isProfitable: pnl > 0 });
   }
-  const institutionTotalPnL = institutionInitialSubordinatePnL + institutionClientSplitShare + institutionRescuePnL;
-  const capital = batch.finance?.originalCapital ?? batch.initialTotalAmount;
+  if (batch.finance?.settlements) {
+    const settledIds = Object.keys(batch.finance.settlements);
+    let realizedWeightSum = 0;
+    for (const id of settledIds) {
+      const c = (batch.clients ?? []).find((x) => x.id === id);
+      realizedWeightSum += (c?.investmentAmount ?? 0) / PRIORITY_RATIO;
+    }
+    const cap = batch.finance.originalCapital ?? batch.initialTotalAmount ?? 0;
+    const w = cap > 0 ? Math.min(1, realizedWeightSum / Math.max(cap, 1)) : 0;
+    realizedInstitutionInitial += initialBase * w;
+    unrealizedInstitutionInitial = initialBase * (1 - w);
+    realizedInstitutionRescue += fullRescuePnL * w;
+    unrealizedInstitutionRescue = fullRescuePnL * (1 - w);
+  } else {
+    unrealizedInstitutionInitial = initialBase;
+    unrealizedInstitutionRescue = fullRescuePnL;
+  }
+  const institutionInitialSubordinatePnL = realizedInstitutionInitial + unrealizedInstitutionInitial;
+  const institutionClientSplitShare = realizedInstitutionSplitShare + unrealizedInstitutionSplitShare;
+  const institutionRescuePnL = realizedInstitutionRescue + unrealizedInstitutionRescue;
+  const clientTotalPnL = realizedClientPnL + unrealizedClientPnL;
+  const realizedInstitutionPnL = realizedInstitutionInitial + realizedInstitutionSplitShare + realizedInstitutionRescue;
+  const unrealizedInstitutionPnL = unrealizedInstitutionInitial + unrealizedInstitutionSplitShare + unrealizedInstitutionRescue;
+  const institutionTotalPnL = realizedInstitutionPnL + unrealizedInstitutionPnL;
+  const capital = batch.finance?.originalCapital ?? batch.initialTotalAmount ?? 0;
   const injected = batch.finance?.trades.reduce((s, t) => s + t.amount, 0) ?? rescue.totalRescueAmount;
   return {
     clientTotalPnL, clientTotalPnLPercent: capital > 0 ? clientTotalPnL / (capital * PRIORITY_RATIO) * 100 : 0,
     institutionTotalPnL, institutionTotalPnLPercent: capital * SUBORDINATE_RATIO + injected > 0 ? institutionTotalPnL / (capital * SUBORDINATE_RATIO + injected) * 100 : 0,
+    realizedClientPnL,
+    realizedInstitutionPnL,
+    realizedInstitutionBreakdown: { initial: realizedInstitutionInitial, splitShare: realizedInstitutionSplitShare, rescue: realizedInstitutionRescue },
+    unrealizedClientPnL,
+    unrealizedInstitutionPnL,
+    unrealizedInstitutionBreakdown: { initial: unrealizedInstitutionInitial, splitShare: unrealizedInstitutionSplitShare, rescue: unrealizedInstitutionRescue },
     perClient, rescueStats: rescue.totalRescueAmount > 0 ? rescue : null,
     breakdown: { institutionInitialSubordinatePnL, institutionClientSplitShare, institutionRescuePnL },
   };
@@ -616,12 +685,22 @@ export interface PortfolioSummary {
   allClientsPnL: number; allClientsPnLPercent: number; profitableCount: number; normalCount: number;
   warningCount: number; criticalCount: number; totalBatches: number; currentMarketValueTotal: number;
   rescueTotalInjected: number; rescueTotalCurrentValue: number; rescueTotalPnL: number;
+  institutionRealizedPnL: number;
+  institutionUnrealizedPnL: number;
+  clientsRealizedPnL: number;
+  clientsUnrealizedPnL: number;
+  institutionRealizedPnLPercent: number;
+  clientsRealizedPnLPercent: number;
+  institutionUnrealizedPnLPercent: number;
+  clientsUnrealizedPnLPercent: number;
 }
 export function calculatePortfolioSummary(batches: BatchLike[]): PortfolioSummary {
   const s: PortfolioSummary = { totalAUM: 0, totalPriority: 0, totalSubordinate: 0, totalMarginCalls: 0,
     totalPnL: 0, totalPnLPercent: 0, institutionPnL: 0, institutionPnLPercent: 0, allClientsPnL: 0,
     allClientsPnLPercent: 0, profitableCount: 0, normalCount: 0, warningCount: 0, criticalCount: 0,
-    totalBatches: batches.length, currentMarketValueTotal: 0, rescueTotalInjected: 0, rescueTotalCurrentValue: 0, rescueTotalPnL: 0 };
+    totalBatches: batches.length, currentMarketValueTotal: 0, rescueTotalInjected: 0, rescueTotalCurrentValue: 0, rescueTotalPnL: 0,
+    institutionRealizedPnL: 0, institutionUnrealizedPnL: 0, clientsRealizedPnL: 0, clientsUnrealizedPnL: 0,
+    institutionRealizedPnLPercent: 0, clientsRealizedPnLPercent: 0, institutionUnrealizedPnLPercent: 0, clientsUnrealizedPnLPercent: 0 };
   let originalCapital = 0;
   for (const b of batches) {
     s.totalAUM += b.initialTotalAmount; s.totalPriority += b.priorityAmount; s.totalSubordinate += b.subordinateAmount;
@@ -631,6 +710,10 @@ export function calculatePortfolioSummary(batches: BatchLike[]): PortfolioSummar
     s.currentMarketValueTotal += metrics.currentMarketValue;
     const split = calculateBatchPnLSplit(b, metrics.currentMarketValue);
     s.institutionPnL += split.institutionTotalPnL; s.allClientsPnL += split.clientTotalPnL;
+    s.institutionRealizedPnL += split.realizedInstitutionPnL;
+    s.institutionUnrealizedPnL += split.unrealizedInstitutionPnL;
+    s.clientsRealizedPnL += split.realizedClientPnL;
+    s.clientsUnrealizedPnL += split.unrealizedClientPnL;
     s.totalPnL += split.institutionTotalPnL + split.clientTotalPnL;
     if (metrics.totalPnL > 0) s.profitableCount++;
     if (metrics.riskLevel === RiskLevel.CRITICAL) s.criticalCount++;
@@ -642,8 +725,14 @@ export function calculatePortfolioSummary(batches: BatchLike[]): PortfolioSummar
       s.rescueTotalPnL += split.rescueStats.rescuePnL;
     }
   }
+  const totalSubBase = originalCapital * SUBORDINATE_RATIO + s.totalMarginCalls;
+  const totalPriBase = originalCapital * PRIORITY_RATIO;
   s.totalPnLPercent = originalCapital > 0 ? s.totalPnL / originalCapital * 100 : 0;
-  s.institutionPnLPercent = originalCapital * SUBORDINATE_RATIO + s.totalMarginCalls > 0 ? s.institutionPnL / (originalCapital * SUBORDINATE_RATIO + s.totalMarginCalls) * 100 : 0;
-  s.allClientsPnLPercent = originalCapital > 0 ? s.allClientsPnL / (originalCapital * PRIORITY_RATIO) * 100 : 0;
+  s.institutionPnLPercent = totalSubBase > 0 ? s.institutionPnL / totalSubBase * 100 : 0;
+  s.allClientsPnLPercent = totalPriBase > 0 ? s.allClientsPnL / totalPriBase * 100 : 0;
+  s.institutionRealizedPnLPercent = totalSubBase > 0 ? s.institutionRealizedPnL / totalSubBase * 100 : 0;
+  s.institutionUnrealizedPnLPercent = totalSubBase > 0 ? s.institutionUnrealizedPnL / totalSubBase * 100 : 0;
+  s.clientsRealizedPnLPercent = totalPriBase > 0 ? s.clientsRealizedPnL / totalPriBase * 100 : 0;
+  s.clientsUnrealizedPnLPercent = totalPriBase > 0 ? s.clientsUnrealizedPnL / totalPriBase * 100 : 0;
   return s;
 }

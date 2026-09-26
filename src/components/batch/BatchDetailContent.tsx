@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, memo } from "react";
 import {
   getBatchMetrics,
   calculateBatchPnLSplit,
@@ -96,6 +96,86 @@ import {
   Archive,
   Gauge,
 } from "lucide-react";
+
+const MONEY_EPS = 0.005;
+function _signPct(v: number) {
+  if (!Number.isFinite(v)) return "0.00%";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+function _signMoney(v: number) {
+  if (!Number.isFinite(v)) return "$0.00";
+  return `${v >= 0 ? "+" : ""}${formatCurrency(v)}`;
+}
+function stageLabelForPnl(realized: number, unrealized: number) {
+  if (Math.abs(realized) < MONEY_EPS && Math.abs(unrealized) < MONEY_EPS) return "—";
+  if (Math.abs(realized) < MONEY_EPS) return unrealized >= 0 ? "浮盈" : "浮亏";
+  if (Math.abs(unrealized) < MONEY_EPS) return realized >= 0 ? "已实现盈利" : "已实现亏损";
+  const rSign = realized >= 0;
+  const uSign = unrealized >= 0;
+  if (rSign && uSign) return "已实现盈利 · 浮盈";
+  if (!rSign && !uSign) return "已实现亏损 · 浮亏";
+  if (!rSign && uSign) return "已实现亏损 · 浮盈";
+  return "已实现盈利 · 浮亏";
+}
+function variantForPnlStage(realized: number, unrealized: number, clientSide: boolean) {
+  const total = realized + unrealized;
+  if (Math.abs(total) < MONEY_EPS) return "outline";
+  if (realized < 0 && unrealized >= 0) return "warning";
+  if (total >= 0) return "success";
+  return clientSide ? "warning" : "danger";
+}
+const PnlStageBadge = memo(function PnlStageBadge({
+  realized,
+  unrealized,
+  clientSide,
+}: {
+  realized: number;
+  unrealized: number;
+  clientSide: boolean;
+}) {
+  return (
+    <Badge variant={variantForPnlStage(realized, unrealized, clientSide) as any} className="gap-1 px-2.5 py-1 text-xs whitespace-nowrap">
+      {stageLabelForPnl(realized, unrealized)}
+    </Badge>
+  );
+});
+const PnlCompactRow = memo(function PnlCompactRow({
+  label,
+  valueMoney,
+  valuePercent,
+  baseDenominator,
+  clientSide = false,
+}: {
+  label: string;
+  valueMoney: number;
+  valuePercent: number;
+  baseDenominator: number;
+  clientSide?: boolean;
+}) {
+  const neg = baseDenominator > 0 ? valuePercent < 0 : valueMoney < 0;
+  const zero = Math.abs(valueMoney) < MONEY_EPS;
+  const pct = baseDenominator > 0 ? valuePercent / baseDenominator * 100 : 0;
+  const colorCls = zero
+    ? "text-muted-foreground/80"
+    : neg
+    ? clientSide
+      ? "text-warning"
+      : "text-danger"
+    : "text-success";
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap">{label}</span>
+      <div className="flex items-center gap-3">
+        <span className={cn("text-xs font-bold font-mono tabular-nums whitespace-nowrap", colorCls)}>
+          {zero ? "0.00%" : _signPct(pct)}
+        </span>
+        <span className={cn("text-sm font-bold font-mono tabular-nums whitespace-nowrap", colorCls)}>
+          {zero ? "$0.00" : _signMoney(valueMoney)}
+        </span>
+      </div>
+    </div>
+  );
+});
 
 export type BatchLikeForDetail = Batch & {
   clients?: Client[];
@@ -877,28 +957,39 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </div>
                 🏦 机构盈利拆分
               </CardTitle>
-              <Badge variant={split.institutionTotalPnL >= 0 ? "success" : "danger"} className="gap-1 px-2.5 py-1 text-xs">
-                {split.institutionTotalPnL >= 0 ? "浮盈" : "浮亏"}
-              </Badge>
+              <PnlStageBadge
+                realized={split.realizedInstitutionPnL}
+                unrealized={split.unrealizedInstitutionPnL}
+                clientSide={false}
+              />
             </div>
           </CardHeader>
           <CardContent className="pt-1 space-y-3">
-            <div className="flex items-end justify-between gap-2">
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-                  机构收益率
-                </p>
-                <p className={cn("text-2xl font-bold font-mono", split.institutionTotalPnL >= 0 ? "text-success" : "text-danger")}>
-                  {split.institutionTotalPnLPercent >= 0 ? "+" : ""}
-                  {split.institutionTotalPnLPercent.toFixed(2)}%
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">绝对金额</p>
-                <p className={cn("text-lg font-bold font-mono", split.institutionTotalPnL >= 0 ? "text-success" : "text-danger")}>
-                  {split.institutionTotalPnL >= 0 ? "+" : ""}
-                  {formatCurrency(split.institutionTotalPnL)}
-                </p>
+            <div className="space-y-2">
+              <PnlCompactRow
+                label="已实现"
+                valueMoney={split.realizedInstitutionPnL}
+                valuePercent={split.realizedInstitutionBreakdown.initial + split.realizedInstitutionBreakdown.splitShare + split.realizedInstitutionBreakdown.rescue}
+                baseDenominator={(batch.finance?.originalCapital ?? batch.initialTotalAmount) * 0.3 + (batch.cumulativeMarginCalls || 0)}
+              />
+              <PnlCompactRow
+                label="未实现"
+                valueMoney={split.unrealizedInstitutionPnL}
+                valuePercent={split.unrealizedInstitutionBreakdown.initial + split.unrealizedInstitutionBreakdown.splitShare + split.unrealizedInstitutionBreakdown.rescue}
+                baseDenominator={(batch.finance?.originalCapital ?? batch.initialTotalAmount) * 0.3 + (batch.cumulativeMarginCalls || 0)}
+              />
+              <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/50">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">合计</span>
+                <div className="flex items-center gap-3">
+                  <span className={cn("text-sm font-bold font-mono tabular-nums whitespace-nowrap", split.institutionTotalPnL >= 0 ? "text-success" : "text-danger")}>
+                    {split.institutionTotalPnLPercent >= 0 ? "+" : ""}
+                    {split.institutionTotalPnLPercent.toFixed(2)}%
+                  </span>
+                  <span className={cn("text-lg font-bold font-mono tabular-nums whitespace-nowrap", split.institutionTotalPnL >= 0 ? "text-success" : "text-danger")}>
+                    {split.institutionTotalPnL >= 0 ? "+" : ""}
+                    {formatCurrency(split.institutionTotalPnL)}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/40 text-[11px]">
@@ -929,26 +1020,41 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </div>
                 👥 客户盈利拆分
               </CardTitle>
-              <Badge variant={split.clientTotalPnL >= 0 ? "success" : "warning"} className="gap-1 px-2.5 py-1 text-xs">
-                {split.clientTotalPnL >= 0 ? "浮盈" : "保本"}
-              </Badge>
+              <PnlStageBadge
+                realized={split.realizedClientPnL}
+                unrealized={split.unrealizedClientPnL}
+                clientSide
+              />
             </div>
           </CardHeader>
           <CardContent className="pt-1 space-y-3">
-            <div className="flex items-end justify-between gap-2">
-              <div>
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">客户收益率</p>
-                <p className={cn("text-2xl font-bold font-mono", split.clientTotalPnL >= 0 ? "text-success" : "text-warning")}>
-                  {split.clientTotalPnLPercent >= 0 ? "+" : ""}
-                  {split.clientTotalPnLPercent.toFixed(2)}%
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">绝对金额</p>
-                <p className={cn("text-lg font-bold font-mono", split.clientTotalPnL >= 0 ? "text-success" : "text-warning")}>
-                  {split.clientTotalPnL >= 0 ? "+" : ""}
-                  {formatCurrency(split.clientTotalPnL)}
-                </p>
+            <div className="space-y-2">
+              <PnlCompactRow
+                label="已实现"
+                valueMoney={split.realizedClientPnL}
+                valuePercent={split.realizedClientPnL}
+                baseDenominator={(batch.finance?.originalCapital ?? batch.initialTotalAmount) * 0.7}
+                clientSide
+              />
+              <PnlCompactRow
+                label="未实现"
+                valueMoney={split.unrealizedClientPnL}
+                valuePercent={split.unrealizedClientPnL}
+                baseDenominator={(batch.finance?.originalCapital ?? batch.initialTotalAmount) * 0.7}
+                clientSide
+              />
+              <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/50">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">合计</span>
+                <div className="flex items-center gap-3">
+                  <span className={cn("text-sm font-bold font-mono tabular-nums whitespace-nowrap", split.clientTotalPnL >= 0 ? "text-success" : "text-warning")}>
+                    {split.clientTotalPnLPercent >= 0 ? "+" : ""}
+                    {split.clientTotalPnLPercent.toFixed(2)}%
+                  </span>
+                  <span className={cn("text-lg font-bold font-mono tabular-nums whitespace-nowrap", split.clientTotalPnL >= 0 ? "text-success" : "text-warning")}>
+                    {split.clientTotalPnL >= 0 ? "+" : ""}
+                    {formatCurrency(split.clientTotalPnL)}
+                  </span>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/40 text-[11px]">

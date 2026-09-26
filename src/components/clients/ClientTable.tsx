@@ -270,7 +270,7 @@ export function ClientTable({
                 <TableHead className="text-right">
                   <div className="flex items-center gap-1 justify-end">
                     <TrendingUp className="h-3.5 w-3.5" />
-                    实时浮盈
+                    未实现浮盈
                   </div>
                 </TableHead>
                 <TableHead className="text-right">
@@ -278,7 +278,7 @@ export function ClientTable({
                     <TooltipTrigger asChild>
                       <div className="flex items-center gap-1 justify-end cursor-help">
                         <Landmark className="h-3.5 w-3.5 text-primary" />
-                        <span className="whitespace-nowrap">实际分成盈利</span>
+                        <span className="whitespace-nowrap">已实现盈利</span>
                       </div>
                     </TooltipTrigger>
                     <TooltipContent>
@@ -526,6 +526,15 @@ export function ClientTable({
                     <TableCell className="text-right">
                       {isRedacted ? (
                         <span className="text-muted-foreground italic">—</span>
+                      ) : isSettled ? (
+                        <div className="w-[140px] ml-auto">
+                          <p className="font-mono font-semibold text-sm text-muted-foreground italic text-right flex items-center gap-0.5 justify-end">
+                            <ShieldCheck className="h-3 w-3" /> —
+                          </p>
+                          <p className="text-[10px] font-mono mt-0.5 text-muted-foreground/70 text-right">
+                            已结算平仓
+                          </p>
+                        </div>
                       ) : (
                         <div className="w-[140px] ml-auto">
                           <p
@@ -562,7 +571,6 @@ export function ClientTable({
                             </p>
                           ) : (
                             (() => {
-                              if (isSettled) return null;
                               const mv = (client.marketValueShare ?? 0);
                               const inv = client.investmentAmount || 0;
                               const progress = inv > 0
@@ -928,13 +936,39 @@ export function ClientTable({
           <span className="font-mono font-bold">{clients.length}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">实际分成盈利合计:</span>
-          <span className="font-mono font-bold text-sm text-success">
-            +{formatCurrency(
+          <span className="text-muted-foreground">已实现盈利合计:</span>
+          <span className={cn(
+            "font-mono font-bold text-sm tabular-nums",
+            clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) > 0
+              ? "text-success"
+              : clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) < 0
+              ? "text-warning"
+              : "text-muted-foreground"
+          )}>
+            {(clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) >= 0 ? "+" : "")}
+            {formatCurrency(
               clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0)
             )}
           </span>
         </div>
+        {!shouldMergeProfitCols && (
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">未实现浮盈合计:</span>
+            <span className={cn(
+              "font-mono font-bold text-sm tabular-nums",
+              clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0) > 0
+                ? "text-success"
+                : clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0) < 0
+                ? "text-danger"
+                : "text-muted-foreground"
+            )}>
+              {(() => {
+                const v = clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0);
+                return (v >= 0 ? "+" : "") + formatCurrency(v);
+              })()}
+            </span>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">预计总退出金额:</span>
           <span className="font-mono font-bold text-sm text-primary">

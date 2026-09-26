@@ -58,15 +58,24 @@ export default function RootLayout({
       (function() {
         var LS_KEY = ${JSON.stringify(FINANCE_STORE_KEY)};
         var RAW_KEYS = ${JSON.stringify(RAW_KEYS)};
-        window.__RISK_RESET_TEST_DATA__ = function(silent) {
+        window.__RISK_RESET_TEST_DATA__ = function(silent, noBackup) {
           try {
-            var ts = Date.now();
-            var backup = {};
-            RAW_KEYS.forEach(function(k) {
-              var v = window.localStorage.getItem(k);
-              if (v != null) backup[k] = v;
-            });
-            window.localStorage.setItem("risk_control_test_backup_" + ts, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+            if (!noBackup) {
+              var ts = Date.now();
+              var backup = {};
+              RAW_KEYS.forEach(function(k) {
+                var v = window.localStorage.getItem(k);
+                if (v != null) backup[k] = v;
+              });
+              window.localStorage.setItem("risk_control_test_backup_" + ts, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+            } else {
+              try {
+                for (var i = window.localStorage.length - 1; i >= 0; i--) {
+                  var k2 = window.localStorage.key(i);
+                  if (k2 && k2.indexOf("risk_control_test_backup_") === 0) window.localStorage.removeItem(k2);
+                }
+              } catch (_bkCleanup) {}
+            }
             RAW_KEYS.forEach(function(k) { window.localStorage.removeItem(k); });
             if (!silent) setTimeout(function(){ window.location.reload(); }, 30);
             return true;

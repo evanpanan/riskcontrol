@@ -940,6 +940,7 @@ export default function MarketPage() {
               const instPct = total > 0 ? (Math.abs(instPnL) / total) * 100 : 50;
               const cliPct = 100 - instPct;
               const expectedInstPct = 30;
+              const EPS = 0.005;
               return (
                 <>
                   <div className="space-y-2">
@@ -953,6 +954,34 @@ export default function MarketPage() {
                           {instPnL >= 0 ? "+" : ""}{formatCompactNumber(instPnL)}
                         </span>
                       </div>
+                      {(Math.abs(summary.institutionRealizedPnL) >= EPS || Math.abs(summary.institutionUnrealizedPnL) >= EPS) && (
+                        <div className="space-y-0.5 text-[10.5px] pt-0.5 border-t border-border/35">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground uppercase tracking-wider font-semibold">已实现</span>
+                            <span className={cn("font-mono font-semibold tabular-nums",
+                              Math.abs(summary.institutionRealizedPnL) < EPS
+                                ? "text-muted-foreground"
+                                : summary.institutionRealizedPnL >= 0
+                                ? "text-success"
+                                : "text-danger")}>
+                              {summary.institutionRealizedPnL >= 0 && Math.abs(summary.institutionRealizedPnL) >= EPS ? "+" : ""}
+                              {formatCompactNumber(summary.institutionRealizedPnL)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground uppercase tracking-wider font-semibold">未实现</span>
+                            <span className={cn("font-mono font-semibold tabular-nums",
+                              Math.abs(summary.institutionUnrealizedPnL) < EPS
+                                ? "text-muted-foreground"
+                                : summary.institutionUnrealizedPnL >= 0
+                                ? "text-success"
+                                : "text-danger")}>
+                              {summary.institutionUnrealizedPnL >= 0 && Math.abs(summary.institutionUnrealizedPnL) >= EPS ? "+" : ""}
+                              {formatCompactNumber(summary.institutionUnrealizedPnL)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       <div className="h-3 w-full rounded-full bg-secondary/50 overflow-hidden">
                         <div className="h-full rounded-full bg-primary" style={{ width: `${instPct}%` }} />
                       </div>
@@ -972,6 +1001,34 @@ export default function MarketPage() {
                           {cliPnL >= 0 ? "+" : ""}{formatCompactNumber(cliPnL)}
                         </span>
                       </div>
+                      {(Math.abs(summary.clientsRealizedPnL) >= EPS || Math.abs(summary.clientsUnrealizedPnL) >= EPS) && (
+                        <div className="space-y-0.5 text-[10.5px] pt-0.5 border-t border-border/35">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground uppercase tracking-wider font-semibold">已实现</span>
+                            <span className={cn("font-mono font-semibold tabular-nums",
+                              Math.abs(summary.clientsRealizedPnL) < EPS
+                                ? "text-muted-foreground"
+                                : summary.clientsRealizedPnL >= 0
+                                ? "text-success"
+                                : "text-warning")}>
+                              {summary.clientsRealizedPnL >= 0 && Math.abs(summary.clientsRealizedPnL) >= EPS ? "+" : ""}
+                              {formatCompactNumber(summary.clientsRealizedPnL)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground uppercase tracking-wider font-semibold">未实现</span>
+                            <span className={cn("font-mono font-semibold tabular-nums",
+                              Math.abs(summary.clientsUnrealizedPnL) < EPS
+                                ? "text-muted-foreground"
+                                : summary.clientsUnrealizedPnL >= 0
+                                ? "text-success"
+                                : "text-warning")}>
+                              {summary.clientsUnrealizedPnL >= 0 && Math.abs(summary.clientsUnrealizedPnL) >= EPS ? "+" : ""}
+                              {formatCompactNumber(summary.clientsUnrealizedPnL)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       <div className="h-3 w-full rounded-full bg-secondary/50 overflow-hidden">
                         <div className="h-full rounded-full bg-info" style={{ width: `${cliPct}%` }} />
                       </div>
