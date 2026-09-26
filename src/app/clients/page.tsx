@@ -132,11 +132,12 @@ export default function ClientsPage() {
   const [createBatchFetchingQuote, setCreateBatchFetchingQuote] = useState(false);
   const [createBatchErrors, setCreateBatchErrors] = useState<Record<string, string>>({});
   const LAST_BATCH_SYMBOL_KEY = "risk_control_last_batch_symbol_v1";
+  const FORBIDDEN_SYMBOL_FOR_MEMORY = /XMAX/i;
   const rememberLastBatchSymbol = (sym: string): void => {
     if (typeof window === "undefined") return;
     try {
       const clean = String(sym || "").trim().toUpperCase();
-      if (!clean) {
+      if (!clean || FORBIDDEN_SYMBOL_FOR_MEMORY.test(clean)) {
         window.localStorage.removeItem(LAST_BATCH_SYMBOL_KEY);
         return;
       }
@@ -146,8 +147,12 @@ export default function ClientsPage() {
   const readLastBatchSymbol = (): string => {
     if (typeof window === "undefined") return "";
     try {
-      const raw = window.localStorage.getItem(LAST_BATCH_SYMBOL_KEY);
-      return String(raw || "").trim().toUpperCase();
+      const raw = String(window.localStorage.getItem(LAST_BATCH_SYMBOL_KEY) || "").trim().toUpperCase();
+      if (!raw || FORBIDDEN_SYMBOL_FOR_MEMORY.test(raw)) {
+        window.localStorage.removeItem(LAST_BATCH_SYMBOL_KEY);
+        return "";
+      }
+      return raw;
     } catch {
       return "";
     }
@@ -554,26 +559,7 @@ export default function ClientsPage() {
                     });
                     setCreateBatchErrors({});
                     setCreateBatchOpen(true);
-                    if (initialSymbol) {
-                      setCreateBatchFetchingQuote(true);
-                      (async () => {
-                        try {
-                          const q = await fetchQuoteBrowser(initialSymbol);
-                          const p = Number(q?.price);
-                          if (Number.isFinite(p) && p > 0) {
-                            setCreateBatchForm((prev) =>
-                              prev.stockSymbol === initialSymbol && !prev.currentStockPrice
-                                ? { ...prev, currentStockPrice: Number(p).toFixed(2) }
-                                : prev
-                            );
-                          }
-                        } catch {} finally {
-                          setCreateBatchFetchingQuote(false);
-                        }
-                      })();
-                    } else {
-                      setCreateBatchFetchingQuote(false);
-                    }
+                    setCreateBatchFetchingQuote(false);
                   }}
                 >
                   <Layers className="h-3.5 w-3.5" />
@@ -2060,27 +2046,6 @@ export default function ClientsPage() {
                     onChange={(e) => {
                       const sym = String(e.target.value || "").trim().toUpperCase();
                       setCreateBatchForm({ ...createBatchForm, stockSymbol: sym });
-                      if (!sym) return;
-                      setCreateBatchFetchingQuote(true);
-                      (async () => {
-                        try {
-                          const q = await fetchQuoteBrowser(sym);
-                          const p = Number(q?.price);
-                          if (Number.isFinite(p) && p > 0) {
-                            setCreateBatchForm((prev) => prev.stockSymbol === sym ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
-                            toast.success(
-                              `已抓取 ${q?.source === "CACHE" ? "缓存" : q?.source === "LIVE" ? "实时" : "离线兜底"}报价：` +
-                                `${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${q.provider})` : ""}`
-                            );
-                          } else {
-                            toast.error(`抓取失败：未收到 ${sym} 的有效价格，请手动输入。`);
-                          }
-                        } catch (err) {
-                          toast.error(`抓取 ${sym} 报价失败，请检查网络或手动输入。`);
-                        } finally {
-                          setCreateBatchFetchingQuote(false);
-                        }
-                      })();
                     }}
                   />
                   <Button
@@ -2124,7 +2089,7 @@ export default function ClientsPage() {
                 <Label htmlFor="cb-mv" className="text-xs font-medium">
                   建仓价格 (USD)
                   <span className="ml-1 text-[10px] text-muted-foreground">
-                    系统自动抓取当日股价，可手动修改
+                    点击右侧「抓取」按钮获取当日股价，也可直接手动修改
                   </span>
                   {createBatchFetchingQuote && (
                     <span className="ml-2 text-[10px] text-primary/80">正在获取真实报价…</span>
@@ -2134,7 +2099,7 @@ export default function ClientsPage() {
                   id="cb-mv"
                   type="number"
                   step="0.0001"
-                  placeholder="例如：8.87，系统已从 NASDAQ/YAHOO 抓取，可手动调整"
+                  placeholder="例如：8.87，点击右侧按钮抓取，或直接手动输入"
                   className="font-mono text-sm"
                   value={createBatchForm.currentStockPrice}
                   onChange={(e) => setCreateBatchForm({ ...createBatchForm, currentStockPrice: e.target.value })}
