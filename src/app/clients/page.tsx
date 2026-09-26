@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
-import { getLiveQuoteSettings } from "@/lib/liveQuote";
+import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
 import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
 import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit } from "@/lib/riskEngine";
 import { toast } from "sonner";
@@ -68,6 +68,7 @@ import {
   Trophy,
   Crown,
   Info,
+  RefreshCw,
 } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
@@ -130,6 +131,27 @@ export default function ClientsPage() {
   });
   const [createBatchFetchingQuote, setCreateBatchFetchingQuote] = useState(false);
   const [createBatchErrors, setCreateBatchErrors] = useState<Record<string, string>>({});
+  const LAST_BATCH_SYMBOL_KEY = "risk_control_last_batch_symbol_v1";
+  const rememberLastBatchSymbol = (sym: string): void => {
+    if (typeof window === "undefined") return;
+    try {
+      const clean = String(sym || "").trim().toUpperCase();
+      if (!clean) {
+        window.localStorage.removeItem(LAST_BATCH_SYMBOL_KEY);
+        return;
+      }
+      window.localStorage.setItem(LAST_BATCH_SYMBOL_KEY, clean);
+    } catch {}
+  };
+  const readLastBatchSymbol = (): string => {
+    if (typeof window === "undefined") return "";
+    try {
+      const raw = window.localStorage.getItem(LAST_BATCH_SYMBOL_KEY);
+      return String(raw || "").trim().toUpperCase();
+    } catch {
+      return "";
+    }
+  };
   const [editForm, setEditForm] = useState<{
     name: string;
     investment: string;
@@ -518,8 +540,11 @@ export default function ClientsPage() {
                     maturityBase.setUTCFullYear(maturityBase.getUTCFullYear() + 2);
                     maturityBase.setUTCDate(maturityBase.getUTCDate() - 1);
                     const matStr = maturityBase.toISOString().split("T")[0];
-                    const initialSymbol =
-                      (typeof window !== "undefined" && getLiveQuoteSettings()?.symbol?.trim().toUpperCase()) || "";
+                    const initialSymbol = (() => {
+                      const remembered = readLastBatchSymbol();
+                      if (remembered) return remembered;
+                      return (typeof window !== "undefined" && getLiveQuoteSettings()?.symbol?.trim().toUpperCase()) || "";
+                    })();
                     setCreateBatchForm({
                       signDate: signStr,
                       maturityDate: matStr,
@@ -529,23 +554,26 @@ export default function ClientsPage() {
                     });
                     setCreateBatchErrors({});
                     setCreateBatchOpen(true);
-                    setCreateBatchFetchingQuote(true);
-                    (async () => {
-                      try {
-                        const ctrl = new AbortController();
-                        const t = setTimeout(() => ctrl.abort(), 3500);
-                        const r = await fetch(`/api/quote/realtime?symbol=${encodeURIComponent(initialSymbol)}`, { signal: ctrl.signal });
-                        clearTimeout(t);
-                        if (!r.ok) return;
-                        const data = await r.json();
-                        const p = Number(data?.price);
-                        if (Number.isFinite(p) && p > 0) {
-                          setCreateBatchForm((prev) => prev.stockSymbol === initialSymbol && !prev.currentStockPrice ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
+                    if (initialSymbol) {
+                      setCreateBatchFetchingQuote(true);
+                      (async () => {
+                        try {
+                          const q = await fetchQuoteBrowser(initialSymbol);
+                          const p = Number(q?.price);
+                          if (Number.isFinite(p) && p > 0) {
+                            setCreateBatchForm((prev) =>
+                              prev.stockSymbol === initialSymbol && !prev.currentStockPrice
+                                ? { ...prev, currentStockPrice: Number(p).toFixed(2) }
+                                : prev
+                            );
+                          }
+                        } catch {} finally {
+                          setCreateBatchFetchingQuote(false);
                         }
-                      } catch {} finally {
-                        setCreateBatchFetchingQuote(false);
-                      }
-                    })();
+                      })();
+                    } else {
+                      setCreateBatchFetchingQuote(false);
+                    }
                   }}
                 >
                   <Layers className="h-3.5 w-3.5" />
@@ -2036,22 +2064,59 @@ export default function ClientsPage() {
                       setCreateBatchFetchingQuote(true);
                       (async () => {
                         try {
-                          const ctrl = new AbortController();
-                          const t = setTimeout(() => ctrl.abort(), 3500);
-                          const r = await fetch(`/api/quote/realtime?symbol=${encodeURIComponent(sym)}`, { signal: ctrl.signal });
-                          clearTimeout(t);
-                          if (!r.ok) return;
-                          const data = await r.json();
-                          const p = Number(data?.price);
+                          const q = await fetchQuoteBrowser(sym);
+                          const p = Number(q?.price);
                           if (Number.isFinite(p) && p > 0) {
                             setCreateBatchForm((prev) => prev.stockSymbol === sym ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
+                            toast.success(
+                              `已抓取 ${q?.source === "CACHE" ? "缓存" : q?.source === "LIVE" ? "实时" : "离线兜底"}报价：` +
+                                `${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${q.provider})` : ""}`
+                            );
+                          } else {
+                            toast.error(`抓取失败：未收到 ${sym} 的有效价格，请手动输入。`);
                           }
-                        } catch {} finally {
-                          setCreateBatchFetchingQuote((cur) => (cur ? false : cur));
+                        } catch (err) {
+                          toast.error(`抓取 ${sym} 报价失败，请检查网络或手动输入。`);
+                        } finally {
+                          setCreateBatchFetchingQuote(false);
                         }
                       })();
                     }}
                   />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0 h-10 w-11"
+                    disabled={createBatchFetchingQuote || !String(createBatchForm.stockSymbol || "").trim()}
+                    onClick={async () => {
+                      const sym = String(createBatchForm.stockSymbol || "").trim().toUpperCase();
+                      if (!sym) {
+                        toast.error("请先填写股票代码再抓取报价。");
+                        return;
+                      }
+                      setCreateBatchFetchingQuote(true);
+                      try {
+                        const q = await fetchQuoteBrowser(sym);
+                        const p = Number(q?.price);
+                        if (Number.isFinite(p) && p > 0) {
+                          setCreateBatchForm((prev) => prev.stockSymbol === sym ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
+                          const label =
+                            q?.source === "CACHE" ? "缓存报价" :
+                            q?.source === "LIVE" ? "实时报价" : "离线兜底报价";
+                          toast.success(`${label}：${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${q.provider})` : ""}`);
+                        } else {
+                          toast.error(`抓取失败：${sym} 未返回有效价格，请手动输入。`);
+                        }
+                      } catch (err) {
+                        toast.error(`抓取 ${sym} 报价失败，请重试或手动输入。`);
+                      } finally {
+                        setCreateBatchFetchingQuote(false);
+                      }
+                    }}
+                    title="抓取最新股价"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${createBatchFetchingQuote ? "animate-spin" : ""}`} />
+                  </Button>
                 </div>
               </div>
 
@@ -2125,18 +2190,20 @@ export default function ClientsPage() {
                   return;
                 }
                 try {
+                  const effectiveSymbol = (
+                    createBatchForm.stockSymbol ||
+                    (typeof window !== "undefined" ? getLiveQuoteSettings()?.symbol ?? "" : "")
+                  )
+                    .trim()
+                    .toUpperCase();
                   const created = createNewBatch({
                     batchNumber: bn,
                     signDate: sd!,
                     maturityDate: md!,
-                    stockSymbol: (
-                      createBatchForm.stockSymbol ||
-                      (typeof window !== "undefined" ? getLiveQuoteSettings()?.symbol ?? "" : "")
-                    )
-                      .trim()
-                      .toUpperCase(),
+                    stockSymbol: effectiveSymbol,
                     currentStockPrice: basePrice,
                   });
+                  rememberLastBatchSymbol(effectiveSymbol);
                   setMockTick((t) => t + 1);
                   setCreateBatchOpen(false);
                   toast.success(`批次 ${created.batchNumber} 创建成功，当前 0 位客户，可在「批量新增客户」中分配归属批次`);
