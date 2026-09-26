@@ -230,8 +230,10 @@ export function initializeBatchFinance(batch: BatchLike): void {
   };
   batch.finance = finance;
   const recordedPrincipal = (batch.clients ?? []).reduce((sum, c) => sum + c.investmentAmount, 0);
-  if (Math.abs(recordedPrincipal - batch.priorityAmount) > 0.02) {
-    finance.legacyWarnings.push("客户本金合计与优先资金池不一致，结算前需核对原始出资。");
+  const matchPriority = Math.abs(recordedPrincipal - batch.priorityAmount) <= 0.02;
+  const matchInitial = Math.abs(recordedPrincipal - finance.originalCapital) <= 0.02;
+  if (!matchPriority && !matchInitial) {
+    finance.legacyWarnings.push("客户本金合计与批次登记资金（优先池或初始总资金）不一致，结算前需核对原始出资。");
   }
   if ((batch.clients ?? []).some((c) => c.status === ClientStatus.SETTLED)) {
     finance.legacyWarnings.push("存在无成交快照的历史结算，账户剩余仓位需核对后才能继续结算。");
