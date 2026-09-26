@@ -54,12 +54,16 @@ export function MonthlyBatchesTrend({ batches, isAnimationActive = false }: { ba
 
   if (monthlySeries.length === 0) return null;
 
-  const chartData = monthlySeries.map((m) => ({
-    label: m.label,
-    fullLabel: m.monthFullLabel,
-    count: m.count,
-    runningTotal: m.runningTotal,
-  }));
+  const chartData = monthlySeries.map((m) => {
+    const [_y, _m] = m.key.split("-");
+    const tickY = m.yearLabel ? `${_y}年${Number(_m)}月` : `${Number(_m)}月`;
+    return {
+      label: tickY,
+      fullLabel: m.monthFullLabel,
+      count: m.count,
+      runningTotal: m.runningTotal,
+    };
+  });
 
   const totalIn6m = monthlySeries[monthlySeries.length - 1]?.runningTotal ?? 0;
   const lastMonth = monthlySeries[monthlySeries.length - 1];
@@ -107,6 +111,8 @@ export function MonthlyBatchesTrend({ batches, isAnimationActive = false }: { ba
                 tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
                 axisLine={{ stroke: "hsl(var(--border) / 0.7)" }}
                 tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={16}
               />
               <YAxis
                 yAxisId="left"

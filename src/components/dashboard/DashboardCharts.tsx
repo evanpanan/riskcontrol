@@ -57,16 +57,55 @@ function mulberry32(seed: number) {
   };
 }
 
-function formatTick(tf: Timeframe, i: number, total: number): string {
-  if (tf === "1D") return `${i}:00`;
-  if (tf === "1W") return ["一", "二", "三", "四", "五", "六", "日"][i % 7] ?? "";
-  if (tf === "1M") return (i + 1).toString();
-  if (tf === "3M" || tf === "6M") {
-    const months = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
-    const startMonth = new Date().getMonth();
-    return months[(startMonth + i + 12) % 12] + "月";
+function formatTick(tf: Timeframe, i: number, total: number): { tick: string; tooltip: string } {
+  const now = new Date();
+  const nowY = now.getUTCFullYear();
+  const nowM = now.getUTCMonth();
+  const nowD = now.getUTCDate();
+  if (tf === "1D") {
+    const d = new Date(Date.UTC(nowY, nowM, nowD, 9 + Math.floor((i / Math.max(1, total - 1)) * 7), 0));
+    const hh = d.getUTCHours().toString().padStart(2, "0");
+    const mm = d.getUTCMinutes().toString().padStart(2, "0");
+    return {
+      tick: `${hh}:${mm}`,
+      tooltip: `${nowY}年${nowM + 1}月${nowD}日 ${hh}:${mm}`,
+    };
   }
-  return `W${i + 1}`;
+  if (tf === "1W") {
+    const offsetDays = i - (total - 1);
+    const d = new Date(Date.UTC(nowY, nowM, nowD + offsetDays));
+    const dow = ["日", "一", "二", "三", "四", "五", "六"][d.getUTCDay()];
+    return {
+      tick: `周${dow}`,
+      tooltip: `${d.getUTCFullYear()}年${d.getUTCMonth() + 1}月${d.getUTCDate()}日 周${dow}`,
+    };
+  }
+  if (tf === "1M") {
+    const offsetDays = i - (total - 1);
+    const d = new Date(Date.UTC(nowY, nowM, nowD + offsetDays));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() + 1;
+    const day = d.getUTCDate();
+    const showY = y !== nowY ? `${y.toString().slice(2)}/` : "";
+    return {
+      tick: `${showY}${m}/${day}`,
+      tooltip: `${y}年${m}月${day}日`,
+    };
+  }
+  if (tf === "3M" || tf === "6M" || tf === "1Y") {
+    const span = tf === "3M" ? 3 : tf === "6M" ? 6 : 12;
+    const progress = total === 1 ? 0 : i / (total - 1);
+    const days = span * 30.4375;
+    const base = new Date(Date.UTC(nowY, nowM, nowD - Math.round(days * (1 - progress))));
+    const y = base.getUTCFullYear();
+    const m = base.getUTCMonth() + 1;
+    const showY = tf === "1Y" || y !== nowY || i === 0 || m === 1 ? `${y.toString().slice(2)}年` : "";
+    return {
+      tick: `${showY}${m}月`,
+      tooltip: `${y}年${m}月`,
+    };
+  }
+  return { tick: `W${i + 1}`, tooltip: `第 ${i + 1} 周` };
 }
 
 /* -------- 合成历史（相对当前值沿时间轴回推，保持最新点为当前值）* 增加"月度新增批次 ramp"：早期批次少 → AUM 自然更低，后期每月新增 4 批 → AUM 阶梯抬升，* 让曲线形状体现"近半年每月都有新增 4 批"的真实增长。-------- */
@@ -152,8 +191,10 @@ function synthesizeHistory(
     const total = totalBase * (1 + w.total) / scaleT * ramp;
     const institution = institutionBase * (1 + w.institution) / scaleI * ramp;
     const client = clientBase * (1 + w.client) / scaleC * ramp;
+    const ft = formatTick(timeframe, i, N);
     return {
-      label: formatTick(timeframe, i, N),
+      label: ft.tick,
+      tooltipLabel: ft.tooltip,
       total: Math.max(0, total),
       institution: Math.max(0, institution),
       client: Math.max(0, client),
@@ -201,8 +242,10 @@ function synthesizeYieldHistory(
     const t = w.t + adjT * k;
     const inst = w.i + adjI * k;
     const cl = w.c + adjC * k;
+    const ft = formatTick(timeframe, i, N);
     return {
-      label: formatTick(timeframe, i, N),
+      label: ft.tick,
+      tooltipLabel: ft.tooltip,
       total: +t.toFixed(2),
       institution: +inst.toFixed(2),
       client: +cl.toFixed(2),
@@ -272,8 +315,8 @@ const yieldLegendFormatter = (v: string) => {
   return cfg ? <span style={{ color: cfg.color, fontWeight: 500 }}>{cfg.label}</span> : v;
 };
 
-type ValueDataPoint = { label: string; total: number; institution: number; client: number };
-type YieldDataPoint = { label: string; total: number; institution: number; client: number };
+type ValueDataPoint = { label: string; tooltipLabel: string; total: number; institution: number; client: number };
+type YieldDataPoint = { label: string; tooltipLabel: string; total: number; institution: number; client: number };
 
 function ValueChart({
   currentMarketValueTotal,
@@ -343,6 +386,8 @@ function ValueChart({
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
             axisLine={{ stroke: "hsl(var(--border) / 0.7)" }}
             tickLine={false}
+            interval="preserveStartEnd"
+            minTickGap={18}
           />
           <YAxis
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
@@ -360,6 +405,10 @@ function ValueChart({
               boxShadow: "0 10px 40px -10px hsl(0 0% 0% / 0.6)",
             }}
             labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
+            labelFormatter={(_label: string, payload?: Array<{ payload?: any }>) => {
+              const first = payload?.[0]?.payload as ValueDataPoint | undefined;
+              return first?.tooltipLabel ?? _label;
+            }}
             formatter={valueTooltipFormatter}
           />
           <Legend
@@ -495,6 +544,8 @@ function YieldChart({
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
             axisLine={{ stroke: "hsl(var(--border) / 0.7)" }}
             tickLine={false}
+            interval="preserveStartEnd"
+            minTickGap={18}
           />
           <YAxis
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
@@ -512,6 +563,10 @@ function YieldChart({
               boxShadow: "0 10px 40px -10px hsl(0 0% 0% / 0.6)",
             }}
             labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
+            labelFormatter={(_label: string, payload?: Array<{ payload?: any }>) => {
+              const first = payload?.[0]?.payload as YieldDataPoint | undefined;
+              return first?.tooltipLabel ?? _label;
+            }}
             formatter={yieldTooltipFormatter}
           />
           <Legend

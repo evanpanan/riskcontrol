@@ -124,6 +124,24 @@ const DEFAULT_RISK_COLORS: Record<RiskLevel, string> = {
 
 export default function MarketPage() {
   const mockDataRef = useRef(getMockData());
+
+  const expandMonthTick = (m: string): { tick: string; tooltip: string } => {
+    const [y2, mm] = String(m || "").split("/").map((s) => s.padStart(2, "0"));
+    if (!y2 || !mm) return { tick: String(m || ""), tooltip: String(m || "") };
+    const yyyy = Number(y2) >= 70 ? 1900 + Number(y2) : 2000 + Number(y2);
+    return {
+      tick: `${yyyy}年${Number(mm)}月`,
+      tooltip: `${yyyy}年${Number(mm)}月`,
+    };
+  };
+  const expandQuarterTick = (q: string): { tick: string; tooltip: string } => {
+    const s = String(q || "");
+    const m = s.match(/^(\d{2})Q([1-4])$/i);
+    if (!m) return { tick: s, tooltip: s };
+    const yyyy = 2000 + Number(m[1]);
+    return { tick: `${yyyy}年 Q${m[2]}`, tooltip: `${yyyy}年 第${m[2]}季度` };
+  };
+
   const [tick, setTick] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -132,7 +150,13 @@ export default function MarketPage() {
   const [animActive, setAnimActive] = useState(true);
   const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
 
-  const riskMonthly = useMemo(() => generateInstitutionRiskByMonth(20260917), []);
+  const riskMonthly = useMemo(() => {
+    const raw = generateInstitutionRiskByMonth(20260917);
+    return raw.map((row) => {
+      const { tick, tooltip } = expandMonthTick(row.month);
+      return { ...row, month: tick, monthLabel: tooltip };
+    });
+  }, []);
 
   useEffect(() => {
     const id = window.setTimeout(() => setAnimActive(false), 1400);
@@ -402,7 +426,10 @@ export default function MarketPage() {
     }
     return Object.entries(map)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, count]) => ({ month, 到期批次: count }));
+      .map(([monthKey, count]) => {
+        const { tick, tooltip } = expandMonthTick(monthKey);
+        return { month: tick, monthLabel: tooltip, 到期批次: count };
+      });
   }, [batches]);
 
   // ====== 新增 8：客户签约节奏按季度 ======
@@ -421,7 +448,10 @@ export default function MarketPage() {
     }
     return Object.entries(map)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([q, n]) => ({ 季度: q, 签约客户数: n }));
+      .map(([qKey, n]) => {
+        const { tick, tooltip } = expandQuarterTick(qKey);
+        return { 季度: tick, 季度Label: tooltip, 签约客户数: n };
+      });
   }, [batches]);
 
   // ====== 新增 9：批次剩余寿命 Top10 横向 Bar ======
@@ -853,6 +883,10 @@ export default function MarketPage() {
                       borderRadius: 8,
                       fontSize: 11,
                     }}
+                    labelFormatter={(_label, payload) => {
+                      const first = (payload as unknown as Array<{ payload?: any }>)?.[0]?.payload;
+                      return first?.monthLabel ?? _label;
+                    }}
                     formatter={(v: any) => formatCurrency(Number(v))}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -991,7 +1025,10 @@ export default function MarketPage() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fontSize: 10.5 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
-                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 批次`, "到期"]} />
+                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 批次`, "到期"]} labelFormatter={(_label, payload) => {
+                    const first = (payload as unknown as Array<{ payload?: any }>)?.[0]?.payload;
+                    return first?.monthLabel ?? _label;
+                  }} />
                   <Bar
                     isAnimationActive={animActive}
                     animationDuration={1100}
@@ -1025,7 +1062,10 @@ export default function MarketPage() {
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                   <XAxis dataKey="季度" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
-                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 位客户`, "签约"]} />
+                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 位客户`, "签约"]} labelFormatter={(_label, payload) => {
+                    const first = (payload as unknown as Array<{ payload?: any }>)?.[0]?.payload;
+                    return first?.季度Label ?? _label;
+                  }} />
                   <Bar
                     isAnimationActive={animActive}
                     animationDuration={1100}
