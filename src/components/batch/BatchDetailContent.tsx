@@ -94,6 +94,7 @@ import {
   EyeOff,
   Users2,
   Archive,
+  Gauge,
 } from "lucide-react";
 
 export type BatchLikeForDetail = Batch & {
@@ -164,6 +165,40 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const rescueStats = calculateRescueStats(batch as any, batch.currentStockPrice ?? batch.stockPriceAtStart);
   const tradingInfo = calculateTradingWindows(batch.signDate);
   type TradeWin = typeof tradingInfo.tradingWindows[number];
+
+  const isProfitable = metrics.totalPnLPercent > 0.01;
+  const isCritical = batch.riskLevel === RiskLevel.CRITICAL;
+  const isWarning = batch.riskLevel === RiskLevel.WARNING;
+  const dropForGauge = isProfitable ? 0 : -metrics.dropPercent;
+  let gaugePointer = 0;
+  if (dropForGauge >= 0) gaugePointer = 0;
+  else if (dropForGauge >= -5) gaugePointer = (-dropForGauge / 5) * 25;
+  else if (dropForGauge >= -10) gaugePointer = 25 + (((-dropForGauge) - 5) / 5) * 25;
+  else if (dropForGauge >= -15) gaugePointer = 50 + (((-dropForGauge) - 10) / 5) * 25;
+  else if (dropForGauge >= -20) gaugePointer = 75 + (((-dropForGauge) - 15) / 5) * 25;
+  else gaugePointer = 100;
+  gaugePointer = Math.max(0, Math.min(100, gaugePointer));
+  const gaugeStageLabel = isProfitable
+    ? "盈利中"
+    : isCritical
+    ? "已击穿"
+    : metrics.dropPercent >= 15
+    ? `预警 缓冲 ${metrics.safetyBufferPercent.toFixed(1)}%`
+    : `正常 缓冲 ${metrics.safetyBufferPercent.toFixed(1)}%`;
+  const gaugeStageColor = isProfitable
+    ? "text-success"
+    : isCritical
+    ? "text-danger"
+    : metrics.dropPercent >= 15
+    ? "text-warning"
+    : "text-success";
+  const gaugeCircleColor = isProfitable
+    ? "bg-success"
+    : isCritical
+    ? "bg-danger"
+    : metrics.dropPercent >= 15
+    ? "bg-warning"
+    : "bg-success";
 
   const bdManagers = useMemo(() => {
     const set = new Set((batch.clients || []).map((c) => c.bdManager));
@@ -754,64 +789,45 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-4">
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">安全缓冲距离（距 20% 补仓线）</span>
-              <span
-                className={cn(
-                  "font-bold font-mono",
-                  metrics.safetyBufferPercent <= 5 && "text-danger",
-                  metrics.safetyBufferPercent > 5 && metrics.safetyBufferPercent <= 10 && "text-warning",
-                  metrics.safetyBufferPercent > 10 && "text-success"
-                )}
-              >
-                {metrics.safetyBufferPercent > 0
-                  ? `${metrics.safetyBufferPercent.toFixed(2)}%`
-                  : "已击穿补仓线"}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11px] mb-1 gap-2">
+              <div className="flex items-center gap-1 text-muted-foreground">
+                <Gauge className="h-3.5 w-3.5" />
+                <span>风险程度 · 账户收益率</span>
+              </div>
+              <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap", gaugeStageColor)}>
+                {gaugeStageLabel}
               </span>
             </div>
-            <div className="relative h-3 rounded-full bg-secondary overflow-hidden">
-              <div className="absolute inset-0 flex">
-                <div className="w-[75%] h-full bg-success/20" />
-                <div className="w-[25%] h-full bg-warning/20" />
+            <div className="relative w-full py-[3px]">
+              <div className="relative h-2 w-full rounded-full overflow-hidden bg-secondary/60">
+                <div className="absolute inset-y-0 left-0 w-[50%] bg-gradient-to-r from-success/95 via-success/70 to-warning/70" />
+                <div className="absolute inset-y-0 left-[50%] w-[25%] bg-gradient-to-r from-warning/75 to-warning/60" />
+                <div className="absolute inset-y-0 left-[75%] w-[25%] bg-gradient-to-r from-warning/65 via-danger/70 to-danger/95" />
+                {!isProfitable && (
+                  <div
+                    className="absolute inset-y-0 bg-background/40 backdrop-blur-[1px]"
+                    style={{ left: "0%", right: `${100 - gaugePointer}%` }}
+                  />
+                )}
               </div>
-              <Progress
-                value={Math.max(0, metrics.safetyBufferPercent)}
-                max={20}
-                variant={
-                  batch.riskLevel === RiskLevel.CRITICAL
-                    ? "danger"
-                    : batch.riskLevel === RiskLevel.WARNING
-                    ? "warning"
-                    : "success"
-                }
-                className="h-3 bg-transparent absolute inset-0"
-              />
-              <div className="absolute top-0 bottom-0 w-px bg-amber-400/80 z-10" style={{ left: "25%" }}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="h-full w-1 -ml-0.5" />
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-[11px] font-semibold">15% 预警线</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <div className="absolute top-0 bottom-0 w-px bg-danger z-10" style={{ left: "0%" }}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="h-full w-1 -ml-0.5" />
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    <p className="text-[11px] font-semibold">20% 补仓线</p>
-                  </TooltipContent>
-                </Tooltip>
+              <div
+                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none transition-all duration-700"
+                style={{
+                  left: `max(8px, min(calc(100% - 8px), ${gaugePointer}%))`,
+                }}
+              >
+                <div
+                  className={cn(
+                    "h-4 w-4 rounded-full border-[2.5px] border-white shadow-[0_0_6px_rgba(0,0,0,0.5)] ring-1 ring-black/10",
+                    gaugeCircleColor
+                  )}
+                />
               </div>
             </div>
-            <div className="flex items-center justify-between text-[10px] text-muted-foreground font-mono">
-              <span>补仓 20%</span>
-              <span>预警 15%</span>
-              <span>安全 0%</span>
+            <div className="mt-1 flex justify-between text-[9px] font-mono tabular-nums">
+              <span className="text-success font-semibold">0%</span>
+              <span className="text-danger font-semibold">20%</span>
             </div>
           </div>
 
