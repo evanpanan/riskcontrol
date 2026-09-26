@@ -101,6 +101,7 @@ export type BatchLike = Batch & {
   marginCalls?: any[];
   finance?: BatchFinance;
   currentPrice?: number;
+  activeSubsetInitialPrincipal?: number;
 };
 export interface BatchRiskMetrics {
   dropPercent: number;
@@ -111,6 +112,7 @@ export interface BatchRiskMetrics {
   riskLevel: RiskLevel;
   totalPnL: number;
   totalPnLPercent: number;
+  activeSubsetInitialPrincipal: number;
 }
 export interface RescueStats {
   totalRescueAmount: number;
@@ -146,11 +148,11 @@ export function getClientProfitSplit(client: Pick<Client, "investmentAmount" | "
   return calculateProfitSplitRatio(client.investmentAmount, true);
 }
 
-export function calculateBatchRiskMetrics(initialTotalAmount: number, currentMarketValue: number, activeInstitutionTopups = 0): BatchRiskMetrics {
-  const dropAmount = initialTotalAmount - currentMarketValue;
-  const drop = initialTotalAmount > 0 ? dropAmount / initialTotalAmount : 0;
-  const critical = initialTotalAmount > 0 && currentMarketValue <= initialTotalAmount * 0.8 + 0.005;
-  const totalPnL = currentMarketValue - initialTotalAmount - activeInstitutionTopups;
+export function calculateBatchRiskMetrics(activeSubsetInitialPrincipal: number, currentMarketValue: number, activeInstitutionTopups = 0): BatchRiskMetrics {
+  const dropAmount = activeSubsetInitialPrincipal - currentMarketValue;
+  const drop = activeSubsetInitialPrincipal > 0 ? dropAmount / activeSubsetInitialPrincipal : 0;
+  const critical = activeSubsetInitialPrincipal > 0 && currentMarketValue <= activeSubsetInitialPrincipal * 0.8 + 0.02;
+  const totalPnL = currentMarketValue - activeSubsetInitialPrincipal - activeInstitutionTopups;
   return {
     dropPercent: Math.max(0, drop) * 100,
     dropAmount: Math.max(0, dropAmount),
@@ -159,7 +161,8 @@ export function calculateBatchRiskMetrics(initialTotalAmount: number, currentMar
     requiredMarginCall: critical ? money(dropAmount) : 0,
     riskLevel: critical ? RiskLevel.CRITICAL : drop >= WARNING_DROP_THRESHOLD ? RiskLevel.WARNING : RiskLevel.NORMAL,
     totalPnL,
-    totalPnLPercent: initialTotalAmount > 0 ? totalPnL / initialTotalAmount * 100 : 0,
+    totalPnLPercent: activeSubsetInitialPrincipal > 0 ? totalPnL / activeSubsetInitialPrincipal * 100 : 0,
+    activeSubsetInitialPrincipal,
   };
 }
 export function calculateCurrentMarketValue(stockPriceAtStart: number, currentStockPrice: number, totalShares: number) {
@@ -204,8 +207,15 @@ export function getAccountMarketValue(batch: BatchLike, price = batch.currentSto
 }
 
 export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
-  const rescue = calculateRescueStats(batch, batch.currentStockPrice ?? batch.stockPriceAtStart);
-  return calculateBatchRiskMetrics(batch.finance?.remainingCapital ?? batch.initialTotalAmount, getAccountMarketValue(batch), rescue.totalRescueAmount);
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  const rescue = calculateRescueStats(batch, price);
+  const rc = batch.finance?.remainingCapital ?? batch.initialTotalAmount;
+  const activeSubsetInitialPrincipal = money(rc + rescue.totalRescueAmount);
+  const base = calculateBatchRiskMetrics(rc, getAccountMarketValue(batch, price), rescue.totalRescueAmount);
+  return {
+    ...base,
+    activeSubsetInitialPrincipal,
+  };
 }
 
 function allocateRound(batch: BatchLike, amount: number, roundId: string): Record<string, ClientMarginState> {
@@ -309,6 +319,7 @@ export function syncBatchFinance(batch: BatchLike): void {
   batch.currentMarketValue = getAccountMarketValue(batch);
   batch.cumulativeMarginCalls = money(f.trades.reduce((s, t) => s + t.amount, 0));
   const metrics = getBatchMetrics(batch);
+  batch.activeSubsetInitialPrincipal = metrics.activeSubsetInitialPrincipal;
   batch.riskLevel = metrics.riskLevel;
   batch.totalPnL = metrics.totalPnL;
   batch.totalPnLPercent = metrics.totalPnLPercent;

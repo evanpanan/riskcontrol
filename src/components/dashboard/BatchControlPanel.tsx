@@ -280,7 +280,7 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
                     </Badge>
                   </div>
                   <div className="col-span-1 text-right font-mono text-sm">
-                    {formatCurrency(batch.initialTotalAmount)}
+                    {formatCurrency((batch as any).activeSubsetInitialPrincipal ?? batch.initialTotalAmount)}
                   </div>
                   <div className="col-span-1 text-right font-mono text-sm font-semibold">
                     {formatCurrency(mv)}
@@ -294,7 +294,7 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
                           batch.riskLevel === RiskLevel.WARNING ? "bg-warning" : "bg-success"
                         )}
                         style={{
-                          width: `${Math.max(5, Math.min(100, 100 - ((mv - batch.initialTotalAmount * 0.8) / batch.initialTotalAmount * 500)))}%`
+                          width: `${Math.max(5, Math.min(100, 100 - ((mv - ((batch as any).activeSubsetInitialPrincipal ?? batch.initialTotalAmount) * 0.8) / ((batch as any).activeSubsetInitialPrincipal ?? batch.initialTotalAmount) * 500)))}%`
                         }}
                       />
                     </div>

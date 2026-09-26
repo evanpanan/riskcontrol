@@ -914,12 +914,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           <div className="grid gap-3 grid-cols-1 md:grid-cols-3 pt-4 border-t border-border/40">
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">初始市值</p>
-              <p className="text-sm font-mono font-semibold">{formatCurrency(batch.initialTotalAmount)}</p>
+              <p className="text-sm font-mono font-semibold">{formatCurrency(metrics.activeSubsetInitialPrincipal ?? batch.initialTotalAmount)}</p>
             </div>
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">80% 预警阈值</p>
               <p className="text-sm font-mono font-semibold text-warning">
-                {formatCurrency(batch.initialTotalAmount * 0.8)}
+                {formatCurrency((metrics.activeSubsetInitialPrincipal ?? batch.initialTotalAmount) * 0.8)}
               </p>
             </div>
             <div
