@@ -71,7 +71,7 @@ export interface MarginRound {
   triggerMarketValue: number;
   triggerDate: string;
   dropPercent: number;
-  status: "PENDING" | "FULLFILLED" | "EXPIRED";
+  status: "PENDING" | "FULLFILLED" | "EXPIRED" | "CANCELLED";
   allocations: Record<string, ClientMarginState>;
 }
 export interface BatchFinance {
@@ -441,7 +441,10 @@ export function settleClientPosition(batch: BatchLike, clientId: string): Settle
   const client = batch.clients?.find((c) => c.id === clientId);
   if (!client || client.status === ClientStatus.SETTLED) throw new Error("客户已结算或历史结算信息待核对。");
   if (f.legacyWarnings.length) throw new Error(f.legacyWarnings.join(" "));
-  if (activeRound(batch)) throw new Error("本轮补仓尚未完成，请先完成机构补仓再结算。");
+  const pendingRound = activeRound(batch);
+  if (pendingRound) {
+    pendingRound.status = "CANCELLED";
+  }
   if (f.trades.some((t) => t.remainingFraction > 0 && t.needsReconciliation)) throw new Error("历史补仓成交信息待核对，暂不能结算。");
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
   if (!(price > 0)) throw new Error("结算价格无效。");
