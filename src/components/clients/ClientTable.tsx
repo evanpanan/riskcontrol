@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { Client, ClientStatus } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
@@ -61,14 +62,37 @@ import { commitBatchFinance } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 
-export interface EnrichedClient extends Omit<Client, 'realtimePnL' | 'estimatedExitAmount'> {
+export interface EnrichedClient {
+  id: string;
+  batchId: string;
+  name: string;
+  investmentAmount: number;
+  bdManager: string;
+  bdUserId?: string | null;
+  signDate: Date | string;
+  profitSplitClient?: number;
+  profitSplitInstitution?: number;
+  status?: ClientStatus | keyof typeof ClientStatus | string;
+  settledAt?: Date | string | null;
+  settlementNote?: string | null;
+  clientNo?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
   __redacted?: boolean;
+  __placeholder?: boolean;
   realtimePnL?: number | null;
   estimatedExitAmount?: number | null;
   marketValueShare?: number;
   actualClientPnL?: number;
   actualClientPnLPercent?: number;
   requiredMarginCall?: number;
+  initialInvestment?: number;
+  entryStockPrice?: number;
+  signedVipThreshold?: number;
+  marginState?: any;
+  marginHistory?: any[];
+  settlement?: any;
+  [k: string]: any;
 }
 
 interface ClientTableProps {
@@ -116,6 +140,7 @@ export function ClientTable({
 
   const canEditClient = (c: EnrichedClient): boolean => {
     if ((c as any).__redacted) return false;
+    if (viewerRole === APP_ROLES.ADMIN) return true;
     if (viewerRole === APP_ROLES.RISK_MANAGER) return true;
     if (isBd && bdFullName && c.bdManager === bdFullName) return true;
     return false;
@@ -123,8 +148,9 @@ export function ClientTable({
 
   const canDeleteClient = (c: EnrichedClient): boolean => {
     if ((c as any).__redacted) return false;
-    return viewerRole === APP_ROLES.RISK_MANAGER;
+    return viewerRole === APP_ROLES.ADMIN;
   };
+  void canDeleteClient;
 
   const getStatusConfig = (status: ClientStatus) => {
     switch (status) {
@@ -1151,10 +1177,20 @@ export function ClientTable({
             if (!batch || !Number.isFinite(parsed) || parsed <= 0 || amount < 0.01) {
               throw new Error("请输入有效补仓金额。");
             }
-            const applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
-              amount, clientId: c.id, expectedRoundId: mm?.roundId,
-              operatorName: viewerUser?.displayName ?? viewerUser?.email,
-            }));
+            let applied: number;
+            try {
+              applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
+                amount, clientId: c.id, expectedRoundId: mm?.roundId,
+                operatorName: viewerUser?.displayName ?? viewerUser?.email,
+              }));
+            } catch (err) {
+              if (err instanceof Error && err.name === "RevisionMismatchError") {
+                toast.error(err.message);
+              } else {
+                toast.error(err instanceof Error ? err.message : "补仓失败");
+              }
+              return;
+            }
             if (applied <= 0) throw new Error("本轮缺口已更新，请刷新后重新确认。");
             onBatchMutated?.({
               type: "client_single_margin",

@@ -27,8 +27,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AuthGuard } from "@/components/auth/AuthGuard";
+import { RoleGate } from "@/components/auth/RoleGate";
 import { APP_ROLES } from "@/types/auth";
-import { INSTITUTION_ROLES } from "@/lib/auth";
+import { INSTITUTION_ROLES, useAuthContext } from "@/lib/auth";
+import { hashCustomUserPassword } from "@/lib/auth/password";
+import { logAudit, getAuditLogs, clearAuditLogs, type AuditLogEntry, type AuditAction } from "@/lib/auth/audit";
 import { toast } from "sonner";
 import { getProfitSettings, validProfitSettings } from "@/lib/profitSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -58,12 +61,18 @@ import {
   RotateCcw,
   Upload,
   Globe,
+  Lock,
   LineChart,
   TrendingUp,
   TrendingDown,
   HelpCircle,
+  ScrollText,
+  Search,
+  Filter,
+  RefreshCw,
+  Copy,
 } from "lucide-react";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
@@ -155,10 +164,14 @@ interface SystemAppUser {
   avatarDataUrl?: string;
   enabled: boolean;
   createdAt: string;
+  passwordHash?: string;
+  salt?: string;
 }
 
-type UserFormState = Omit<SystemAppUser, "id" | "createdAt" | "avatarInitials"> & {
+type UserFormState = Omit<SystemAppUser, "id" | "createdAt" | "avatarInitials" | "passwordHash" | "salt"> & {
   id?: string;
+  password?: string;
+  confirmPassword?: string;
 };
 
 const emptyUserForm = (): UserFormState => ({
@@ -169,6 +182,8 @@ const emptyUserForm = (): UserFormState => ({
   bdManagerFullName: "",
   avatarDataUrl: "",
   enabled: true,
+  password: "",
+  confirmPassword: "",
 });
 
 const SYSTEM_ROLE_LABELS: Record<SystemAppUser["role"], string> = {
@@ -263,6 +278,7 @@ const DEFAULT_FORM: SettingsFormState = {
 };
 
 export default function SettingsPage() {
+  const { user: currentUser, role: currentRole } = useAuthContext();
   const [saved, setSaved] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<{ title: string; run: () => void } | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -271,9 +287,27 @@ export default function SettingsPage() {
   const [quoteTick, setQuoteTick] = useState(0);
   const [quoteLive, setQuoteLive] = useState<BrowserQuote | null>(null);
   const [quoteFetching, setQuoteFetching] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditTick, setAuditTick] = useState(0);
+  const [auditFilterAction, setAuditFilterAction] = useState<"__ALL__" | AuditAction>("__ALL__");
+  const [auditSearchKw, setAuditSearchKw] = useState<string>("");
+  const [auditOpenDetail, setAuditOpenDetail] = useState<AuditLogEntry | null>(null);
   useEffect(() => {
     const t = setInterval(() => setQuoteTick((x) => x + 1), 1000);
     return () => clearInterval(t);
+  }, []);
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      setAuditLogs(getAuditLogs());
+    } catch {
+      setAuditLogs([]);
+    }
+  }, [hydrated, auditTick]);
+  useEffect(() => {
+    const onAudit = () => setAuditTick((x) => x + 1);
+    window.addEventListener("risk-control:audit-updated", onAudit);
+    return () => window.removeEventListener("risk-control:audit-updated", onAudit);
   }, []);
   useEffect(() => {
     if (!hydrated) return;
@@ -487,15 +521,38 @@ export default function SettingsPage() {
     if (!uForm.displayName.trim()) errs.displayName = "请填写姓名";
     if (!uForm.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uForm.email || ""))
       errs.email = "请填写有效邮箱";
+    const pwd = (uForm.password ?? "").trim();
+    const confirm = (uForm.confirmPassword ?? "").trim();
+    if (!editingUserId) {
+      if (!pwd) errs.password = "请设置登录密码";
+      else if (pwd.length < 6) errs.password = "密码至少 6 位";
+      if (!confirm) errs.confirmPassword = "请再次输入密码";
+      else if (pwd && confirm && pwd !== confirm) errs.confirmPassword = "两次输入的密码不一致";
+    } else {
+      if (pwd || confirm) {
+        if (pwd.length < 6) errs.password = "密码至少 6 位";
+        if (pwd !== confirm) errs.confirmPassword = "两次输入的密码不一致";
+      }
+    }
     setUErrors(errs);
     return Object.keys(errs).length === 0;
   };
-  const saveUser = () => {
+  const saveUser = async () => {
+    if (currentRole !== APP_ROLES.ADMIN) {
+      toast.error("仅系统管理员可新增或编辑系统账号。");
+      return;
+    }
     if (!validateUser()) return;
     const waFinal = buildWhatsApp(uWA.code, uWA.local, uWA.customRaw);
     const nameTrim = uForm.displayName.trim();
     const initials = computeInitials(nameTrim, uForm.email);
     const avatarDataUrl = uForm.avatarDataUrl || undefined;
+    const pwd = (uForm.password ?? "").trim();
+    let passwordPatch: Partial<Pick<SystemAppUser, "passwordHash" | "salt">> = {};
+    if (pwd) {
+      const hashed = await hashCustomUserPassword(pwd);
+      passwordPatch = { passwordHash: hashed.passwordHash, salt: hashed.salt };
+    }
     let nextList: SystemAppUser[];
     if (editingUserId) {
       nextList = users.map((u) =>
@@ -507,10 +564,26 @@ export default function SettingsPage() {
               avatarInitials: initials || u.avatarInitials,
               avatarDataUrl,
               whatsapp: waFinal || undefined,
-            }
+              ...passwordPatch,
+              password: undefined,
+              confirmPassword: undefined,
+            } as SystemAppUser
           : u
       );
       setUsers(nextList);
+      logAudit({
+        action: "account_update",
+        actorId: currentUser?.id,
+        actorEmail: currentUser?.email,
+        role: currentRole,
+        resource: `settings:account:${editingUserId}`,
+        detail: {
+          targetUserId: editingUserId,
+          targetEmail: uForm.email,
+          targetRole: uForm.role,
+        },
+      });
+      toast.success("账号已更新");
     } else {
       const newU: SystemAppUser = {
         id: "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -523,9 +596,23 @@ export default function SettingsPage() {
         avatarDataUrl,
         enabled: !!uForm.enabled,
         createdAt: new Date().toISOString(),
+        ...passwordPatch,
       };
       nextList = [...users, newU];
       setUsers(nextList);
+      logAudit({
+        action: "account_create",
+        actorId: currentUser?.id,
+        actorEmail: currentUser?.email,
+        role: currentRole,
+        resource: `settings:account:${newU.id}`,
+        detail: {
+          targetUserId: newU.id,
+          targetEmail: newU.email,
+          targetRole: newU.role,
+        },
+      });
+      toast.success("账号创建成功");
     }
     try {
       localStorage.setItem(USERS_LS_KEY, JSON.stringify(nextList));
@@ -534,14 +621,77 @@ export default function SettingsPage() {
     setUserDlgOpen(false);
   };
   const removeUser = (id: string) => {
-    setConfirmation({ title: "确认删除该账号？", run: () => setUsers((list) => list.filter((u) => u.id !== id)) });
+    if (currentRole !== APP_ROLES.ADMIN) {
+      toast.error("仅系统管理员可删除系统账号。");
+      return;
+    }
+    const target = users.find((u) => u.id === id);
+    setConfirmation({
+      title: "确认删除该账号？",
+      run: () => {
+        setUsers((list) => list.filter((u) => u.id !== id));
+        try {
+          localStorage.setItem(
+            USERS_LS_KEY,
+            JSON.stringify(users.filter((u) => u.id !== id))
+          );
+        } catch (e) {}
+        logAudit({
+          action: "account_delete",
+          actorId: currentUser?.id,
+          actorEmail: currentUser?.email,
+          role: currentRole,
+          resource: `settings:account:${id}`,
+          detail: {
+            targetUserId: id,
+            targetEmail: target?.email ?? null,
+            targetRole: target?.role ?? null,
+          },
+        });
+        toast.success(target ? `已删除账号 ${target.email}` : "已删除账号");
+      },
+    });
   };
   const toggleUserEnabled = (id: string, enabled: boolean) => {
-    setUsers((list) => list.map((u) => (u.id === id ? { ...u, enabled } : u)));
+    if (currentRole !== APP_ROLES.ADMIN) {
+      toast.error("仅系统管理员可启用或停用系统账号。");
+      return;
+    }
+    setUsers((list) => {
+      const next = list.map((u) => (u.id === id ? { ...u, enabled } : u));
+      try {
+        localStorage.setItem(USERS_LS_KEY, JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+    logAudit({
+      action: "account_update",
+      actorId: currentUser?.id,
+      actorEmail: currentUser?.email,
+      role: currentRole,
+      resource: `settings:account:${id}`,
+      detail: { targetUserId: id, enabled },
+    });
   };
 
   const save = (label: string) => {
+    if (label === "risk") {
+      if (currentRole !== APP_ROLES.ADMIN && currentRole !== APP_ROLES.RISK_MANAGER) {
+        toast.error("仅系统管理员或风控总监可修改风控阈值。");
+        return;
+      }
+      if (Number(form.warningThreshold) <= 0 || Number(form.warningThreshold) >= 100) {
+        toast.error("预警阈值须在 0% 到 100% 之间。"); return;
+      }
+      if (Number(form.marginThreshold) <= Number(form.warningThreshold) || Number(form.marginThreshold) > 100) {
+        toast.error("补仓阈值须严格大于预警阈值，且不超过 100%。"); return;
+      }
+    }
     if (label === "notify") {
+      if (currentRole !== APP_ROLES.ADMIN && currentRole !== APP_ROLES.RISK_MANAGER) {
+        toast.error("仅系统管理员或风控总监可修改通知配置。");
+        return;
+      }
       if (form.defaultRiskEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.defaultRiskEmail)) {
         toast.error("请填写有效收件邮箱。"); return;
       }
@@ -562,10 +712,28 @@ export default function SettingsPage() {
         (["emailWebhook", "whatsappWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
       );
+      const beforeWarn = Number(stored?.warningThreshold);
+      const beforeMargin = Number(stored?.marginThreshold);
+      const afterWarn = Number(form.warningThreshold);
+      const afterMargin = Number(form.marginThreshold);
       localStorage.setItem(LS_KEY, JSON.stringify({
         ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         ...notificationFields,
       }));
+      if (label === "risk") {
+        logAudit({
+          action: "threshold_update",
+          actorId: currentUser?.id,
+          actorEmail: currentUser?.email,
+          role: currentRole,
+          resource: "settings:threshold",
+          detail: {
+            before: { warningDropPercent: Number.isFinite(beforeWarn) ? beforeWarn : null, marginDropPercent: Number.isFinite(beforeMargin) ? beforeMargin : null },
+            after: { warningDropPercent: Number.isFinite(afterWarn) ? afterWarn : null, marginDropPercent: Number.isFinite(afterMargin) ? afterMargin : null },
+          },
+        });
+        toast.success(`风控阈值已更新：预警 ${afterWarn.toFixed(2)}% / 补仓 ${afterMargin.toFixed(2)}%`);
+      }
     } catch {
       toast.error("配置保存失败，请检查浏览器存储后重试。");
       return;
@@ -704,18 +872,32 @@ export default function SettingsPage() {
   </div>
 
   <Tabs defaultValue="risk" className="w-full">
-    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 h-auto p-1.5 gap-1.5">
+    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 h-auto p-1.5 gap-1.5">
       <TabsTrigger value="risk" className="h-9 gap-1.5"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
       <TabsTrigger value="market" className="h-9 gap-1.5"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
       <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
       <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
       <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
+      <TabsTrigger value="audit" className="h-9 gap-1.5"><ScrollText className="h-3.5 w-3.5" />审计日志</TabsTrigger>
       <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
     </TabsList>
 
     <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
       <div className="space-y-6">
       {/* Risk Thresholds */}
+      <RoleGate
+        allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}
+        auditAction="card_removed"
+        auditResource="settings_threshold_card"
+        fallback={
+          <Card className="border-border/50">
+            <CardContent className="pt-6 text-center py-10">
+              <Lock className="h-8 w-8 mx-auto mb-3 opacity-40" />
+              <p className="text-xs text-muted-foreground">仅系统管理员或风控总监可查看与修改阈值</p>
+            </CardContent>
+          </Card>
+        }
+      >
       <Card className="border-border/50">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -795,6 +977,7 @@ export default function SettingsPage() {
         </div>
       </CardContent>
     </Card>
+    </RoleGate>
 
     {/* 风险预警弹窗 & 实时联动 */}
     <Card className="border-border/50">
@@ -1642,6 +1825,19 @@ export default function SettingsPage() {
 
     <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
       <div className="space-y-6">
+      <RoleGate
+        allowed={[APP_ROLES.ADMIN]}
+        auditAction="card_removed"
+        auditResource="settings_account_management_card"
+        fallback={
+          <Card className="border-border/50">
+            <CardContent className="pt-6 text-center py-10">
+              <Lock className="h-8 w-8 mx-auto mb-3 opacity-40" />
+              <p className="text-xs text-muted-foreground">仅系统管理员可管理系统账号</p>
+            </CardContent>
+          </Card>
+        }
+      >
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -1747,7 +1943,205 @@ export default function SettingsPage() {
         )}
       </CardContent>
     </Card>
+    </RoleGate>
       </div>
+    </TabsContent>
+
+    <TabsContent value="audit" className="space-y-6 mt-6">
+      <RoleGate
+        allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}
+        auditAction="card_removed"
+        auditResource="settings_audit_log_card"
+        fallback={
+          <Card className="border-border/50">
+            <CardContent className="pt-6 text-center py-10">
+              <p className="text-sm text-muted-foreground">当前角色无权限查看审计日志</p>
+            </CardContent>
+          </Card>
+        }
+      >
+        <Card className="border-border/50">
+          <CardHeader className="pb-3 flex flex-row items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ScrollText className="h-4 w-4 text-primary" />
+              <div>
+                <CardTitle className="text-sm font-bold">审计事件日志</CardTitle>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  共记录前 {auditLogs.length} / MAX 2000 · 持久化于浏览器本地 · 按时间倒序
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 border rounded-md p-1 bg-muted/30">
+              <Search className="h-3.5 w-3.5 text-muted-foreground ml-2" />
+              <Input
+                className="h-7 w-44 border-0 bg-transparent shadow-none text-xs"
+                placeholder="搜邮箱/资源/详情关键字"
+                value={auditSearchKw}
+                onChange={(e) => setAuditSearchKw(e.target.value)}
+              />
+              </div>
+              <div className="flex items-center gap-1">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <Select
+                  value={auditFilterAction}
+                  onValueChange={(v) => setAuditFilterAction(v as any)}
+                >
+                  <SelectTrigger className="h-8 w-36 text-xs">
+                    <SelectValue placeholder="过滤 Action" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__ALL__">全部动作</SelectItem>
+                    {[
+                      ["login_success","登录成功"],
+                      ["login_failed","登录失败"],
+                      ["logout","登出"],
+                      ["threshold_update","阈值变更"],
+                      ["account_create","创建账号"],
+                      ["account_update","更新账号"],
+                      ["account_delete","删除账号"],
+                      ["client_edit","编辑客户"],
+                      ["client_delete","删除客户"],
+                      ["margin_topup","风险金补仓"],
+                      ["client_settle","客户结算"],
+                      ["batch_notify","批次通知"],
+                      ["auth_denied","鉴权拒绝"],
+                    ].map(([v, label]) => (
+                      <SelectItem key={v} value={v} className="text-xs">{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setAuditTick((x) => x + 1)}
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />刷新
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setConfirmation({
+                  title: "确认清空全部审计日志？",
+                  run: () => {
+                    try { clearAuditLogs(); } catch {}
+                    setAuditLogs([]);
+                    toast.success("审计日志已清空");
+                    setAuditTick((x) => x + 1);
+                  },
+                })}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />清空
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-3">
+            <div className="rounded-md border">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted/40 text-muted-foreground">
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">时间</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">动作</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作人</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">资源</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">详情</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const kw = auditSearchKw.trim().toLowerCase();
+                      const filtered = auditLogs.filter((l) => {
+                        if (auditFilterAction !== "__ALL__" && l.action !== auditFilterAction) return false;
+                        if (!kw) return true;
+                        const hay = [
+                          l.actorEmail ?? "",
+                          l.resource ?? "",
+                          JSON.stringify(l.detail ?? ""),
+                          l.action,
+                        ].join(" ").toLowerCase();
+                        return hay.includes(kw);
+                      });
+                      if (!filtered.length) {
+                        return (
+                          <tr>
+                            <td colSpan={5} className="text-center py-10 text-muted-foreground">
+                              {hydrated ? "暂无审计事件" : "加载中…"}
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return filtered.slice(0, 500).map((l) => (
+                        <tr key={l.id} className="border-t border-border/50 align-top">
+                          <td className="px-3 py-2 font-mono whitespace-nowrap text-muted-foreground">
+                            {formatDateTime(l.createdAt)}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <Badge variant="outline" className={cn(
+                              "text-[11px]",
+                              /failed|denied|delete/.test(l.action) && "border-danger/60 text-danger",
+                              /success|_create|_update|_topup|_settle|_notify/.test(l.action) && "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+                            )}>
+                              {l.action}
+                            </Badge>
+                            {l.role && <span className="ml-2 text-[10px] text-muted-foreground font-mono">{l.role}</span>}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {l.actorEmail ? (
+                              <div className="flex items-center gap-1.5">
+                                <ClientAvatar name={(l.actorEmail[0] ?? "?").toUpperCase()} size="xs" />
+                                <span className="font-mono">{l.actorEmail}</span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground italic">匿名/未登录</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap font-mono text-muted-foreground">
+                            {l.resource ?? "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {l.detail ? (
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 text-[11px] font-mono text-muted-foreground max-w-[30ch] overflow-hidden text-ellipsis whitespace-nowrap">
+                                  {typeof l.detail === "string" ? l.detail : JSON.stringify(l.detail)}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 text-[11px]"
+                                  onClick={() => setAuditOpenDetail(l)}
+                                >
+                                  <Eye className="h-3 w-3 mr-1" />展开
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 text-[11px]"
+                                  onClick={async () => {
+                                    const text = typeof l.detail === "string" ? l.detail : JSON.stringify(l.detail, null, 2);
+                                    try { await navigator.clipboard.writeText(text); toast.success("详情 JSON 已复制"); } catch { toast.error("复制失败"); }
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3 mr-1" />复制
+                                </Button>
+                              </div>
+                            ) : (
+                                <span className="text-muted-foreground italic">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </RoleGate>
     </TabsContent>
 
     <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
@@ -1966,7 +2360,9 @@ export default function SettingsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ADMIN" className="text-danger">⚡ 系统管理员（最高权限）</SelectItem>
+              {currentRole === APP_ROLES.ADMIN && (
+                <SelectItem value="ADMIN" className="text-danger">⚡ 系统管理员（最高权限）</SelectItem>
+              )}
               <SelectItem value="RISK_MANAGER">风控总监（全局权限）</SelectItem>
               <SelectItem value="BD_MANAGER">商务经理（仅管辖客户）</SelectItem>
               <SelectItem value="OPERATIONS">运营（只读/录入）</SelectItem>
@@ -2028,6 +2424,34 @@ export default function SettingsPage() {
           </p>
         )}
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs flex items-center gap-1">
+            <Shield className="h-3 w-3" /> {editingUserId ? "登录密码（留空不修改）" : "登录密码 *"}
+          </Label>
+          <Input
+            type="password"
+            placeholder="至少 6 位字符"
+            value={uForm.password ?? ""}
+            onChange={(e) => setUForm({ ...uForm, password: e.target.value })}
+            className={cn("font-mono text-xs", uErrors.password && "ring-2 ring-danger/60 border-danger")}
+          />
+          {uErrors.password && <p className="text-[11px] text-danger">{uErrors.password}</p>}
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs flex items-center gap-1">
+            <Shield className="h-3 w-3" /> {editingUserId ? "确认密码（留空不修改）" : "确认密码 *"}
+          </Label>
+          <Input
+            type="password"
+            placeholder="再次输入相同密码"
+            value={uForm.confirmPassword ?? ""}
+            onChange={(e) => setUForm({ ...uForm, confirmPassword: e.target.value })}
+            className={cn("font-mono text-xs", uErrors.confirmPassword && "ring-2 ring-danger/60 border-danger")}
+          />
+          {uErrors.confirmPassword && <p className="text-[11px] text-danger">{uErrors.confirmPassword}</p>}
+        </div>
+      </div>
       {uForm.role === "BD_MANAGER" && (
         <div className="space-y-1.5">
           <Label className="text-xs flex items-center gap-1">
@@ -2046,7 +2470,7 @@ export default function SettingsPage() {
       <Button variant="outline" onClick={() => setUserDlgOpen(false)}>
         取消
       </Button>
-      <Button onClick={saveUser} className="gap-1.5">
+      <Button onClick={() => void saveUser()} className="gap-1.5">
         <CheckCircle2 className="h-4 w-4" />
         {editingUserId ? "保存修改" : "创建账号"}
       </Button>
@@ -2059,6 +2483,58 @@ export default function SettingsPage() {
   title={confirmation?.title}
   onConfirm={() => confirmation?.run()}
 />
+
+<Dialog open={!!auditOpenDetail} onOpenChange={(open) => { if (!open) setAuditOpenDetail(null); }}>
+  <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+    <DialogHeader>
+      <DialogTitle className="flex items-center gap-2 text-sm font-bold">
+        <ScrollText className="h-4 w-4 text-primary" />
+        审计详情
+      </DialogTitle>
+    </DialogHeader>
+    {auditOpenDetail && (
+      <div className="space-y-3 text-xs">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-muted-foreground">时间</p>
+            <p className="font-mono">{formatDateTime(auditOpenDetail.createdAt)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Action</p>
+            <Badge variant="outline" className="font-mono">{auditOpenDetail.action}</Badge>
+          </div>
+          <div>
+            <p className="text-muted-foreground">操作人</p>
+            <p className="font-mono">{auditOpenDetail.actorEmail ?? "—"} {auditOpenDetail.role ? <span className="ml-1 text-muted-foreground">({auditOpenDetail.role})</span> : null}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">资源</p>
+            <p className="font-mono break-all">{auditOpenDetail.resource ?? "—"}</p>
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="text-muted-foreground">Detail（JSON）</p>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-[11px]"
+              onClick={async () => {
+                const text = typeof auditOpenDetail.detail === "string" ? auditOpenDetail.detail : JSON.stringify(auditOpenDetail.detail, null, 2);
+                try { await navigator.clipboard.writeText(text); toast.success("已复制到剪贴板"); } catch { toast.error("复制失败"); }
+              }}
+            >
+              <Copy className="h-3 w-3 mr-1" />复制
+            </Button>
+          </div>
+          <pre className="p-3 rounded-md bg-muted/40 text-[11px] font-mono whitespace-pre-wrap break-all max-h-[50vh] overflow-y-auto">
+            {typeof auditOpenDetail.detail === "string" ? auditOpenDetail.detail : JSON.stringify(auditOpenDetail.detail, null, 2)}
+          </pre>
+        </div>
+      </div>
+    )}
+  </DialogContent>
+</Dialog>
 
 {/* ====== 通知渠道配置帮助 Dialog（需求4）====== */}
 <Dialog

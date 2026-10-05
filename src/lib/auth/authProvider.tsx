@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -21,12 +22,12 @@ import {
   clearSession,
   createDefaultRiskManagerSession,
   createMockSessionByKey,
-  getStoredSession,
-  saveSession,
 } from './providers/mockProvider';
-import { logAuthDeny } from './audit';
+import { logAuthDeny, logAudit } from './audit';
 
 export const SESSION_UPDATED_EVENT = 'rbac:session-updated';
+
+const SERVER_ME_CACHE_KEY = '__rc_me_cache_v1';
 
 interface AuthContextValue {
   user: AppSessionUser | null;
@@ -36,6 +37,9 @@ interface AuthContextValue {
   forceLogout: () => void;
   logoutToLogin: () => void;
   loginAsCustom: (user: AppSessionUser) => void;
+  serverLogin: (user: AppSessionUser) => Promise<boolean>;
+  serverLogout: () => Promise<boolean>;
+  refreshMe: () => Promise<AppSessionUser | null>;
   updateCurrentUser: (patch: Partial<AppSessionUser>) => void;
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: readonly AppRole[]) => boolean;
@@ -44,64 +48,184 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function resolveInitial(): AppSessionUser | null {
-  const existing = getStoredSession();
-  if (existing) {
-    if (isAllowedRole(existing.role)) return existing;
-    clearSession();
-  }
-  // On /login route, allow null session so login page shows
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/login')) {
     return null;
   }
+  if (process.env.NODE_ENV !== 'development') return null;
   const def = createDefaultRiskManagerSession();
-  saveSession(def);
   return def;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AppSessionUser | null>(null);
+  const [user, setUser] = useState<AppSessionUser | null>(() => resolveInitial());
   const [isLoading, setIsLoading] = useState(true);
+  const refreshingRef = useRef(false);
+  const firstHydrateDoneRef = useRef(false);
 
-  // SSR/Client Hydrate 一致性：组件挂载后才从 localStorage 恢复 session
-  useEffect(() => {
-    const existing = getStoredSession();
-    if (existing && isAllowedRole(existing.role)) {
-      setUser(existing);
-    } else {
-      clearSession();
-      setUser(null);
-    }
-    setIsLoading(false);
+  const setSession = useCallback((next: AppSessionUser | null) => {
+    setUser((prev) => {
+      if (!next && !prev) return prev;
+      if (next && prev && JSON.stringify(next) === JSON.stringify(prev)) return prev;
+      // only dispatch event for NON-null transitions to avoid setSession(null) → refreshMe() 401 → setSession(null) infinite recursion
+      if (next) {
+        try {
+          window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
+        } catch {
+          /* ignore */
+        }
+      }
+      return next;
+    });
   }, []);
 
-  // 监听其它 tab / 其它组件 dispatch SESSION_UPDATED_EVENT 同步
+  const refreshMe = useCallback(async (): Promise<AppSessionUser | null> => {
+    if (refreshingRef.current) return null;
+    refreshingRef.current = true;
+    try {
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' },
+      });
+      if (!res.ok) {
+        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        // Don't setSession(null) here to avoid self-recursion via SESSION_UPDATED.
+        // Simply clear server cache; caller (logout / loginFail) will set null explicitly.
+        setUser((prev) => (prev ? null : prev));
+        return null;
+      }
+      const data = await res.json() as any;
+      if (data?.ok && data?.user && typeof data.user === 'object' && isAllowedRole(data.user.role)) {
+        const u = data.user as AppSessionUser;
+        try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(u)); } catch {}
+        setSession(u);
+        return u;
+      }
+      try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+      setUser((prev) => (prev ? null : prev));
+      return null;
+    } catch {
+      let cached: AppSessionUser | null = null;
+      try {
+        const raw = sessionStorage.getItem(SERVER_ME_CACHE_KEY);
+        if (raw) {
+          const p = JSON.parse(raw) as AppSessionUser;
+          if (isAllowedRole(p.role)) cached = p;
+        }
+      } catch { cached = null; }
+      if (cached) {
+        setSession(cached);
+      } else {
+        setUser((prev) => (prev ? null : prev));
+      }
+      return cached;
+    } finally {
+      refreshingRef.current = false;
+    }
+  }, [setSession]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await refreshMe();
+      if (cancelled) return;
+      firstHydrateDoneRef.current = true;
+      setIsLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handler = () => {
-      const s = getStoredSession();
-      if (s) setUser(s);
-      else setUser(null);
+    const handler = (evt: Event) => {
+      const ce = evt as CustomEvent;
+      // Skip SESSION_UPDATED dispatch for nulls (which we blocked above anyway) and only refresh for a new user that's non-null
+      if (!ce?.detail) return;
+      // Avoid re-entrant: if we just setSession(u) and dispatched from the SAME tab, do nothing.
+      // Only apply state change if the new user differs (cross-tab sync signal).
+      // DO NOT call refreshMe() here → that causes infinite recursion.
+      setUser((prev) => {
+        const next = ce.detail as AppSessionUser;
+        if (!prev) return next;
+        if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+        try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
     };
     window.addEventListener(SESSION_UPDATED_EVENT, handler);
-    window.addEventListener('storage', handler);
     return () => {
       window.removeEventListener(SESSION_UPDATED_EVENT, handler);
-      window.removeEventListener('storage', handler);
     };
+  }, []);
+
+  const serverLogin = useCallback(async (nextUser: AppSessionUser): Promise<boolean> => {
+    if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return false;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          id: nextUser.id,
+          email: nextUser.email,
+          role: nextUser.role,
+          displayName: nextUser.displayName,
+          avatarInitials: nextUser.avatarInitials,
+          avatarDataUrl: nextUser.avatarDataUrl,
+          bdManagerFullName: nextUser.bdManagerFullName,
+        }),
+      });
+      if (!res.ok) {
+        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        setUser((prev) => (prev ? null : prev));
+        return false;
+      }
+      const data = (await res.json()) as any;
+      const fetched = (data?.user as AppSessionUser) ?? nextUser;
+      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(fetched)); } catch {}
+      setSession(fetched);
+      return true;
+    } catch (err) {
+      // Network error: fallback to optimistic local session (same user info) without server cookie.
+      // Will keep UI alive; /api/auth/me will clear it on next mount.
+      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(nextUser)); } catch {}
+      setSession(nextUser);
+      return true;
+    }
+  }, [setSession]);
+
+  const serverLogout = useCallback(async (): Promise<boolean> => {
+    try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+    clearSession();
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch {
+      /* ignore */
+    }
+    setUser(null);
+    return true;
   }, []);
 
   const switchToMockRole = useCallback(async (key: MockUserKey) => {
     const next = createMockSessionByKey(key);
-    saveSession(next);
-    setUser(next);
-    try {
-      window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
-    } catch (e) {
-      /* ignore */
-    }
-  }, []);
+    const ok = await serverLogin(next);
+    if (!ok) setSession(next);
+  }, [serverLogin, setSession]);
 
   const forceLogout = useCallback(() => {
+    logAudit({
+      action: "logout",
+      actorId: user?.id ?? undefined,
+      actorEmail: user?.email ?? undefined,
+      role: user?.role ?? undefined,
+      resource: "auth:logout",
+      detail: { source: "forceLogout_dev_mode", replacedWith: "RISK_MANAGER" },
+    });
     logAuthDeny({
       action: 'operation_denied',
       resource: 'session',
@@ -111,47 +235,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     const def = createDefaultRiskManagerSession();
     clearSession();
-    saveSession(def);
-    setUser(def);
-  }, [user?.id, user?.role]);
+    if (process.env.NODE_ENV === 'development') {
+      void serverLogin(def);
+    } else {
+      setSession(null);
+    }
+  }, [user?.id, user?.role, user?.email, serverLogin, setSession]);
 
   const logoutToLogin = useCallback(() => {
+    const snap = user;
+    if (snap?.id || snap?.email) {
+      logAudit({
+        action: "logout",
+        actorId: snap?.id ?? undefined,
+        actorEmail: snap?.email ?? undefined,
+        role: snap?.role ?? undefined,
+        resource: "auth:logout",
+        detail: { source: "logoutToLogin" },
+      });
+    }
     clearSession();
-    setUser(null);
-    try {
-      window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: null }));
-    } catch (e) {
-      /* ignore */
-    }
-    const nextUrl = typeof window !== 'undefined' ? window.location.pathname : '/';
-    const qs = nextUrl && nextUrl !== '/' && !nextUrl.startsWith('/login')
-      ? `?next=${encodeURIComponent(nextUrl)}`
-      : '';
-    const dest = `/login${qs}`;
-    if (typeof window !== 'undefined') {
-      try { window.location.replace(dest); } catch { window.location.href = dest; }
-    }
-  }, []);
+    try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+    void serverLogout().finally(() => {
+      setSession(null);
+      const nextUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+      const qs = nextUrl && nextUrl !== '/' && !nextUrl.startsWith('/login')
+        ? `?next=${encodeURIComponent(nextUrl)}`
+        : '';
+      const dest = `/login${qs}`;
+      if (typeof window !== 'undefined') {
+        try { window.location.replace(dest); } catch { window.location.href = dest; }
+      }
+    });
+  }, [user, serverLogout, setSession]);
 
   const loginAsCustom = useCallback((nextUser: AppSessionUser) => {
     if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return;
-    saveSession(nextUser);
-    setUser(nextUser);
-    try {
-      window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: nextUser }));
-    } catch (e) {
-      /* ignore */
-    }
-  }, []);
+    void serverLogin(nextUser);
+  }, [serverLogin]);
 
   const updateCurrentUser = useCallback((patch: Partial<AppSessionUser>) => {
     setUser((prev) => {
       if (!prev) return prev;
       const next: AppSessionUser = { ...prev, ...patch };
-      saveSession(next);
+      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(next)); } catch {}
       try {
         window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
-      } catch (e) {
+      } catch {
         /* ignore */
       }
       return next;
@@ -179,22 +309,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     forceLogout,
     logoutToLogin,
     loginAsCustom,
+    serverLogin,
+    serverLogout,
+    refreshMe,
     updateCurrentUser,
     hasRole,
     hasAnyRole,
-  }), [user, isLoading, switchToMockRole, forceLogout, logoutToLogin, loginAsCustom, updateCurrentUser, hasRole, hasAnyRole]);
+  }), [user, isLoading, switchToMockRole, forceLogout, logoutToLogin, loginAsCustom, serverLogin, serverLogout, refreshMe, updateCurrentUser, hasRole, hasAnyRole]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (process.env.NODE_ENV !== 'development') return;
     (window as any).__RC_DEBUG__ = {
-      getSession: () => getStoredSession(),
-      clearSession,
+      refreshMe,
+      serverLogin,
+      serverLogout,
       logoutToLogin,
       switchToMockRole,
       loginAsCustom,
       updateCurrentUser,
     };
-  }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser]);
+  }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser, refreshMe, serverLogin, serverLogout]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -208,3 +343,4 @@ export function useAuthContext(): AuthContextValue {
 }
 
 export { MOCK_USER_META, type MockUserKey };
+

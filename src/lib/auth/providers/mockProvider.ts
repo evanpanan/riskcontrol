@@ -67,6 +67,7 @@ export function getAllMockUsersMeta(): typeof MOCK_USER_META {
 }
 
 export function getStoredSession(): AppSessionUser | null {
+  if (process.env.NODE_ENV !== 'development') return null;
   if (!isBrowser()) return null;
   try {
     const raw = window.localStorage.getItem(MOCK_LS_KEY);
@@ -89,6 +90,7 @@ export function getStoredSession(): AppSessionUser | null {
 }
 
 export function saveSession(u: AppSessionUser): void {
+  if (process.env.NODE_ENV !== 'development') return;
   if (!isBrowser()) return;
   try {
     window.localStorage.setItem(MOCK_LS_KEY, JSON.stringify(u));
@@ -98,6 +100,7 @@ export function saveSession(u: AppSessionUser): void {
 }
 
 export function clearSession(): void {
+  if (process.env.NODE_ENV !== 'development') return;
   if (!isBrowser()) return;
   try {
     window.localStorage.removeItem(MOCK_LS_KEY);

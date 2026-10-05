@@ -27,6 +27,15 @@ import { mergeClientStatusOnClient } from "./clientStatusStore";
 import { getNYSEInfo } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
 
+export class RevisionMismatchError extends Error {
+  override name = "RevisionMismatchError";
+  readonly batchId?: string;
+  constructor(batchId?: string, message?: string) {
+    super(message ?? "此批次已在其他页面更新，请刷新后重新确认。");
+    this.batchId = batchId;
+  }
+}
+
 export interface MockDataSet {
   batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[];
   stockHistory: StockHistory[];
@@ -325,13 +334,17 @@ export function generateMockData(): MockDataSet {
       marginCalls.push({
         id: `mc-${MOCK_BASE_SEED}-${i}-${m}`,
         batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
+        triggerDate: callDate,
+        triggerMarketValue: prelimMetrics.currentMarketValue,
+        dropPercent: prelimMetrics.dropPercent,
         requiredAmount: Number(prelimMetrics.requiredMarginCall.toFixed(2)),
         fulfilledAmount: m === cumulativeMarginCalls - 1 ? 0 : Number(prelimMetrics.requiredMarginCall.toFixed(2)),
-        status: m === cumulativeMarginCalls - 1 ? "PENDING" : "FULFILLED",
+        fulfilledDate: m === cumulativeMarginCalls - 1 ? null : callDate,
+        status: m === cumulativeMarginCalls - 1 ? "PENDING" : "FULLFILLED",
+        note: null,
+        notifiedEmails: null,
+        notifiedWhatsApps: null,
         createdAt: callDate,
-        updatedAt: callDate,
-        triggeredBy: "STOCK_DROP",
-        triggeredAt: callDate,
       });
     }
 
@@ -511,7 +524,7 @@ export function generateMockData(): MockDataSet {
       for (const r of f.rounds) { if (r.status === "PENDING") { r.status = "FULLFILLED"; r.fulfilledAmount = r.requiredAmount; } }
       for (const t of f.trades) { t.needsReconciliation = false; }
     }
-    const sortedClients = [...b.clients].sort((a, c) => new Date(a.signDate).getTime() - new Date(c.signDate).getTime());
+    const sortedClients = [...(b.clients || [])].sort((a, c) => new Date(a.signDate).getTime() - new Date(c.signDate).getTime());
     const settleRatio = [0.38, 0.32, 0.26][bIdx] ?? 0.3;
     const targetNum = Math.max(2, Math.round(sortedClients.length * settleRatio));
     const chosen = new Set<string>();
@@ -523,7 +536,8 @@ export function generateMockData(): MockDataSet {
       chosen.add(sortedClients[ci].id);
     }
     let settledCount = 0;
-    for (const client of b.clients) {
+    const clientList = b.clients ?? [];
+    for (const client of clientList) {
       if (!chosen.has(client.id)) continue;
       const cSignTs = new Date(client.signDate).getTime();
       const matureTs = cSignTs + (30 + settleRng.int(0, 35)) * 86400000;
@@ -533,7 +547,7 @@ export function generateMockData(): MockDataSet {
       const origPrice = Number(b.currentStockPrice ?? 0);
       (b as any).currentStockPrice = settlePrice;
       try {
-        settleClientPosition(b, client.id, { operator: "SYSTEM_MOCK" });
+        settleClientPosition(b, client.id, { operatorName: "SYSTEM_MOCK" });
         settledCount++;
       } catch (settleErr: any) {
         console.log("[mock settle] fail", b.id, client.name, "price=", settlePrice, "entry=", client.entryStockPrice ?? b.stockPriceAtStart, "err=", settleErr?.message ?? settleErr);
@@ -542,7 +556,7 @@ export function generateMockData(): MockDataSet {
       }
       (b as any).currentStockPrice = origPrice;
     }
-    console.log("[mock settle] batch", b.id, "chosen=", chosen.size, "settled=", settledCount, "/", b.clients.length);
+    console.log("[mock settle] batch", b.id, "chosen=", chosen.size, "settled=", settledCount, "/", clientList.length);
     syncBatchFinance(b);
     const reMetrics = calculateBatchRiskMetrics(
       b.initialTotalAmount,
@@ -873,7 +887,7 @@ export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLik
   const store = readFinanceStore();
   const saved = store[batch.id];
   if (saved && saved.batch.finance?.revision !== batch.finance?.revision) {
-    throw new Error("此批次已在其他页面更新，请刷新后重新确认。");
+    throw new RevisionMismatchError(batch.id);
   }
   const draft = reviveBatch(structuredClone(batch));
   const result = mutate(draft);

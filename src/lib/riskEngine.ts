@@ -49,6 +49,8 @@ export interface SettlementSnapshot extends SettlementResult {
   institutionInitialPnL: number;
   institutionClientShare: number;
   institutionRescuePnL: number;
+  operatorName?: string;
+  settleReason?: string;
 }
 export interface InstitutionTrade {
   id: string;
@@ -88,21 +90,63 @@ export interface BatchFinance {
   revision: number;
   legacyWarnings: string[];
 }
-export type ClientLike = Client & {
+export interface ClientLike {
+  id: string;
+  batchId: string;
+  name: string;
+  investmentAmount: number;
+  bdManager: string;
+  bdUserId?: string | null;
+  signDate: Date | string;
+  profitSplitClient?: number;
+  profitSplitInstitution?: number;
+  realtimePnL?: number | null;
+  estimatedExitAmount?: number | null;
+  status?: ClientStatus | keyof typeof ClientStatus | string;
+  settledAt?: Date | string | null;
+  settlementNote?: string | null;
+  clientNo?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
   entryStockPrice?: number;
   signedVipThreshold?: number;
   initialInvestment?: number;
   marginState?: ClientMarginState;
   marginHistory?: ClientMarginCallEntry[];
   settlement?: SettlementSnapshot;
-};
-export type BatchLike = Batch & {
+  [k: string]: any;
+}
+export interface BatchLike {
+  id: string;
+  batchNumber?: string;
+  stockSymbol?: string;
+  stockName?: string | null;
+  initialTotalAmount: number;
+  priorityAmount: number;
+  subordinateAmount: number;
   clients?: ClientLike[];
   marginCalls?: any[];
   finance?: BatchFinance;
   currentPrice?: number;
+  currentStockPrice?: number | null;
+  currentMarketValue?: number | null;
   activeSubsetInitialPrincipal?: number;
-};
+  remainingCapital?: number;
+  totalPnL?: number | null;
+  totalPnLPercent?: number | null;
+  signDate: Date | string;
+  maturityDate: Date | string;
+  status?: BatchStatus | keyof typeof BatchStatus | string;
+  riskLevel?: RiskLevel | keyof typeof RiskLevel | string;
+  nextTradingWindow?: Date | string | null;
+  totalShares: number;
+  cumulativeMarginCalls: number;
+  stockPriceAtStart: number;
+  currentDayChange?: number | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+  [k: string]: any;
+}
 export interface BatchRiskMetrics {
   dropPercent: number;
   dropAmount: number;
@@ -140,7 +184,7 @@ export function isVipClient(client: Pick<ClientLike, "investmentAmount" | "signe
   return client.investmentAmount >= (client.signedVipThreshold ?? HIGH_INVESTMENT_THRESHOLD);
 }
 
-export function getClientProfitSplit(client: Pick<Client, "investmentAmount" | "profitSplitClient" | "profitSplitInstitution">) {
+export function getClientProfitSplit(client: Pick<ClientLike, "investmentAmount" | "profitSplitClient" | "profitSplitInstitution">) {
   const pct = client.profitSplitClient;
   if (typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100) {
     return { client: pct / 100, institution: 1 - pct / 100 };
@@ -148,18 +192,42 @@ export function getClientProfitSplit(client: Pick<Client, "investmentAmount" | "
   return calculateProfitSplitRatio(client.investmentAmount, true);
 }
 
-export function calculateBatchRiskMetrics(activeSubsetInitialPrincipal: number, currentMarketValue: number, activeInstitutionTopups = 0): BatchRiskMetrics {
+export interface ThresholdOpts {
+  warningDropPercent?: number;
+  marginDropPercent?: number;
+}
+export const DEFAULT_THRESHOLD_OPTS: Required<ThresholdOpts> = {
+  warningDropPercent: WARNING_DROP_THRESHOLD * 100,
+  marginDropPercent: CRITICAL_DROP_THRESHOLD * 100,
+};
+
+export function resolveThresholdOpts(opts?: ThresholdOpts): Required<ThresholdOpts> {
+  return {
+    warningDropPercent: typeof opts?.warningDropPercent === "number" && Number.isFinite(opts.warningDropPercent) && opts.warningDropPercent > 0 && opts.warningDropPercent < 100 ? opts.warningDropPercent : DEFAULT_THRESHOLD_OPTS.warningDropPercent,
+    marginDropPercent: typeof opts?.marginDropPercent === "number" && Number.isFinite(opts.marginDropPercent) && opts.marginDropPercent > 0 && opts.marginDropPercent <= 100 ? Math.max(opts.marginDropPercent, opts?.warningDropPercent ?? DEFAULT_THRESHOLD_OPTS.warningDropPercent + 0.01) : DEFAULT_THRESHOLD_OPTS.marginDropPercent,
+  };
+}
+
+export function calculateBatchRiskMetrics(
+  activeSubsetInitialPrincipal: number,
+  currentMarketValue: number,
+  activeInstitutionTopups = 0,
+  opts?: ThresholdOpts
+): BatchRiskMetrics {
+  const { warningDropPercent, marginDropPercent } = resolveThresholdOpts(opts);
+  const warningDrop = warningDropPercent / 100;
+  const marginDrop = marginDropPercent / 100;
   const dropAmount = activeSubsetInitialPrincipal - currentMarketValue;
   const drop = activeSubsetInitialPrincipal > 0 ? dropAmount / activeSubsetInitialPrincipal : 0;
-  const critical = activeSubsetInitialPrincipal > 0 && currentMarketValue <= activeSubsetInitialPrincipal * 0.8 + 0.02;
+  const critical = activeSubsetInitialPrincipal > 0 && drop + Number.EPSILON >= marginDrop - 1e-8;
   const totalPnL = currentMarketValue - activeSubsetInitialPrincipal - activeInstitutionTopups;
   return {
     dropPercent: Math.max(0, drop) * 100,
     dropAmount: Math.max(0, dropAmount),
     currentMarketValue,
-    safetyBufferPercent: (CRITICAL_DROP_THRESHOLD - drop) * 100,
+    safetyBufferPercent: Math.max(0, (marginDrop - drop) * 100),
     requiredMarginCall: critical ? money(dropAmount) : 0,
-    riskLevel: critical ? RiskLevel.CRITICAL : drop >= WARNING_DROP_THRESHOLD ? RiskLevel.WARNING : RiskLevel.NORMAL,
+    riskLevel: critical ? RiskLevel.CRITICAL : drop + Number.EPSILON >= warningDrop - 1e-8 ? RiskLevel.WARNING : RiskLevel.NORMAL,
     totalPnL,
     totalPnLPercent: activeSubsetInitialPrincipal > 0 ? totalPnL / activeSubsetInitialPrincipal * 100 : 0,
     activeSubsetInitialPrincipal,
@@ -172,7 +240,7 @@ export function calculateTotalShares(initialTotalAmount: number, stockPriceAtSta
   return stockPriceAtStart > 0 ? initialTotalAmount / stockPriceAtStart : 0;
 }
 
-export function calculateRescueStats(batch: Batch & { marginCalls?: MarginCall[] }, currentStockPrice: number): RescueStats {
+export function calculateRescueStats(batch: BatchLike, currentStockPrice: number): RescueStats {
   const finance = (batch as BatchLike).finance;
   const trades: InstitutionTrade[] = finance?.trades ?? (batch.marginCalls ?? []).filter((m) => (m.fulfilledAmount ?? 0) > 0).map((m: any) => ({
     id: m.id, roundId: m.id, amount: m.fulfilledAmount, entryPrice: m.averageEntryPrice || null,
@@ -211,7 +279,22 @@ export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
   const rescue = calculateRescueStats(batch, price);
   const rc = batch.finance?.remainingCapital ?? batch.initialTotalAmount;
   const activeSubsetInitialPrincipal = money(rc + rescue.totalRescueAmount);
-  const base = calculateBatchRiskMetrics(rc, getAccountMarketValue(batch, price), rescue.totalRescueAmount);
+  const opts: import("./thresholds").StoredThresholds | undefined = (typeof window !== "undefined") ? undefined : undefined;
+  const stored = (() => {
+    try {
+      if (typeof window === "undefined") return undefined;
+      const raw = window.localStorage.getItem("risk_control_settings");
+      if (!raw) return undefined;
+      const p = JSON.parse(raw) as any;
+      return {
+        warningDropPercent: Number(p?.warningThreshold) || undefined,
+        marginDropPercent: Number(p?.marginThreshold) || undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  })();
+  const base = calculateBatchRiskMetrics(rc, getAccountMarketValue(batch, price), rescue.totalRescueAmount, stored ?? opts ?? undefined);
   return {
     ...base,
     activeSubsetInitialPrincipal,
@@ -246,7 +329,46 @@ export function initializeBatchFinance(batch: BatchLike): void {
     finance.legacyWarnings.push("客户本金合计与批次登记资金（优先池或初始总资金）不一致，结算前需核对原始出资。");
   }
   if ((batch.clients ?? []).some((c) => c.status === ClientStatus.SETTLED)) {
-    finance.legacyWarnings.push("存在无成交快照的历史结算，账户剩余仓位需核对后才能继续结算。");
+    const settled = (batch.clients ?? []).filter((c) => c.status === ClientStatus.SETTLED);
+    const orphanIds: string[] = [];
+    for (const c of settled) {
+      if (!c.id) continue;
+      const snap = (batch as any).finance?.settlements?.[c.id];
+      if (!snap) orphanIds.push(c.id);
+    }
+    if (orphanIds.length > 0) {
+      let auditor: { logAudit?: (e: any) => void } | null = null;
+      try { auditor = require('@/lib/auth/audit') as any; } catch {}
+      for (const id of orphanIds) {
+        const client = (batch.clients ?? []).find((x: any) => x.id === id) as any;
+        if (!client) continue;
+        client.status = ClientStatus.ACTIVE;
+        client.exitRequested = false;
+        try {
+          auditor?.logAudit?.({
+            action: "client_edit",
+            resource: `client:${id}:self-heal-settled`,
+            detail: {
+              clientId: id,
+              clientName: (client as any).name,
+              batchId: batch.id,
+              healed: true,
+              reason: "settled_without_settlement_snapshot_healed_to_active",
+            },
+          });
+        } catch { /* ignore audit */ }
+      }
+      finance.legacyWarnings.push(`已自愈 ${orphanIds.length} 条客户 SETTLED 无快照状态 → 还原为 ACTIVE（共 ${settled.length} 条 SETTLED 记录）；结算前请核对原始出资。`);
+    } else {
+      if (settled.length > 0) {
+        const unmatchedIds = settled.filter((c: any) => !(batch.finance?.settlements?.[c.id])).map((c: any) => c.id);
+        if (unmatchedIds.length === 0) {
+          // SETTLED with snapshot is consistent. Do not block.
+        } else {
+          finance.legacyWarnings.push(`存在 ${unmatchedIds.length} 条 SETTLED 客户无成交快照，批次已自愈；请核对仓位再结算。`);
+        }
+      }
+    }
   }
   for (const mc of batch.marginCalls ?? []) {
     const amount = Number(mc.fulfilledAmount ?? 0);
@@ -406,6 +528,27 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   if (round.requiredAmount - round.fulfilledAmount < 0.005) round.status = "FULLFILLED";
   batch.finance!.revision++;
   syncBatchFinance(batch);
+  if (applied > 0) {
+    try {
+      const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+      logAudit({
+        action: "margin_topup",
+        resource: `batch:topup:${batch.id}`,
+        detail: {
+          batchId: batch.id,
+          batchNumber: (batch as any).batchNumber ?? null,
+          roundId: round.id,
+          appliedAmount: applied,
+          expectedAmount: options.amount,
+          targetClientId: options.clientId ?? null,
+          operatorName: options.operatorName ?? null,
+          source: options.clientId ? "client_single" : "batch_one_click",
+        },
+      });
+    } catch {
+      /* audit is best-effort; never break business */
+    }
+  }
   return applied;
 }
 export function applyBatchLevelMarginTopupRemainder(batch: BatchLike, amount: number, operatorName?: string): number {
@@ -415,7 +558,7 @@ export function registerClientSingleMargin(client: ClientLike, amount: number, e
   throw new Error("请通过 executeInstitutionTopup 记录机构成交，禁止只修改客户补仓状态。");
 }
 
-export function calculateClientSettlement(client: Client, batch: BatchLike, _finalMarketValue: number, finalStockPrice: number): SettlementResult {
+export function calculateClientSettlement(client: ClientLike, batch: BatchLike, _finalMarketValue: number, finalStockPrice: number): SettlementResult {
   const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;
   if (snapshot) return snapshot;
   const weight = batch.priorityAmount > 0 ? client.investmentAmount / batch.priorityAmount : 0;
@@ -434,7 +577,7 @@ export function calculateClientSettlement(client: Client, batch: BatchLike, _fin
     splitRatioClient: split.client * 100, isLoss: initialPnL < 0, marginCallReturned };
 }
 
-export function settleClientPosition(batch: BatchLike, clientId: string): SettlementSnapshot {
+export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string } = {}): SettlementSnapshot {
   initializeBatchFinance(batch);
   const f = batch.finance!;
   if (f.settlements[clientId]) return f.settlements[clientId];
@@ -463,6 +606,8 @@ export function settleClientPosition(batch: BatchLike, clientId: string): Settle
     institutionInitialPnL: money(initialPosPnl * SUBORDINATE_RATIO / PRIORITY_RATIO),
     institutionClientShare: money(initialPosPnl - result.clientPnL),
     institutionRescuePnL: money(rescue.rescuePnL * weight),
+    operatorName: opts.operatorName,
+    settleReason: opts.reason,
   };
   f.settlements[clientId] = snapshot;
   f.remainingCapital = money(f.remainingCapital - snapshot.originalAccountCapital);
@@ -473,6 +618,26 @@ export function settleClientPosition(batch: BatchLike, clientId: string): Settle
   client.settlement = snapshot;
   f.revision++;
   syncBatchFinance(batch);
+  try {
+    const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+    logAudit({
+      action: "client_settle",
+      resource: `batch:client_settle:${batch.id}:${clientId}`,
+      detail: {
+        batchId: batch.id,
+        batchNumber: (batch as any).batchNumber ?? null,
+        clientId,
+        clientName: client.name ?? null,
+        principal: client.investmentAmount,
+        clientReceives: snapshot.clientReceives,
+        settlementSnapshotId: snapshot.id,
+        operatorName: opts.operatorName ?? null,
+        reason: opts.reason ?? null,
+      },
+    });
+  } catch {
+    /* best-effort */
+  }
   return snapshot;
 }
 

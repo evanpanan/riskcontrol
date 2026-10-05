@@ -762,15 +762,6 @@ export async function fetchHistoryWithFallback(
     };
   }
 
-  const t = Date.now();
-  const fallback = forceNormalizeLastCandle(
-    [{ time: t, open: 1, high: 1, low: 1, close: 1, volume: 0 }],
-    { close: anchorClose ?? 1, high: anchorHigh ?? 1, low: anchorLow ?? 1 },
-  );
-  return {
-    provider: firstProvider ?? "YAHOO_FINANCE",
-    candles: fallback,
-    fallbackNote: `ALL_PROVIDERS_FAILED: ${errors.join("; ")}`,
-  };
+  throw new Error(`所有行情源均失败: ${errors.length > 0 ? errors.join("; ") : "no response"}`);
 }
 

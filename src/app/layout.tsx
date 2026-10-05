@@ -58,6 +58,12 @@ export default function RootLayout({
       (function() {
         var LS_KEY = ${JSON.stringify(FINANCE_STORE_KEY)};
         var RAW_KEYS = ${JSON.stringify(RAW_KEYS)};
+        // 1) 先判定环境，非开发环境直接退出，不注册任何重置能力
+        var devMode = (${JSON.stringify(process.env.NODE_ENV)} === "development")
+          || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
+        if (!devMode) return;
+
+        // 2) 仅在 devMode 成立时才挂载重置函数
         window.__RISK_RESET_TEST_DATA__ = function(silent, noBackup) {
           try {
             if (!noBackup) {
@@ -84,9 +90,43 @@ export default function RootLayout({
             return false;
           }
         };
-        var devMode = (${JSON.stringify(process.env.NODE_ENV)} === "development")
-          || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
-        if (!devMode) return;
+
+        // 3) 新增：从指定时间戳的备份恢复（AC-1.4）
+        window.__RISK_RESTORE_TEST_BACKUP__ = function(ts) {
+          try {
+            var raw = window.localStorage.getItem("risk_control_test_backup_" + ts);
+            if (!raw) return false;
+            var payload = JSON.parse(raw);
+            var records = payload && payload.records ? payload.records : {};
+            Object.keys(records).forEach(function(k) {
+              if (records[k] == null) {
+                window.localStorage.removeItem(k);
+              } else {
+                window.localStorage.setItem(k, records[k]);
+              }
+            });
+            setTimeout(function(){ window.location.reload(); }, 30);
+            return true;
+          } catch (e) {
+            alert("恢复失败：" + (e && e.message ? e.message : e));
+            return false;
+          }
+        };
+
+        // 4) 新增：列出所有可用备份的时间戳（倒序返回，最新在前）
+        window.__RISK_LIST_TEST_BACKUPS__ = function() {
+          var out = [];
+          try {
+            for (var i = 0; i < window.localStorage.length; i++) {
+              var k = window.localStorage.key(i);
+              if (k && k.indexOf("risk_control_test_backup_") === 0) {
+                out.push(k.replace("risk_control_test_backup_", ""));
+              }
+            }
+          } catch (_e) {}
+          out.sort(function(a, b) { return Number(b) - Number(a); });
+          return out;
+        };
       })();
     } catch (_) {}
   `;

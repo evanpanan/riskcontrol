@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useMemo, useState, useEffect, useRef } from "react";
-import { getMockData, refreshMockDataPrices, reloadMockData } from "@/lib/mockData";
+import { getMockData, refreshMockDataPrices, reloadMockData, resetMockTestData } from "@/lib/mockData";
 import { calculatePortfolioSummary, getBatchMetrics, summarizeBatchMarginFromClients } from "@/lib/riskEngine";
 import { toast } from "sonner";
 import { KPICard } from "@/components/dashboard/KPICard";
@@ -290,7 +290,12 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5 max-w-[1920px] mx-auto">
-      {mockError ? (
+      {mockError ? (() => {
+        const devMode =
+          typeof window !== "undefined" &&
+          (process.env.NODE_ENV === "development" ||
+            /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host));
+        return (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="space-y-1">
@@ -302,27 +307,37 @@ export default function DashboardPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button
-                className="inline-flex items-center justify-center rounded-lg bg-destructive text-destructive-foreground px-4 py-2 text-sm font-semibold hover:bg-destructive/90"
+              {devMode && (
+              <Button
+                variant="destructive"
                 onClick={() => {
-                  if (typeof window !== "undefined" && (window as any).__RISK_RESET_TEST_DATA__) {
-                    (window as any).__RISK_RESET_TEST_DATA__(false);
-                  } else {
-                    toast.error("未找到重置脚本，请手动清理 localStorage 后刷新。");
+                  try {
+                    const r = resetMockTestData();
+                    toast.success(`已重建 ${r.batches} 个批次 / ${r.clients} 位客户的测试账本（备份 ${r.backupKey}）`);
+                    setTimeout(() => window.location.reload(), 150);
+                  } catch (e: any) {
+                    toast.error(e?.message ?? "重置失败，请手动清理 localStorage 后刷新。");
                   }
                 }}
               >
-                清空测试数据并重建
-              </button>
+                仅开发环境：重建测试账本（会先备份）
+              </Button>
+              )}
             </div>
           </div>
           <div className="rounded-lg bg-background/60 p-3 text-[11.5px] text-muted-foreground space-y-1">
-            <div>· 只会清理「纯测试账本」；存在真实结算 / 已执行补仓的账本不会被自动删除。</div>
-            <div>· 清空前会先备份到 localStorage 里 <code className="font-mono">risk_control_test_backup_*</code> 前缀的 key，随时可回滚。</div>
-            <div>· 也可在 DevTools Console 执行：<code className="font-mono">window.__RISK_RESET_TEST_DATA__()</code></div>
+            <div>· 操作会经过「真实账目校验」：存在真实结算 / 已履约补仓 / 非 legacy 手动交易的账本会被拒绝执行。</div>
+            <div>· 执行前会先备份到 localStorage <code className="font-mono">risk_control_test_backup_*</code>，可在「批次详情 → 历史账目恢复入口」中还原。</div>
+            {devMode && (
+            <div>· 开发环境下也可在 DevTools Console 执行：<code className="font-mono">window.__RISK_RESET_TEST_DATA__()</code>（裸删，不做 pristine 校验，仅用于调试紧急情况）</div>
+            )}
+            {!devMode && (
+            <div>· 当前为生产/预览环境，禁用了浏览器端的账本重建入口。请使用部署环境提供的账本修复流程或联系开发管理员。</div>
+            )}
           </div>
         </div>
-      ) : null}
+        );
+      })() : null}
 
       {/* PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">

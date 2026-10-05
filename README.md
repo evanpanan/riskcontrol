@@ -23,7 +23,7 @@
     <img alt="TypeScript Strict" src="https://img.shields.io/badge/TypeScript-5.5_strict-blue?logo=typescript&logoColor=white" />
     <img alt="Tailwind 3.4" src="https://img.shields.io/badge/Tailwind_CSS-3.4-38B2AC?logo=tailwindcss&logoColor=white" />
     <img alt="Prisma 5" src="https://img.shields.io/badge/Prisma-5.22-2D3748?logo=prisma&logoColor=white" />
-    <img alt="Status: Production Ready" src="https://img.shields.io/badge/Status-Production_Ready-22C55E" />
+    <img alt="Status: Internal Audit Completed" src="https://img.shields.io/badge/Status-Internal_Audit_Completed-6366F1" />
     <img alt="License: Private" src="https://img.shields.io/badge/License-Internal-8B5CF6" />
   </p>
 </div>
@@ -87,7 +87,7 @@
 - **4 档开关（设置页）**：网页弹窗总开关 / 击穿提示音（AudioContext 520→420Hz）/ 仅击穿不弹预警 / 实时股价联动
 - **ACK 30 分钟冷却**：用户「已知晓」后写 `localStorage risk_control_alert_ack_v1`，30 分钟内不重复打扰
 - **通知渠道**：Email Webhook + WhatsApp Business Webhook + 风控收件人管理（8 位，可增删改）
-- **审计日志**：登录、修改阈值、新增账号、编辑客户、补仓、退出 6 动作持久化
+- **审计日志（前端环形缓冲，本地持久化）**：13 种业务动作持久化（登录成功/失败、登出、阈值变更、账号增删改、客户编辑/删除、补仓注入、客户结算、批次通知），上限 2000 条，支持跨 Tab 实时刷新与操作审计
 - **设置页全局 HelpDialog**：阈值、通知渠道、股价数据源、收件人 4 处 `HelpCircle` 问号按钮，点击弹出统一配置指南 Dialog
 
 ### 🎞 金额跃动 + 实时联动
@@ -99,6 +99,33 @@
 - **XMAX TopBar 实时报价**：`$8.75 / +0.46%` 实时 Badge，Nasdaq Unofficial API 盘前/后仍返回当日快照价
 - **Yield 收益率去变色恒 foreground**：综合收益率 KPI 不再因涨跌切换红绿，永久显示默认 foreground 色，搭配镜像 defs 渐变
 
+### 🔐 登录与 HttpOnly 会话（P0 安全整改）
+- **服务端强制 HttpOnly Cookie 会话（P0-4 修复 / 路线 A 真做）**：不再把 JWT 放浏览器 `localStorage`；`POST /api/auth/login` 返回 Set-Cookie `rc_session_v1`（HttpOnly / Path=/ / SameSite=Lax / 生产 Secure / 12h），JS 完全读不到；`/api/auth/me` 返回当前用户；`/api/auth/logout` 清 Cookie
+- **Next.js Middleware 5 路径强守卫**：`src/middleware.ts` matcher=['/','/clients*','/batch*','/settings*'] 无有效签名直接 302 `/login?next=`，无效 cookie 立即清；`/settings` 还需 INSTITUTION_ROLES 四档
+- **JWT 自研 HMAC-SHA256 手搓，Edge+Node 双兼容**：[session.ts](src/lib/auth/session.ts) 完全弃 Node.js `require('crypto')`，改用 Web Crypto `globalThis.crypto.subtle`（middleware Edge Runtime 原生可用），含恒时 XOR diff 防时序侧信道
+- **一键抹账（P0-1 修复）**：清空客户台账前自动 ZIP 备份并触发下载，备份 JSON 可于 [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) 导入还原；操作写入 audit log
+- **登录入口加固（P0-2 修复）**：`layout.tsx` `devMode 自动登录` 彻底移除；任何未登录受保护路径必须走 `/login` 表单 + 邮箱密码校验；Banner 必须显示当前角色
+- **自建 ADMIN 越权（P0-3 修复）**：Settings 页 4 处 RoleGate 包裹（新增账号 / ADMIN 角色选框 / 阈值卡 / 收件人编辑），只有角色本身允许的 UI 才渲染；客户端+服务端双校验
+- **🛡 登录欢迎过渡动画（商用级）**：点击"登录进入工作台"→凭据校验通过 → [page.tsx WelcomeTransitionOverlay](src/app/login/page.tsx#L527-L709) 全屏遮罩：Logo 旋转光晕 + Authentication Verified 副文案 +「欢迎登录 RiskControl」渐变字 + 身份卡（首字母头像/角色徽章/邮箱）+ 进度条填充+扫光 + 780ms 后整页 `window.location.replace` 跳工作台（**避免 SPA NextRouter.push 跨 Set-Cookie 边界丢会话**）；7 段内联 keyframes（fade-in / pop-in / slide-up / pulse-soft / spin-slow / progress-fill / progress-shimmer / blink）
+
+### ✅ 审计整改 13 项修复汇总（2026-10-05 · Internal Audit v2 Completed）
+
+| # | 严重度 | 问题 | 修复方案 | 关键文件 |
+|---|---|------|----------|----------|
+| P0-1 | **紧急** | 一键抹账无备份（清空即永久损失） | 清空前 ZIP 备份 + 浏览器下载；LedgerRecovery 组件一键还原 | [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) |
+| P0-2 | **紧急** | devMode 自动登录 → 登录形同虚设 | 删除 `layout.tsx` 自动登录分支；受保护路径必须 `/login` 表单凭据校验 | [layout.tsx](src/app/layout.tsx) |
+| P0-3 | **紧急** | localStorage 改 `role='ADMIN'` 直接越权 | 新增账号 / ADMIN 选框 / 阈值 / 收件人 4 处 `<RoleGate allowed=[ADMIN]>` 包裹；服务端 `/api/data/*` 双保险隔离 | [settings/page.tsx](src/app/settings/page.tsx) · [data/*](src/app/api/data/) |
+| P0-4 | **紧急** | JWT 会话全放浏览器 localStorage（XSS 全量泄露） | **路线 A 真做**：HttpOnly Cookie `rc_session_v1` + Middleware 守卫 + HMAC-SHA256 JWT 手搓 | [session.ts](src/lib/auth/session.ts) · [middleware.ts](src/middleware.ts) · [auth route](src/app/api/auth/) |
+| P1-5 | **高** | 阈值控件纯 UI（引擎完全不读设置） | **方案 A 接入引擎**：新增 [thresholds.ts](src/lib/thresholds.ts) 统一配置源；`riskEngine.calculateBatchRiskSummary` 直接读阈值；Settings 保存即时生效 | [riskEngine.ts](src/lib/riskEngine.ts) · [settings/page.tsx](src/app/settings/page.tsx) |
+| P1-6 | **高** | 客户详情页 80% 预警阈值口径与引擎分叉 | 新增 `activeSubsetInitialPrincipal` 统一 UI 与引擎；容差 0.005→0.02 防临界舍入误判 | [BatchDetailContent.tsx](src/components/batch/BatchDetailContent.tsx) · [riskEngine.ts](src/lib/riskEngine.ts) |
+| P1-7 | **高** | `npx tsc --noEmit` 251 errors（构建必挂） | 删除遮蔽型 `src/types/prisma.d.ts` + 4 个补字段 interface + 修正 `FULFILLED` 拼写 → 0 errors | [types/auth.ts](src/types/auth.ts) + 各组件 |
+| P1-8 | **高** | Audit Log 空壳（13 动作仅埋点未落库） | Prisma `AuditLog` 模型 + 环形缓冲 2000 前端持久化 + `CustomEvent('risk-control:audit-updated')` 跨 Tab 刷新；13 动作全覆盖（login/logout/threshold/账号/客户/补仓/结算/通知） | [audit.ts](src/lib/auth/audit.ts) · [schema.prisma](prisma/schema.prisma) |
+| P2-9 | 中 | 补仓击穿无乐观锁，并发注入重复记账 | RevisionMismatchError toast 9 处 + 假 K 线 Nasdaq 502 兜底 + dataScope `/api/data/clients + /api/data/batch/:id` 服务端隔离双 API | [margin-calls/page.tsx](src/app/margin-calls/page.tsx) · [ClientTable.tsx](src/components/clients/ClientTable.tsx) |
+| P2-10 | 中 | 假 K 线未标注 / 数据源故障静默 | KLineDialog 502 状态页提示 / InlineKLine 明确 mock 标志 / Provider 超时时 4 条链路兜底 | [KLineDialog.tsx](src/components/quote/KLineDialog.tsx) · [providers.ts](src/lib/quote/providers.ts) |
+| P2-11 | 中 | 数据隔离 API 前端读全量（BD 可看所有） | `/api/data/clients` + `/api/data/batch/:id` 服务端内部 `filterByRole(session.user.role, bdManagerFullName)`，BD 仅自己 | [api/data/](src/app/api/data/) · [dataScope.ts](src/lib/authz/dataScope.ts) |
+| P2-12 | 中 | README 与 seed 不一致（无管理员凭据） | 本 README 5.1 节 30 秒首次登录指南 + seed 写入 8 个 built-in 账户 + 演示账号表统一 | [README.md](./README.md) · [seed.ts](prisma/seed.ts) |
+| P2-13 | 中 | 终检 9 条 checklist 无闭环 | tsc 0 / 登录闭环 4 条 / build / Task10.4 6 条手工验收清单（密码错误 / OP 无新增账号 / 生产 `__RC_DEBUG__` undefined / 阈值口径 / 阈值接入引擎生效） | 下方 §Changelog |
+
 ---
 
 ## 🏗 Architecture <a id="architecture"></a>
@@ -106,17 +133,26 @@
 ```
 risk-control/
 ├── src/
+│   ├── middleware.ts              # ⭐ Next.js Middleware（Edge Runtime）5 路径守卫 + verifySessionJwt + 无效清 Cookie + /settings INSTITUTION_ROLES
 │   ├── app/                       # Next.js 14 App Router
-│   │   ├── layout.tsx             # AuthProvider + Sidebar Layout (hsl(224 55% 6%) 深蓝暗主题)
-│   │   ├── page.tsx               # / 风控大盘：6 KPI + 阶梯条 + 24 批次卡 + DashboardCharts(双图并排) + RiskAlertDialog
+│   │   ├── layout.tsx             # AuthProvider + Sidebar Layout（hsl 深蓝暗主题）；已彻底移除 devMode 自动登录
+│   │   ├── page.tsx               # / 风控大盘：6 KPI + 阶梯条 + 24 批次卡 + DashboardCharts 双图并排 + RiskAlertDialog
+│   │   ├── api/auth/              # ⭐ 三条会话 API（服务端 HttpOnly Cookie 强控制点）
+│   │   │   ├── login/route.ts     # POST /api/auth/login 凭据→signSessionJwt→Set-Cookie rc_session_v1 HttpOnly 12h
+│   │   │   ├── me/route.ts        # GET  /api/auth/me 读 Cookie→verify→返回 {ok,user} 或 401 清 Cookie
+│   │   │   └── logout/route.ts    # POST /api/auth/logout 清 Cookie 返回 200
+│   │   ├── api/data/              # ⭐ RBAC 数据隔离双 API（服务端双保险 filterByRole）
+│   │   │   ├── clients/route.ts   # GET /api/data/clients BD 仅自己
+│   │   │   └── batch/[id]/route.ts# GET /api/data/batch/:id 同客户隔离
 │   │   ├── api/quote/             # 行情 REST：history (144 根日线) / realtime (XMAX 实时)
 │   │   │   ├── history/route.ts   # GET /api/quote/history?symbol=XMAX&from=2026-03-01
 │   │   │   └── realtime/route.ts  # GET /api/quote/realtime?symbol=XMAX
+│   │   ├── login/page.tsx         # /login 登录页 + WelcomeTransitionOverlay（Logo 旋转/欢迎过渡动画 780ms）
 │   │   ├── market/page.tsx        # /market 机构版行情：Top MonthlyBatchesTrend + 6 KPI + 双曲线 + 月度敞口 + XMAX sparkline
 │   │   ├── alerts/page.tsx        # /alerts 风险警报中心 + 通知日志
 │   │   ├── clients/page.tsx       # /clients 客户总表（自然人聚合索引：首次录入时间 / 最新批次 / 降序批次号 / 最新投资）
 │   │   ├── margin-calls/page.tsx  # /margin-calls 补仓历史 & 执行跟踪
-│   │   ├── settings/page.tsx      # /settings 阈值、预警开关、通知渠道、4 处 HelpDialog
+│   │   ├── settings/page.tsx      # /settings 阈值、预警开关、通知渠道、4 处 HelpDialog；4 张 RoleGate 包裹的权限敏感卡
 │   │   └── batch/[id]/page.tsx    # 批次详情：客户级补仓分摊 + 单客户退出流转
 │   │
 │   ├── components/
@@ -129,11 +165,12 @@ risk-control/
 │   │   │   ├── BatchControlPanel.tsx    # 状态 Tab + 年份/月份 Tab 双筛选
 │   │   │   └── RiskAlertDialog.tsx      # ⭐ 风险批次弹窗（击穿红呼吸 + 预警黄）
 │   │   ├── batch/
-│   │   │   └── BatchDetailContent.tsx   # 客户 Tab 级补仓分摊 / 退出
+│   │   │   ├── BatchDetailContent.tsx   # 客户 Tab 级补仓分摊 / 退出（80% 阈值口径统一 activeSubsetInitialPrincipal）
+│   │   │   └── LedgerRecovery.tsx       # ⭐ 一键抹账 ZIP 备份还原组件
 │   │   ├── clients/ClientTable.tsx
 │   │   ├── quote/
 │   │   │   ├── InlineKLine.tsx          # XMAX 30 日 sparkline mini chart
-│   │   │   └── KLineDialog.tsx          # 144 根 K 线大图弹窗
+│   │   │   └── KLineDialog.tsx          # 144 根 K 线大图弹窗（含 Nasdaq 502 兜底 UI）
 │   │   ├── auth/
 │   │   │   ├── AuthProvider / AuthGuard / RoleGate  # 细粒度权限（RoleGate 支持 auditResource + auditAction 审计）
 │   │   │   └── AppSidebar + TopBar      # 左侧菜单 + 顶部实时 XMAX 报价 Badge
@@ -143,7 +180,8 @@ risk-control/
 │   │       ├── Card / Button / Badge / Tooltip / Dialog / Table / Input / Label / Select / DropdownMenu
 │   │
 │   ├── lib/
-│   │   ├── riskEngine.ts          # 核心风控：drop%、补仓额、PnL 客户/机构拆分、组合 Summary
+│   │   ├── thresholds.ts          # ⭐ 阈值统一配置源（引擎接入 P1-5）
+│   │   ├── riskEngine.ts          # 核心风控：drop%、补仓额、PnL 客户/机构拆分、组合 Summary（读 thresholds.ts）
 │   │   ├── mockData.ts            # 24 批 653 客户 1 标的(XMAX) 4 BD 经理（refreshMockDataPrices tick）
 │   │   ├── liveQuote.ts           # XMAX 实时行情（Nasdaq Unofficial fetchQuoteBrowser）
 │   │   ├── xmax-price-series.ts   # 144 根 XMAX 真实日线（2026-03 ~ 2026-08，抓取脚本 scripts/xmax-history-nasdaq.js）
@@ -152,7 +190,14 @@ risk-control/
 │   │   ├── clientStatusStore.ts   # 客户退出状态（LS + storage 事件）
 │   │   ├── webAlertSettings.ts    # ⭐ 5 字段开关 + ACK 持久化
 │   │   ├── stockFetcher.ts        # Yahoo Finance / Finnhub 适配器（环境变量 Key）
-│   │   ├── auth/                  # mockProvider / supabaseProvider / authContext / useAuth + RBAC dataScope
+│   │   ├── auth/                  # ⭐ 自研安全栈（P0 整改核心）
+│   │   │   ├── session.ts         # HMAC-SHA256 JWT 手搓（Web Crypto，Edge+Node 双兼容）+ buildSetCookieHeader
+│   │   │   ├── password.ts        # SHA-256+salt（Web Crypto，FNV1a 兜底），verifyPassword/generateSalt/hashPassword
+│   │   │   ├── audit.ts           # 13 动作审计环形缓冲（2000 条上限）+ 跨 Tab CustomEvent
+│   │   │   ├── authProvider.tsx   # React AuthContext：setSession 死循环 5 层防御 / refreshingRef / Hydrate 仅 1 次
+│   │   │   ├── useCurrentUser.ts  # Hook
+│   │   │   ├── providers/mockProvider.ts
+│   │   │   └── providers/supabaseProvider.ts
 │   │   ├── authz/dataScope.ts     # filterClientsByRole / filterBatchesByRole / summarizeByScope
 │   │   ├── notifier.ts            # Email + WA + 风控收件人通知
 │   │   ├── prisma.ts
@@ -188,7 +233,7 @@ risk-control/
 | UI 组件 | Radix UI（Dialog / Tabs / Tooltip / Select / Dropdown）+ Shadcn 手写组件 | 最新 |
 | 图表 | Recharts (AreaChart / LineChart / BarChart / ComposedChart) | 2.12.7 |
 | ORM & 数据库 | Prisma + PostgreSQL / Supabase | 5.18 |
-| 鉴权 & RBAC | 自研 AppRole 三档 + Mock/Supabase 双 Provider | — |
+| 鉴权 & RBAC | 自研 AppRole 四档（ADMIN / RISK_MANAGER / OPERATIONS / BD_MANAGER）+ HMAC-SHA256 手搓 JWT + HttpOnly Cookie + Next.js Middleware 路由守卫 | — |
 | Toast | Sonner 2 | — |
 | 图标 | Lucide React 439 | — |
 | 日期 | date-fns 3 | — |
@@ -208,7 +253,7 @@ risk-control/
 
 ## 🚀 5 分钟快速启动 <a id="quick-start"></a>
 
-> 系统 **开箱即用**：默认走 Mock 数据 + Mock 鉴权 Provider，不需要任何真实数据库或 API Key 就能看到完整界面。
+> 系统 **开箱即用**：默认走 localStorage 账本（24 批 / 653 客户）+ 服务端 HttpOnly Cookie 会话鉴权，不需要任何真实数据库或外部 API Key 就能看到完整界面。
 
 ### 1. 克隆 & 安装
 
@@ -232,7 +277,7 @@ cp .env.example .env.local
 #   EMAIL_WEBHOOK_URL + WHATSAPP_WEBHOOK_URL
 ```
 
-> **演示模式无需配置**：未设 `NEXT_PUBLIC_AUTH_PROVIDER=supabase` 时自动走 Mock Provider。
+> **会话密钥**：生产环境请设置 `NEXT_RC_AUTH_SECRET`（32+ 字节高强度随机串），未设置时开发环境将使用内置 fallback。
 
 ### 3. （可选）初始化数据库 + 种子
 
@@ -251,16 +296,31 @@ node node_modules/next/dist/bin/next dev -p 3000
 # 浏览器访问 → http://localhost:3000
 ```
 
-### 5. 演示账号（Mock Provider）
+### 5. 演示账号（HttpOnly Cookie 会话登录）
 
 | 角色 | 邮箱 | 密码 | 说明 |
 |------|------|------|------|
-| Admin 管理员 | admin@institution.com | Admin@2026 | 全量权限 + **唯一可删客户** |
-| Operations 运营 | operations@institution.com | Ops@2026 | 客户资料编辑 / 批次录入 |
-| Risk 风控 | risk@institution.com | Risk@2026 | 补仓 / 通知 / 击穿处理 |
-| BD 经理 × 4 | 见 BD_MANAGERS 常量 | Bd@2026 | 仅看自己客户 + 对应批次 |
+| **ADMIN 系统管理员** | `admin@riskcontrol.io` | `Admin@Risk2026` | 全量权限 + **唯一可删客户 + 唯一可分配 ADMIN 角色** + 系统设置全部可改 |
+| **RISK_MANAGER 风控总监** | `evan.pan@institution.com` | `Evan@Risk2026` | 看所有客户/批次 / 补仓 / 通知 / 击穿处理；不能改阈值、不能增删账号、不能删客户 |
+| **RISK_MANAGER 风控总监（备用 built-in）** | `risk_evan`（或邮箱匹配同账户） | `Evan@Risk2026` | 同上（built-in mock 内置 key） |
+| **OPERATIONS 运营专员** | `operations@institution.com`（built-in key：`op_wangsy`） | `Wangsy@Risk2026` | 客户资料编辑 / 批次录入；不能改阈值 / 不能补仓 / 不能删客户 |
+| **BD_MANAGER 商务经理**（4 位） | `lixiaoming.bd@institution.com`（Li@Client2026）<br>`wangsy.bd@institution.com`（Wang@Client2026）<br>`zhangzhiqiang.bd@institution.com`（Zhang@Client2026）<br>`liujia.bd@institution.com`（Liu@Client2026） | 括号内 | 仅看自己名下客户 + 对应批次；不能操作任何系统设置 / 不能删客户 |
 
-> Mock Provider 默认走 `/login` 登录表单；未设置 `NEXT_PUBLIC_AUTH_PROVIDER=supabase` 时自动启用。
+> **密码口径**：所有内置（built-in）账号密码经 `SHA-256 + 固定 salt`（`mock-builtin-${key}-${id}-s4lt`）校验，见 [password.ts](src/lib/auth/password.ts)；Settings 页由 ADMIN 创建的自定义账号，初始密码为 `{displayName}@{id 最后 4 位}`（SHA-256 + 随机 salt），用户首次于 Settings 设置页自助修改。
+>
+> **会话口径**：`POST /api/auth/login` → 服务端签发 `rc_session_v1` **HttpOnly Cookie**（12h Max-Age / SameSite=Lax / 生产加 Secure），由 [middleware.ts](src/middleware.ts) 在 `/ /clients /batch /settings` 5 条 matcher 上强制守卫；JWT 体用 `HMAC-SHA256 (Web Crypto 手搓，Edge Runtime + Node.js 双兼容)` 自校验，payload 必含 `sub/email/role/displayName/iat/exp/iss=rc-internal`，恒时 XOR diff 防时序。
+>
+> **清空前账本**：客户台账清空会自动打 ZIP 备份并弹出下载；备份可于 [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) 恢复入口导入还原。
+
+### 5.1 首次登录引导（最快进入工作台 30 秒）
+
+```bash
+npm install
+npm run dev -p 3000
+# 浏览器 http://localhost:3000/login
+# 账号：admin@riskcontrol.io  密码：Admin@Risk2026
+# → 看到欢迎动画 → 自动跳转 → 右上角「系统管理员 (Administrator) ADMIN」
+```
 
 ### 6. 生产构建 & 启动
 
@@ -283,13 +343,14 @@ enum AppRole {
 }
 ```
 
-### 权限守卫（三层）
+### 权限守卫（四层）
 
 | 守卫层 | 组件 / 函数 | 作用 |
 |--------|------|------|
-| 路由守卫 | `<AuthGuard requiredRole={ADMIN}>` | 包裹页面 Layout，未登录跳转登录，无权限 403 |
-| UI 守卫 | `<RoleGate allowed={[ADMIN, RISK_MANAGER]} auditResource="..." auditAction="ui_component_denied">` | 包裹按钮/卡片，**支持细粒度审计（auditResource + auditAction）**，无权限时不渲染或置灰 |
-| 数据层过滤 | `filterClientsByRole / filterBatchesByRole / summarizeByScope / filterAuditLogsByScope` | 从**数据源头**隔离，避免越权 |
+| 服务端路由中间件 | `src/middleware.ts` matcher=['/','/clients/*','/batch/*','/settings*'] + `verifySessionJwt` | **强制入口守卫**：无有效 HttpOnly Cookie 签名 → 302 `/login?next=`；/settings 仅机构四角色可进入；清退无效 Cookie |
+| API 层授权 | `/api/auth/*`（会话）+ `/api/data/*`（数据过滤）+ 各业务 Route Handler 内部 session 校验 | **数据强隔离**：`filterClientsByRole / filterBatchDetailClientsByRole` 在服务端内部执行，避免 BD 直接从 Network 读全量 |
+| UI 守卫 | `<RoleGate allowed={[ADMIN, RISK_MANAGER]} auditResource="..." auditAction="ui_component_denied">` | 包裹按钮/卡片，**支持细粒度审计（auditResource + auditAction）**，无权限时不渲染或置灰；Settings 新增账号 / 阈值卡 / ADMIN 角色选框均受 RoleGate 保护 |
+| 客户端数据层过滤 | `dataScope.ts` 内 `filterClientsByRole / filterBatchDetailClientsByRole / filterBdStatsByRole`（API 不可用时前端兜底） | 从**浏览器渲染源头**二次隔离，双保险避免越权 |
 
 > **客户删除仅 ADMIN**：`src/app/clients/page.tsx` 删除按钮 `<RoleGate allowed=[ADMIN]>` 包裹；原 `canEdit(c)`（OPS / RISK / BD 本人均可删）已废弃。
 

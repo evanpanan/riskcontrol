@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -529,9 +530,19 @@ export default function MarginCallsPage() {
           }
           const b: any = batches.find((x: any) => x.id === fulfillTarget.batchId);
           if (b) {
-            const applied = commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, {
-              amount: topupAmount, expectedRoundId: fulfillTarget.mcId,
-            }));
+            let applied: number;
+            try {
+              applied = commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, {
+                amount: topupAmount, expectedRoundId: fulfillTarget.mcId,
+              }));
+            } catch (err) {
+              if (err instanceof Error && err.name === "RevisionMismatchError") {
+                toast.error(err.message);
+              } else {
+                toast.error(err instanceof Error ? err.message : "补仓失败");
+              }
+              return;
+            }
             if (applied <= 0) throw new Error("补仓轮次已更新，请刷新后重新确认。");
             window.dispatchEvent(
               new CustomEvent("risk-control:margin-fulfilled", {

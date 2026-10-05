@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
@@ -148,7 +149,11 @@ export function AddClientDialog({
       try {
         commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
       } catch (err) {
-        setErrors({ investmentAmount: err instanceof Error ? err.message : "新增客户失败" });
+        if (err instanceof Error && err.name === "RevisionMismatchError") {
+          toast.error(err.message);
+        } else {
+          setErrors({ investmentAmount: err instanceof Error ? err.message : "新增客户失败" });
+        }
         return;
       }
     }

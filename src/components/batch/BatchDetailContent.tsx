@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { notifyBatchChannel } from "@/lib/notifier";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime, formatPercent } from "@/lib/utils";
-import { Batch, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
+import { Batch, BatchStatus, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/auth/RoleGate";
@@ -177,20 +177,48 @@ const PnlCompactRow = memo(function PnlCompactRow({
   );
 });
 
-export type BatchLikeForDetail = Batch & {
-  clients?: Client[];
-  marginCalls?: {
+export interface BatchLikeForDetail {
+  id: string;
+  batchNumber?: string;
+  stockSymbol?: string;
+  stockName?: string | null;
+  initialTotalAmount: number;
+  priorityAmount: number;
+  subordinateAmount: number;
+  stockPriceAtStart: number;
+  totalShares: number;
+  signDate: Date | string;
+  maturityDate: Date | string;
+  status?: BatchStatus | keyof typeof BatchStatus | string;
+  riskLevel?: RiskLevel | string;
+  currentStockPrice?: number | null;
+  currentDayChange?: number | null;
+  currentMarketValue?: number | null;
+  currentPrice?: number;
+  totalPnL?: number | null;
+  totalPnLPercent?: number | null;
+  cumulativeMarginCalls: number;
+  nextTradingWindow?: Date | string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+  clients?: Array<Client | any>;
+  marginCalls?: Array<{
     id: string;
     requiredAmount: number;
     fulfilledAmount?: number;
     triggerMarketValue: number;
     dropPercent: number;
-    triggerDate: Date;
-    fulfilledDate?: Date;
-    status: MarginCallStatus;
+    triggerDate: Date | string;
+    fulfilledDate?: Date | string;
+    status: MarginCallStatus | string;
     note?: string;
-  }[];
-};
+    [k: string]: any;
+  }>;
+  activeSubsetInitialPrincipal?: number;
+  remainingCapital?: number;
+  finance?: any;
+  [k: string]: any;
+}
 
 export type EnrichedDetailClient = Client &
   ReturnType<typeof calculateRealtimeClientMetrics> & {
@@ -240,6 +268,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
   const marginSummary = summarizeBatchMarginFromClients(batch as any);
   const metrics = { ...getBatchMetrics(batch as any), requiredMarginCall: marginSummary.totalPending };
+  const baseCapital = (batch as any).finance?.remainingCapital ?? batch.initialTotalAmount ?? 0;
   const lockedBatchRequiredMargin = getLockedBatchRequiredMargin(batch as any);
   const split = calculateBatchPnLSplit(batch as any, mv);
   const rescueStats = calculateRescueStats(batch as any, batch.currentStockPrice ?? batch.stockPriceAtStart);
@@ -293,14 +322,44 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     avatarInitials: 'FR',
   }) as AppSessionUser;
 
-  const filteredBase: (Client | RedactedClientPlaceholder)[] = useMemo(() => {
-    const base: Client[] = hydrated
+  const baseClientsForFilter: Client[] = useMemo(() => {
+    return hydrated
       ? (batch.clients || []).map((c) => (c as any).__redacted ? c : mergeClientStatusOnClient(c as any)) as Client[]
       : (batch.clients || []) as Client[];
-    // BD 视角：bdFilter 仅"ALL"和"我自己"生效（因为其他商务经理 客户端根本不可见）
-    const { mergedRows } = filterBatchDetailClientsByRole(base, scopeUser);
-    return mergedRows as (Client | RedactedClientPlaceholder)[];
-  }, [batch, scopeUser, hydrated, tick]);
+  }, [batch, hydrated, tick]);
+
+  const { mergedRows: fallbackMerged } = useMemo(
+    () => filterBatchDetailClientsByRole(baseClientsForFilter, scopeUser),
+    [baseClientsForFilter, scopeUser]
+  );
+  const [apiMergedRows, setApiMergedRows] = useState<(Client | RedactedClientPlaceholder)[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/data/batch/detail-filter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          credentials: 'include',
+          cache: 'no-store',
+          body: JSON.stringify({ clients: baseClientsForFilter }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as { mergedRows?: (Client | RedactedClientPlaceholder)[] };
+        if (cancelled) return;
+        if (Array.isArray(json?.mergedRows)) {
+          setApiMergedRows(json.mergedRows);
+        } else {
+          setApiMergedRows(null);
+        }
+      } catch {
+        if (!cancelled) setApiMergedRows(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [baseClientsForFilter, user]);
+  // BD 视角：bdFilter 仅"ALL"和"我自己"生效（因为其他商务经理 客户端根本不可见）
+  const filteredBase: (Client | RedactedClientPlaceholder)[] = (apiMergedRows ?? fallbackMerged) as (Client | RedactedClientPlaceholder)[];
 
   const filteredClients: EnrichedDetailClient[] = useMemo(() => {
     let list = filteredBase as any[];
@@ -413,7 +472,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const doFulfill = () => {
     const canonical = getMockData().batches.find((b) => b.id === batch.id);
     if (!canonical) throw new Error("批次不存在，请刷新。");
-    const applied = commitBatchFinance(canonical, (draft) => executeInstitutionTopup(draft, {
+    const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
       amount: marginSummary.totalPending, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
     }));
@@ -493,7 +552,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
             <p className="text-sm text-muted-foreground">
               批次号：<span className="font-mono ml-1 mr-4">{batch.batchNumber}</span>
-              创建时间：<span className="font-mono ml-1">{formatDateTime(batch.createdAt)}</span>
+              创建时间：<span className="font-mono ml-1">{formatDateTime(batch.createdAt ?? batch.signDate)}</span>
             </p>
           </div>
 
@@ -911,15 +970,21 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
-          <div className="grid gap-3 grid-cols-1 md:grid-cols-3 pt-4 border-t border-border/40">
+          <div className="grid gap-3 grid-cols-2 md:grid-cols-4 pt-4 border-t border-border/40">
             <div className="rounded-lg bg-secondary/50 p-3">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">初始市值</p>
-              <p className="text-sm font-mono font-semibold">{formatCurrency(metrics.activeSubsetInitialPrincipal ?? batch.initialTotalAmount)}</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">初始总投资</p>
+              <p className="text-sm font-mono font-semibold">{formatCurrency(baseCapital)}</p>
             </div>
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">80% 预警阈值</p>
               <p className="text-sm font-mono font-semibold text-warning">
-                {formatCurrency((metrics.activeSubsetInitialPrincipal ?? batch.initialTotalAmount) * 0.8)}
+                {formatCurrency(baseCapital * 0.8)}
+              </p>
+            </div>
+            <div className="rounded-lg bg-secondary/50 p-3">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">含补仓在管规模</p>
+              <p className="text-sm font-mono font-semibold">
+                {formatCurrency(metrics.activeSubsetInitialPrincipal ?? baseCapital)}
               </p>
             </div>
             <div
@@ -1497,7 +1562,16 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         onConfirm={() => {
           const canonical = getMockData().batches.find((b) => b.id === batch.id);
           if (!canonical || !settleTarget) throw new Error("客户不存在，请刷新。");
-          commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
+          try {
+            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
+          } catch (err) {
+            if (err instanceof Error && err.name === "RevisionMismatchError") {
+              toast.error(err.message);
+            } else {
+              toast.error(err instanceof Error ? err.message : "结算失败");
+            }
+            return;
+          }
           window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
           setTick((t) => t + 1);
           onChange?.();

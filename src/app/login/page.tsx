@@ -26,10 +26,17 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
-import { MOCK_USER_META, APP_ROLES, type MockUserKey } from "@/types/auth";
+import { useAuthContext } from "@/lib/auth/authProvider";
+import { MOCK_USER_META, APP_ROLES, MOCK_DEMO_CREDENTIALS, type MockUserKey } from "@/types/auth";
 import { type AppSessionUser } from "@/types/auth";
 import { getCustomMockUsers } from "@/lib/auth/providers/mockProvider";
+import {
+  getBuiltInMockAccountByEmail,
+  getCustomMockAccountByEmail,
+  verifyPassword,
+} from "@/lib/auth/password";
 import { cn } from "@/lib/utils";
+import { logAudit } from "@/lib/auth/audit";
 
 const PASSWORD_MIN_LENGTH = 6;
 
@@ -47,6 +54,7 @@ function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, switchToMockRole, loginAsCustom } = useCurrentUser();
+  const { serverLogin } = useAuthContext();
 
   const [hydrated, setHydrated] = useState(false);
   const [email, setEmail] = useState("");
@@ -56,6 +64,12 @@ function LoginPageInner() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
+  const [welcomeState, setWelcomeState] = useState<{
+    visible: boolean;
+    displayName: string;
+    role: AppSessionUser["role"];
+    email: string;
+  } | null>(null);
 
   const [customAccounts] = useState<Array<{
     id: string; email: string; role: any; displayName: string;
@@ -89,19 +103,18 @@ function LoginPageInner() {
     }
   }, [user, router, nextPath]);
 
-  const resolveSessionByCredentials = (
+  const resolveSessionByCredentials = async (
     incomingEmail: string,
     _incomingPwd: string
-  ): { kind: "builtIn" | "custom" | "temp"; session: AppSessionUser } | null => {
+  ): Promise<{ kind: "builtIn" | "custom"; session: AppSessionUser } | null> => {
     const e = incomingEmail.trim();
 
-    // 1. 匹配内置演示账号（邮箱存在即可；密码演示模式放行，生产会走 Supabase）
-    const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, any]>).find(
+    const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
       ([, m]) => m.email === e
     );
     if (builtIn) {
-      const [key, m] = builtIn;
-      const sess = {
+      const [, m] = builtIn;
+      const sess: AppSessionUser = {
         id: m.id,
         email: m.email,
         role: m.role,
@@ -110,17 +123,12 @@ function LoginPageInner() {
         avatarDataUrl: m.avatarDataUrl,
         bdManagerFullName: m.bdManagerFullName,
       };
-      // ADMIN：密码必须严格匹配（商用级强校验）
-      if (sess.role === APP_ROLES.ADMIN) {
-        const expected = MOCK_USER_META.admin_root.defaultPassword;
-        if (expected && _incomingPwd !== expected) return null;
-      }
-      // BD/RISK/OPS：邮箱匹配即视为有效身份（演示模式；生产通过后端鉴权）
-      void key;
+      const rec = await getBuiltInMockAccountByEmail(e);
+      if (!rec || !rec.enabled) return null;
+      if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
       return { kind: "builtIn", session: sess };
     }
 
-    // 2. 匹配自定义账号（localStorage risk_control_users_v1）
     try {
       const custom = Object.values(getCustomMockUsers()).find(
         (a: any) => a.email === e
@@ -135,25 +143,13 @@ function LoginPageInner() {
           avatarDataUrl: custom.avatarDataUrl,
           bdManagerFullName: custom.bdManagerFullName,
         };
+        const rec = await getCustomMockAccountByEmail(e);
+        if (!rec || !rec.enabled) return null;
+        if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
         return { kind: "custom", session: sess };
       }
     } catch {
       /* ignore */
-    }
-
-    // 3. 商用级兜底：拒绝匿名进入 — 只允许机构邮箱域名白名单
-    const allowedDomains = ["institution.com", "riskcontrol.io", "fund.cn"];
-    const domain = e.split("@")[1]?.toLowerCase();
-    if (domain && allowedDomains.includes(domain)) {
-      const display = e.split("@")[0] || "Guest";
-      const tmp: AppSessionUser = {
-        id: `guest_${Date.now()}`,
-        email: e,
-        role: APP_ROLES.OPERATIONS,
-        displayName: `${display}（运营 · 访客）`,
-        avatarInitials: display.slice(0, 2).toUpperCase(),
-      };
-      return { kind: "temp", session: tmp };
     }
 
     return null;
@@ -169,11 +165,17 @@ function LoginPageInner() {
     if (Object.keys(nextErrors).length > 0) return;
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const resolved = resolveSessionByCredentials(email, password);
+    setTimeout(async () => {
+      const resolved = await resolveSessionByCredentials(email, password);
       if (!resolved) {
         setErrors({ password: "账号或密码不正确，请重试" });
         setIsSubmitting(false);
+        logAudit({
+          action: "login_failed",
+          actorEmail: email,
+          resource: "auth:login",
+          detail: { reason: "invalid_credentials", email: email },
+        });
         toast.error("登录失败：账号或密码不正确", {
           description: "如忘记密码，请联系系统管理员重置。",
         });
@@ -181,37 +183,26 @@ function LoginPageInner() {
       }
 
       const { session, kind } = resolved;
+      const onSuccessAudit = () => {
+        logAudit({
+          action: "login_success",
+          actorId: session.id,
+          actorEmail: session.email,
+          role: session.role,
+          resource: "auth:login",
+          detail: { kind, role: session.role, displayName: session.displayName },
+        });
+      };
 
-      if (kind === "builtIn") {
-        // 内置账号走 switchToMockRole 走统一流程
-        const key = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, any]>).find(
-          ([, m]) => m.email === session.email
-        )?.[0];
-        const done = () => {
-          toast.success(`欢迎回来，${session.displayName}`);
-          if (remember) {
-            try {
-              window.localStorage.setItem("risk_control_remember_email", session.email);
-              window.localStorage.setItem(
-                "risk_control_last_login_at",
-                new Date().toISOString().slice(0, 16).replace("T", " ")
-              );
-            } catch { /* ignore */ }
-          } else {
-            try { window.localStorage.removeItem("risk_control_remember_email"); } catch { /* ignore */ }
-          }
-          const dest = nextPath ? decodeURIComponent(nextPath) : "/";
-          setTimeout(() => router.push(dest), 40);
-        };
-        if (key) switchToMockRole(key).then(done).finally(() => setIsSubmitting(false));
-        else {
-          loginAsCustom(session);
-          done();
-          setIsSubmitting(false);
-        }
-      } else {
-        loginAsCustom(session);
-        toast.success(kind === "temp" ? "访客登录成功 · 仅运营权限" : `登录成功 · ${session.displayName}`);
+      const finishLogin = async () => {
+        onSuccessAudit();
+        setWelcomeState({
+          visible: true,
+          displayName: session.displayName,
+          role: session.role,
+          email: session.email,
+        });
+        const ok = await serverLogin(session);
         if (remember) {
           try {
             window.localStorage.setItem("risk_control_remember_email", session.email);
@@ -220,10 +211,38 @@ function LoginPageInner() {
               new Date().toISOString().slice(0, 16).replace("T", " ")
             );
           } catch { /* ignore */ }
+        } else {
+          try { window.localStorage.removeItem("risk_control_remember_email"); } catch { /* ignore */ }
         }
         const dest = nextPath ? decodeURIComponent(nextPath) : "/";
-        setTimeout(() => router.push(dest), 40);
-        setIsSubmitting(false);
+        const abs = `${window.location.protocol}//${window.location.host}${dest}`;
+        const roleLabel: Record<AppSessionUser["role"], string> = {
+          ADMIN: "系统管理员",
+          RISK_MANAGER: "风控总监",
+          BD_MANAGER: "商务经理",
+          OPERATIONS: "运营专员",
+        };
+        void roleLabel;
+        setTimeout(() => {
+          toast.success(`欢迎回来，${session.displayName}`);
+        }, 80);
+        setTimeout(() => {
+          try { window.location.replace(abs); } catch { window.location.href = abs; }
+        }, 780);
+        return ok;
+      };
+
+      if (kind === "builtIn") {
+        const key = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
+          ([, m]) => m.email === session.email
+        )?.[0];
+        if (key) {
+          void finishLogin().finally(() => setIsSubmitting(false));
+        } else {
+          void finishLogin().finally(() => setIsSubmitting(false));
+        }
+      } else {
+        void finishLogin().finally(() => setIsSubmitting(false));
       }
     }, 320);
   };
@@ -249,6 +268,15 @@ function LoginPageInner() {
         />
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.06),transparent_55%)]" />
       </div>
+
+      {/* 欢迎登录过渡遮罩 */}
+      {welcomeState?.visible && (
+        <WelcomeTransitionOverlay
+          displayName={welcomeState.displayName}
+          role={welcomeState.role}
+          email={welcomeState.email}
+        />
+      )}
 
       <div className="relative flex min-h-screen flex-col">
         {/* 顶部品牌栏 */}
@@ -478,6 +506,204 @@ function LoginPageInner() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+const ROLE_LABELS: Record<AppSessionUser["role"], string> = {
+  ADMIN: "系统管理员",
+  RISK_MANAGER: "风控总监",
+  BD_MANAGER: "商务经理",
+  OPERATIONS: "运营专员",
+};
+
+const ROLE_BADGE_CLASS: Record<AppSessionUser["role"], string> = {
+  ADMIN: "bg-danger/15 text-danger border-danger/30",
+  RISK_MANAGER: "bg-primary/15 text-primary border-primary/30",
+  BD_MANAGER: "bg-success/15 text-success border-success/30",
+  OPERATIONS: "bg-warning/15 text-warning border-warning/30",
+};
+
+function WelcomeTransitionOverlay(props: {
+  displayName: string;
+  role: AppSessionUser["role"];
+  email: string;
+}) {
+  const { displayName, role, email } = props;
+  const initials = (displayName || "??").slice(0, 2).toUpperCase();
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ animation: "rc-fade-in 180ms ease-out both" }}
+    >
+      {/* 背景模糊 + 遮罩 */}
+      <div
+        className="absolute inset-0 backdrop-blur-xl bg-background/80"
+        style={{
+          backgroundImage:
+            "radial-gradient(ellipse at 30% 20%, rgba(59,130,246,0.25), transparent 55%), radial-gradient(ellipse at 80% 80%, rgba(129,140,248,0.22), transparent 55%)",
+        }}
+      />
+      {/* 光晕脉冲 */}
+      <div
+        aria-hidden
+        className="absolute left-1/2 top-1/2 h-[420px] w-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/25 blur-[120px]"
+        style={{ animation: "rc-pulse-soft 1.4s ease-in-out infinite" }}
+      />
+
+      {/* 主内容卡 */}
+      <div
+        className="relative z-10 w-[min(92vw,420px)]"
+        style={{ animation: "rc-pop-in 420ms cubic-bezier(.22,1.3,.36,1) both" }}
+      >
+        <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/85 backdrop-blur-2xl shadow-[0_30px_80px_-20px_rgba(30,64,175,0.45)]">
+          {/* 顶条高光 */}
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-transparent via-primary to-transparent" />
+
+          <div className="flex flex-col items-center px-8 pt-10 pb-9">
+            {/* Logo 旋转光晕 */}
+            <div className="relative mb-6">
+              <div
+                aria-hidden
+                className="absolute inset-[-10px] rounded-full bg-primary/20 blur-xl"
+                style={{ animation: "rc-pulse-soft 1.6s ease-in-out infinite" }}
+              />
+              <div
+                className="relative h-20 w-20 rounded-2xl bg-gradient-to-br from-primary to-indigo-500 text-white flex items-center justify-center shadow-lg shadow-primary/30"
+                style={{ animation: "rc-spin-slow 1.2s linear infinite" }}
+              >
+                <div className="flex h-16 w-16 rounded-xl bg-background/15 backdrop-blur-sm items-center justify-center">
+                  <Logo size={40} className="!shadow-none !bg-white/10 !ring-white/25" />
+                </div>
+              </div>
+            </div>
+
+            {/* 欢迎文案 */}
+            <div
+              className="text-xs uppercase tracking-[0.2em] font-semibold text-primary mb-2"
+              style={{ animation: "rc-slide-up 360ms ease 120ms both" }}
+            >
+              Authentication · Verified
+            </div>
+            <h1
+              className="text-3xl font-extrabold tracking-tight mb-1 text-center"
+              style={{ animation: "rc-slide-up 420ms ease 200ms both" }}
+            >
+              欢迎登录
+              <span className="ml-2 text-gradient-primary">RiskControl</span>
+            </h1>
+            <p
+              className="text-sm text-muted-foreground/85 mb-6 text-center"
+              style={{ animation: "rc-slide-up 420ms ease 280ms both" }}
+            >
+              正在为您初始化工作台与全局风控视图
+            </p>
+
+            {/* 用户身份卡 */}
+            <div
+              className="w-full rounded-2xl border border-border/60 bg-background/60 p-4 flex items-center gap-4"
+              style={{ animation: "rc-slide-up 500ms ease 360ms both" }}
+            >
+              <div className="relative shrink-0">
+                <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary/90 to-indigo-500/90 text-white flex items-center justify-center text-sm font-bold shadow-md shadow-primary/25">
+                  {initials}
+                </div>
+                <div
+                  aria-hidden
+                  className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full bg-success border-2 border-background"
+                  style={{ animation: "rc-pulse-soft 1.8s ease-in-out infinite" }}
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <p className="text-[15px] font-bold truncate">{displayName}</p>
+                  <span
+                    className={cn(
+                      "inline-flex items-center h-5 px-2 rounded-full border text-[10px] font-semibold tracking-wide",
+                      ROLE_BADGE_CLASS[role]
+                    )}
+                  >
+                    {ROLE_LABELS[role]}
+                  </span>
+                </div>
+                <p className="text-[11.5px] font-mono text-muted-foreground/80 truncate">
+                  {email}
+                </p>
+              </div>
+            </div>
+
+            {/* 进度条 */}
+            <div
+              className="w-full mt-6"
+              style={{ animation: "rc-slide-up 520ms ease 460ms both" }}
+            >
+              <div className="h-1.5 w-full rounded-full bg-muted/70 overflow-hidden">
+                <div
+                  className="h-full w-1/2 rounded-full bg-gradient-to-r from-primary via-indigo-500 to-primary bg-[length:200%_100%]"
+                  style={{
+                    animation:
+                      "rc-progress-fill 720ms ease forwards, rc-progress-shimmer 1.1s linear 260ms infinite",
+                  }}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[10.5px] text-muted-foreground/85 font-mono">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-success"
+                    style={{ animation: "rc-blink 1s ease-in-out infinite" }}
+                  />
+                  会话密钥签发
+                </span>
+                <span>正在跳转工作台…</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 底部品牌条 */}
+          <div className="border-t border-border/50 px-8 py-3 flex items-center justify-between bg-gradient-to-r from-primary/[0.04] via-transparent to-indigo-500/[0.04]">
+            <span className="text-[10px] font-mono text-muted-foreground/80">
+              RiskControl v2.0 Professional
+            </span>
+            <span className="text-[10px] font-mono text-muted-foreground/80">
+              Build 2026.Q3 · Secure
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 内联 keyframes（避免 tailwind 动画类名未注册） */}
+      <style jsx global>{`
+        @keyframes rc-fade-in { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes rc-pop-in {
+          0% { opacity: 0; transform: translateY(14px) scale(.96) }
+          60% { opacity: 1 }
+          100% { opacity: 1; transform: translateY(0) scale(1) }
+        }
+        @keyframes rc-slide-up {
+          from { opacity: 0; transform: translateY(8px) }
+          to { opacity: 1; transform: translateY(0) }
+        }
+        @keyframes rc-pulse-soft {
+          0%, 100% { opacity: .65; transform: scale(1) }
+          50% { opacity: 1; transform: scale(1.08) }
+        }
+        @keyframes rc-spin-slow {
+          0% { transform: rotate(0deg) }
+          100% { transform: rotate(360deg) }
+        }
+        @keyframes rc-progress-fill {
+          from { width: 14% }
+          to { width: 92% }
+        }
+        @keyframes rc-progress-shimmer {
+          0% { background-position: 0% 50% }
+          100% { background-position: 200% 50% }
+        }
+        @keyframes rc-blink {
+          0%, 100% { opacity: .4 }
+          50% { opacity: 1 }
+        }
+      `}</style>
     </div>
   );
 }

@@ -31,9 +31,11 @@ enum MarginCallStatus {
   PENDING
   FULLFILLED
   EXPIRED
+  CANCELLED
 }
 
 enum AppRole {
+  ADMIN
   RISK_MANAGER
   BD_MANAGER
   OPERATIONS
@@ -160,4 +162,19 @@ model StockHistory {
 
   @@index([usageCount])
   @@index([lastUsed])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorEmail String?
+  role       String?
+  action     String
+  resource   String?
+  detail     Json?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([action])
 }

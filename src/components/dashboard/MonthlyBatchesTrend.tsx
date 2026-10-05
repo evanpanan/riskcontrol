@@ -140,11 +140,14 @@ export function MonthlyBatchesTrend({ batches, isAnimationActive = false }: { ba
                   boxShadow: "0 10px 40px -10px hsl(0 0% 0% / 0.6)",
                 }}
                 labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: 4 }}
-                labelKey="fullLabel"
-                formatter={(v: number, name: string) => {
+                labelFormatter={(label: any, payload: any[]) => {
+                  const item = payload?.[0]?.payload;
+                  return item?.fullLabel || item?.label || String(label ?? "");
+                }}
+                formatter={(v: any, name: any) => {
                   if (name === "count") return [`+${v} 批`, "当月新增批次"];
                   if (name === "runningTotal") return [`${v} 批`, "累计在管批次"];
-                  return [v, name];
+                  return [v, String(name ?? "")];
                 }}
               />
               <Legend

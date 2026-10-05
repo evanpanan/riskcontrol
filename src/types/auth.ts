@@ -44,10 +44,59 @@ export type MockUserKey =
   | 'bd_zhangzhiq'
   | 'bd_liujia';
 
-export const MOCK_DEFAULT_ADMIN_CREDENTIALS = {
-  email: 'admin@riskcontrol.io',
-  password: 'Admin@Risk2026',
-};
+export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
+  key: MockUserKey; email: string; displayName: string; role: AppRole;
+  defaultPassword: string; purpose: string;
+}> = [
+  {
+    key: 'admin_root',
+    email: 'admin@riskcontrol.io',
+    displayName: '系统管理员 (Administrator)',
+    role: APP_ROLES.ADMIN,
+    defaultPassword: 'Admin@Risk2026',
+    purpose: '系统管理员：客户删除 / 账号管理 / 阈值编辑 / 审计查看',
+  },
+  {
+    key: 'risk_evan',
+    email: 'evan.pan@institution.com',
+    displayName: 'Evan Pan (风控总监)',
+    role: APP_ROLES.RISK_MANAGER,
+    defaultPassword: 'Evan@Risk2026',
+    purpose: '风控总监：补仓执行 / 客户结算 / 机构通知 / 阈值查看',
+  },
+  {
+    key: 'bd_lixiaoming',
+    email: 'evan.li@institution.com',
+    displayName: '李晓明 (Evan Li)',
+    role: APP_ROLES.BD_MANAGER,
+    defaultPassword: 'Li@Client2026',
+    purpose: '商务经理：仅可见自有客户与对应批次',
+  },
+  {
+    key: 'bd_wangsy',
+    email: 'sylvia.wang@institution.com',
+    displayName: '王思远 (Sylvia Wang)',
+    role: APP_ROLES.BD_MANAGER,
+    defaultPassword: 'Wang@Client2026',
+    purpose: '商务经理：仅可见自有客户与对应批次',
+  },
+  {
+    key: 'bd_zhangzhiq',
+    email: 'jack.zhang@institution.com',
+    displayName: '张志强 (Jack Zhang)',
+    role: APP_ROLES.BD_MANAGER,
+    defaultPassword: 'Zhang@Client2026',
+    purpose: '商务经理：仅可见自有客户与对应批次',
+  },
+  {
+    key: 'bd_liujia',
+    email: 'jennifer.liu@institution.com',
+    displayName: '刘佳 (Jennifer Liu)',
+    role: APP_ROLES.BD_MANAGER,
+    defaultPassword: 'Liu@Client2026',
+    purpose: '商务经理：仅可见自有客户与对应批次',
+  },
+];
 
 export const MOCK_USER_META: Record<
   MockUserKey,
@@ -60,17 +109,15 @@ export const MOCK_USER_META: Record<
     avatarDataUrl?: string;
     bdManagerFullName?: string;
     menuLabel: string;
-    defaultPassword?: string;
   }
 > = {
   admin_root: {
     id: 'user_admin_root_demo_00',
-    email: MOCK_DEFAULT_ADMIN_CREDENTIALS.email,
+    email: MOCK_DEMO_CREDENTIALS.find((x) => x.key === 'admin_root')!.email,
     role: APP_ROLES.ADMIN,
-    displayName: '系统管理员 (Administrator)',
+    displayName: MOCK_DEMO_CREDENTIALS.find((x) => x.key === 'admin_root')!.displayName,
     avatarInitials: 'AD',
     menuLabel: '系统管理员 · Admin',
-    defaultPassword: MOCK_DEFAULT_ADMIN_CREDENTIALS.password,
   },
   risk_evan: {
     id: 'user_risk_evan_pan_demo_01',

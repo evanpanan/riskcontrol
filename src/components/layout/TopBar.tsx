@@ -600,10 +600,10 @@ function NotificationDialogContent({
                       <div className="flex items-center justify-between mt-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge variant="secondary" className="text-[9px] h-4">
-                            Email {log.payload.recipients.emails.length === 0 ? "未请求" : log.result.channels?.email?.success ? "已受理" : "失败/部分失败"}
+                            Email {log.payload.recipients.emails.length === 0 ? "未请求" : log.result?.channels?.email?.success ? "已受理" : "失败/部分失败"}
                           </Badge>
                           <Badge variant="secondary" className="text-[9px] h-4">
-                            WhatsApp {log.payload.recipients.whatsapps.length === 0 ? "未请求" : log.result.channels?.whatsapp?.success ? "已受理" : "失败/部分失败"}
+                            WhatsApp {log.payload.recipients.whatsapps.length === 0 ? "未请求" : log.result?.channels?.whatsapp?.success ? "已受理" : "失败/部分失败"}
                           </Badge>
                         </div>
                         <span className="text-[10px] font-mono text-muted-foreground">

@@ -48,3 +48,7 @@ next-env.d.ts
 .git_commit_msg.txt
 .git_commit_msg
 .tmp_*
+
+# IDE work spec (local scratch planning, internal only)
+/.trae/specs/
+/.trae/

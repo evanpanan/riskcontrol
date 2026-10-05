@@ -106,7 +106,8 @@ export function InlineKLine({
         setCandles(data.candles.sort((a, b) => a.time - b.time));
       } catch (e: any) {
         if (cancelled) return;
-        setError(e?.message || String(e || "加载失败"));
+        const raw = e?.message || String(e || "加载失败");
+        setError(/HTTP 502|行情获取失败|UPSTREAM_FATAL|所有行情源均失败/i.test(raw) ? "行情获取失败，请稍后重试。" : raw);
         setCandles(null);
       } finally {
         if (!cancelled) setLoading(false);

@@ -642,7 +642,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
           }
           const canonical = getMockData().batches.find((b) => b.id === batch.id);
           if (!canonical) throw new Error("批次不存在，请刷新。");
-          const applied = commitBatchFinance(canonical, (draft) => executeInstitutionTopup(draft, {
+          const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
             amount: req, expectedRoundId: marginAgg.roundId,
             operatorName: viewerUser?.displayName ?? viewerUser?.email,
           }));

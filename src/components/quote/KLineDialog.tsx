@@ -159,7 +159,8 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
             await new Promise((r) => setTimeout(r, 600));
             continue;
           }
-          setError(e?.message || String(e || "加载失败"));
+          const raw = e?.message || String(e || "加载失败");
+          setError(/HTTP 502|行情获取失败|UPSTREAM_FATAL|所有行情源均失败/i.test(raw) ? "行情获取失败，请稍后重试或检查网络。" : raw);
           setCandles(null);
         }
       }

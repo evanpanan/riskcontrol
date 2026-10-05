@@ -35,6 +35,24 @@ export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
   }
 }
 
+export function getRuntimeThresholds(): { marginDropPercent?: number; warningDropPercent?: number } {
+  const empty = { marginDropPercent: undefined, warningDropPercent: undefined };
+  if (typeof window === "undefined") return empty;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_LS_KEY);
+    if (!raw) return empty;
+    const p = JSON.parse(raw) as any;
+    const warningDropPercent = typeof p?.warningThreshold === "number" && Number.isFinite(p.warningThreshold) && p.warningThreshold > 0 && p.warningThreshold < 100 ? p.warningThreshold : undefined;
+    let marginDropPercent = typeof p?.marginThreshold === "number" && Number.isFinite(p.marginThreshold) && p.marginThreshold > 0 && p.marginThreshold <= 100 ? p.marginThreshold : undefined;
+    if (typeof marginDropPercent === "number" && typeof warningDropPercent === "number" && marginDropPercent <= warningDropPercent) {
+      marginDropPercent = Math.min(100, warningDropPercent + 0.01);
+    }
+    return { warningDropPercent, marginDropPercent };
+  } catch {
+    return empty;
+  }
+}
+
 export interface NotificationPayload {
   type: "MARGIN_CALL" | "SETTLEMENT" | "WARNING" | "INFO" | "CLIENT_ADDED";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -62,6 +80,15 @@ export interface NotificationResult {
     internal: { success: boolean; error?: string };
   };
   logError?: string;
+}
+
+export interface NotificationLogEntry {
+  id: string;
+  payload: NotificationPayload;
+  result?: NotificationResult;
+  status?: "success" | "failed" | "queued" | "partial";
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export const LAST_NOTIFICATIONS_KEY_LEGACY = "risk_control_xmax_notifications_v1";
@@ -108,7 +135,8 @@ export function getNotificationLogs(): NotificationLogEntry[] {
 export function buildMarginCallNotification(
   batch: Batch,
   marginCall: MarginCall,
-  bdManagers?: string[]
+  bdManagers?: string[],
+  opts?: { marginDropPercent?: number; warningDropPercent?: number }
 ): NotificationPayload {
   const roles: ("RISK_MANAGER" | "BD_MANAGER" | "OPERATIONS")[] = [
     "RISK_MANAGER",
@@ -130,13 +158,17 @@ export function buildMarginCallNotification(
         .map((r) => r.whatsapp as string)
     : [];
 
+  const marginPct = typeof opts?.marginDropPercent === "number" && opts.marginDropPercent > 0 ? opts.marginDropPercent : 20;
+  const warnPct = typeof opts?.warningDropPercent === "number" && opts.warningDropPercent > 0 ? opts.warningDropPercent : 15;
   return {
     type: "MARGIN_CALL",
     severity: "CRITICAL",
     title: `【紧急补仓警报】批次 ${batch.batchNumber} 已触发补仓机制`,
     message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前仓位价值跌幅达到 ${(
       marginCall.dropPercent * 100
-    ).toFixed(2)}%，已触发 20% 补仓预警线。请立即处理补仓事宜。需补仓金额：${(
+    ).toFixed(2)}%，已触发 ${marginPct.toFixed(2)}% 补仓预警线（预警阈值 ${warnPct.toFixed(
+      2
+    )}%）。请立即处理补仓事宜。需补仓金额：${(
       Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)) / 1000000
     ).toFixed(2)}M USD（$${Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)).toLocaleString()}）。`,
     batchId: batch.id,
@@ -154,6 +186,8 @@ export function buildMarginCallNotification(
       signDate: batch.signDate,
       maturityDate: batch.maturityDate,
       bdManagers: bdManagers || [],
+      warningDropPercent: warnPct,
+      marginDropPercent: marginPct,
     },
     recipients: {
       emails: getEnabledRecipientEmails(roles, bdEmails),
@@ -167,19 +201,24 @@ export function buildMarginCallNotification(
 export function buildWarningNotification(
   batch: Batch,
   dropPercent: number,
-  safetyBufferPercent: number
+  safetyBufferPercent: number,
+  opts?: { marginDropPercent?: number; warningDropPercent?: number }
 ): NotificationPayload {
   const roles: ("RISK_MANAGER" | "RISK_ANALYST" | "BD_MANAGER")[] = [
     "RISK_MANAGER",
     "RISK_ANALYST",
   ];
+  const marginPct = typeof opts?.marginDropPercent === "number" && opts.marginDropPercent > 0 ? opts.marginDropPercent : 20;
+  const warnPct = typeof opts?.warningDropPercent === "number" && opts.warningDropPercent > 0 ? opts.warningDropPercent : 15;
   return {
     type: "WARNING",
     severity: "MEDIUM",
-    title: `【风险预警】批次 ${batch.batchNumber} 接近补仓预警线`,
+    title: `【风险预警】批次 ${batch.batchNumber} 达到 ${warnPct.toFixed(2)}% 预警阈值`,
     message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前跌幅 ${dropPercent.toFixed(
       2
-    )}%，距离 20% 补仓线仅剩 ${safetyBufferPercent.toFixed(
+    )}%，已触发 ${warnPct.toFixed(2)}% 预警阈值；距离 ${marginPct.toFixed(
+      2
+    )}% 补仓线仅剩 ${safetyBufferPercent.toFixed(
       2
     )}%，请密切关注行情波动，准备应对预案。`,
     batchId: batch.id,
@@ -192,6 +231,8 @@ export function buildWarningNotification(
       safetyBufferPercent,
       currentMarketValue: batch.currentMarketValue,
       initialTotalAmount: batch.initialTotalAmount,
+      warningDropPercent: warnPct,
+      marginDropPercent: marginPct,
     },
     recipients: {
       emails: getEnabledRecipientEmails(roles),
@@ -286,7 +327,13 @@ export async function sendNotification(
   }
   if (!payload.recipients.emails.length && !payload.recipients.whatsapps.length) result.success = false;
   try {
-    pushLog({ id: `n_${crypto.randomUUID()}`, payload, result });
+    pushLog({ 
+      id: `n_${crypto.randomUUID()}`, 
+      payload, 
+      result, 
+      createdAt: new Date().toISOString(),
+      status: result.success ? "success" : "failed",
+    });
     window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
   } catch {
     result.logError = "通知结果未能保存到本地，请核查服务商记录；不要因此重新发送。";
@@ -323,7 +370,7 @@ export async function triggerMarginCallAlert(
   bdManagers?: string[],
   channel?: "email" | "whatsapp"
 ): Promise<NotificationResult> {
-  const notification = buildMarginCallNotification(batch, marginCall, bdManagers);
+  const notification = buildMarginCallNotification(batch, marginCall, bdManagers, getRuntimeThresholds());
   if (channel === "email") notification.recipients.whatsapps = [];
   if (channel === "whatsapp") notification.recipients.emails = [];
   return sendNotification(notification);
@@ -338,7 +385,8 @@ export async function triggerWarningAlert(
   const notification = buildWarningNotification(
     batch,
     dropPercent,
-    safetyBufferPercent
+    safetyBufferPercent,
+    getRuntimeThresholds()
   );
   if (channel === "email") notification.recipients.whatsapps = [];
   if (channel === "whatsapp") notification.recipients.emails = [];
@@ -364,8 +412,11 @@ export async function notifyBatchChannel(
   try {
     const bds = [...new Set((batch.clients ?? []).map((c) => c.bdManager))];
     const current = batch.marginCalls?.find((m) => m.status === "PENDING");
-    const payload = current ? buildMarginCallNotification(batch, current, bds)
-      : buildWarningNotification(batch, Math.max(0, (1 - (batch.currentMarketValue ?? 0) / batch.initialTotalAmount) * 100), 0);
+    const thresholds = getRuntimeThresholds();
+    const rawDrop = Math.max(0, (1 - (batch.currentMarketValue ?? 0) / (batch.initialTotalAmount ?? 1)) * 100);
+    const safetyBuf = Math.max(0, (typeof thresholds.marginDropPercent === "number" ? thresholds.marginDropPercent : 20) - rawDrop);
+    const payload = current ? buildMarginCallNotification(batch, current, bds, thresholds)
+      : buildWarningNotification(batch, rawDrop, safetyBuf, thresholds);
     const config = getRuntimeNotificationConfig();
     if (channel === "email") {
       payload.recipients.whatsapps = [];
@@ -377,6 +428,24 @@ export async function notifyBatchChannel(
     const targets = channel === "email" ? payload.recipients.emails : payload.recipients.whatsapps;
     if (!targets.length) throw new Error("请先到系统设置填写并启用真实收件人。");
     const result = await sendNotification(payload);
+    try {
+      const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+      logAudit({
+        action: "batch_notify",
+        resource: `batch:notify:${batch.id}:${channel}`,
+        detail: {
+          batchId: batch.id,
+          batchNumber: batch.batchNumber ?? null,
+          channel,
+          notificationType: current ? "margin_call" : "warning",
+          sentToCount: result.channels[channel].sentTo.length,
+          success: result.channels[channel].success,
+          error: result.channels[channel].error ?? null,
+        },
+      });
+    } catch {
+      /* ignore */
+    }
     if (!result.channels[channel].success) throw new Error(result.channels[channel].error || "通知发送失败。");
     return `服务商已受理 ${result.channels[channel].sentTo.length} 位收件人，请核对实际收件。${result.logError ?? ""}`;
   } finally {

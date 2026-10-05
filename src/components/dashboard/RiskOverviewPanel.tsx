@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatPercent } from "@/lib/utils";
-import { calculatePortfolioSummary, WARNING_DROP_THRESHOLD, CRITICAL_DROP_THRESHOLD } from "@/lib/riskEngine";
+import { calculatePortfolioSummary, resolveThresholdOpts, type ThresholdOpts } from "@/lib/riskEngine";
+import { getRuntimeThresholds } from "@/lib/notifier";
 import { Batch, Client, MarginCall, RiskLevel } from "@prisma/client";
 import {
   Shield,
@@ -25,11 +26,14 @@ export function RiskOverviewPanel({ batches }: RiskOverviewPanelProps) {
   const lockedCount = batches.filter((b) => b.status === "LOCKED").length;
   const tradingCount = batches.filter((b) => b.status === "TRADING_OPEN").length;
   const closedCount = batches.filter((b) => b.status === "CLOSED").length;
+  const threshold = resolveThresholdOpts(getRuntimeThresholds() as ThresholdOpts);
+  const warningLabel = `${threshold.warningDropPercent.toFixed(2)}-${threshold.marginDropPercent.toFixed(2)}%`;
+  const criticalLabel = `>${threshold.marginDropPercent.toFixed(2)}%`;
 
   const distributionBars = [
     { label: "正常", count: summary.normalCount, variant: "success" as const, color: "bg-success", Icon: CheckCircle2 },
-    { label: "预警(15-20%)", count: summary.warningCount, variant: "warning" as const, color: "bg-warning", Icon: AlertTriangle },
-    { label: "严重(>20%)", count: summary.criticalCount, variant: "danger" as const, color: "bg-danger", Icon: AlertCircle },
+    { label: `预警(${warningLabel})`, count: summary.warningCount, variant: "warning" as const, color: "bg-warning", Icon: AlertTriangle },
+    { label: `严重(${criticalLabel})`, count: summary.criticalCount, variant: "danger" as const, color: "bg-danger", Icon: AlertCircle },
   ];
 
   const maxCount = Math.max(1, summary.normalCount + summary.warningCount + summary.criticalCount);

@@ -30,27 +30,21 @@ export async function GET(req: Request) {
     );
   } catch (e: any) {
     const msg = e?.message || String(e || "internal");
+    const symbol = new URL(req.url).searchParams.get("symbol") || "UNKNOWN";
+    const period = (new URL(req.url).searchParams.get("period") || "1M").toUpperCase();
     return NextResponse.json(
       {
+        error: "行情获取失败",
         provider: "NASDAQ_UNOFFICIAL",
-        candles: [
-          {
-            time: Date.now(),
-            open: 1,
-            high: 1,
-            low: 1,
-            close: 1,
-            volume: 0,
-          },
-        ],
-        symbol: new URL(req.url).searchParams.get("symbol") || "UNKNOWN",
-        period: (new URL(req.url).searchParams.get("period") || "1M").toUpperCase(),
-        candleCount: 1,
-        fallbackNote: `API_ROUTE_FATAL: ${msg}`,
+        symbol,
+        period,
+        candles: [],
+        candleCount: 0,
+        detail: `UPSTREAM_FATAL: ${msg}`,
         elapsedMs: Date.now() - start,
       },
       {
-        status: 200,
+        status: 502,
         headers: { "Cache-Control": "no-store" },
       },
     );

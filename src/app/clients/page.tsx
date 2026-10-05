@@ -107,42 +107,6 @@ export default function ClientsPage() {
   const prevSettledByIdRef = useRef<Record<string, number>>({});
   const [newlySettledIds, setNewlySettledIds] = useState<Record<string, number>>({});
   const scrolledSettledRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const currentMap: Record<string, number> = {};
-    const newly: Record<string, number> = {};
-    for (const c of (roleFilteredClients ?? []) as any[]) {
-      const id = c.id;
-      if (!id) continue;
-      if (c.status === ClientStatus.SETTLED && c.settledAt) {
-        const ts = new Date(c.settledAt as any).getTime();
-        currentMap[id] = ts;
-        const prev = prevSettledByIdRef.current[id];
-        if (!prev || prev !== ts) newly[id] = ts;
-      }
-    }
-    prevSettledByIdRef.current = currentMap;
-    const hasNew = Object.keys(newly).length > 0;
-    if (hasNew) {
-      setNewlySettledIds((prev) => ({ ...prev, ...newly }));
-      window.setTimeout(() => {
-        setNewlySettledIds((prev) => {
-          const next = { ...prev };
-          for (const id of Object.keys(newly)) delete next[id];
-          return next;
-        });
-      }, 3200);
-      window.requestAnimationFrame(() => {
-        for (const id of Object.keys(newly)) {
-          if (scrolledSettledRef.current.has(id)) continue;
-          scrolledSettledRef.current.add(id);
-          const el = document.getElementById(`client-row-${id}`);
-          if (el) {
-            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-          }
-        }
-      });
-    }
-  }, [roleFilteredClients]);
   const [addForm, setAddForm] = useState({
     name: "",
     investment: "",
@@ -269,10 +233,75 @@ export default function ClientsPage() {
     avatarInitials: 'FR',
   }) as any;
 
-  const roleFilteredClients: ClientLike[] = useMemo(
+  const fallbackFiltered = useMemo(
     () => filterClientsByRole(rawAllClients, scopeUser),
     [rawAllClients, scopeUser]
   );
+  const [apiFilteredClients, setApiFilteredClients] = useState<ClientLike[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/data/clients/filter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          credentials: 'include',
+          cache: 'no-store',
+          body: JSON.stringify({ clients: rawAllClients }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as { filtered?: ClientLike[] };
+        if (cancelled) return;
+        if (Array.isArray(json?.filtered)) {
+          setApiFilteredClients(json.filtered);
+        } else {
+          setApiFilteredClients(null);
+        }
+      } catch {
+        if (!cancelled) setApiFilteredClients(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [rawAllClients, user]);
+
+  const roleFilteredClients: ClientLike[] = apiFilteredClients ?? fallbackFiltered;
+
+  useEffect(() => {
+    const currentMap: Record<string, number> = {};
+    const newly: Record<string, number> = {};
+    for (const c of (roleFilteredClients ?? []) as any[]) {
+      const id = c.id;
+      if (!id) continue;
+      if (c.status === ClientStatus.SETTLED && c.settledAt) {
+        const ts = new Date(c.settledAt as any).getTime();
+        currentMap[id] = ts;
+        const prev = prevSettledByIdRef.current[id];
+        if (!prev || prev !== ts) newly[id] = ts;
+      }
+    }
+    prevSettledByIdRef.current = currentMap;
+    const hasNew = Object.keys(newly).length > 0;
+    if (hasNew) {
+      setNewlySettledIds((prev) => ({ ...prev, ...newly }));
+      window.setTimeout(() => {
+        setNewlySettledIds((prev) => {
+          const next = { ...prev };
+          for (const id of Object.keys(newly)) delete next[id];
+          return next;
+        });
+      }, 3200);
+      window.requestAnimationFrame(() => {
+        for (const id of Object.keys(newly)) {
+          if (scrolledSettledRef.current.has(id)) continue;
+          scrolledSettledRef.current.add(id);
+          const el = document.getElementById(`client-row-${id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }
+      });
+    }
+  }, [roleFilteredClients]);
 
   const bdManagers = useMemo(() => {
     const set = new Set<string>();
@@ -1235,7 +1264,11 @@ export default function ClientsPage() {
                   try {
                     commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
                   } catch (err) {
-                    setAddErrors({ investment: err instanceof Error ? err.message : "新增客户失败" });
+                    if (err instanceof Error && err.name === "RevisionMismatchError") {
+                      toast.error(err.message);
+                    } else {
+                      setAddErrors({ investment: err instanceof Error ? err.message : "新增客户失败" });
+                    }
                     return;
                   }
                   try {
@@ -1418,8 +1451,41 @@ export default function ClientsPage() {
                         status: editForm.status,
                       } as any)
                     );
+                    const beforeClient = batch.clients?.find((c: any) => c?.id === editClientOpen.id);
+                    try {
+                      const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+                      logAudit({
+                        action: "client_edit",
+                        resource: `client:${editClientOpen.id}:edit`,
+                        detail: {
+                          clientId: editClientOpen.id,
+                          batchId: editClientOpen.batchId,
+                          before: beforeClient ? {
+                            name: (beforeClient as any).name,
+                            investmentAmount: (beforeClient as any).investmentAmount,
+                            bdManager: (beforeClient as any).bdManager,
+                            status: (beforeClient as any).status,
+                          } : null,
+                          after: {
+                            name: editForm.name.trim(),
+                            investmentAmount: numAmt,
+                            bdManager: editForm.bdManager,
+                            status: editForm.status,
+                          },
+                          changedKeys: [
+                            "name","investmentAmount","bdManager","signDate","status",
+                          ],
+                        },
+                      });
+                    } catch {
+                      /* ignore audit */
+                    }
                   } catch (err) {
-                    setEditErrors({ investment: err instanceof Error ? err.message : "修改客户失败" });
+                    if (err instanceof Error && err.name === "RevisionMismatchError") {
+                      toast.error(err.message);
+                    } else {
+                      setEditErrors({ investment: err instanceof Error ? err.message : "修改客户失败" });
+                    }
                     return;
                   }
                   window.dispatchEvent(
@@ -1493,6 +1559,23 @@ export default function ClientsPage() {
                 if (!batch) return;
                 try {
                   commitBatchFinance(batch, (draft) => removeClientPosition(draft, deleteClientConfirm.id));
+                  const beforeClient = batch.clients?.find((c: any) => c?.id === deleteClientConfirm.id);
+                  try {
+                    const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+                    logAudit({
+                      action: "client_delete",
+                      resource: `client:${deleteClientConfirm.id}:delete`,
+                      detail: {
+                        clientId: deleteClientConfirm.id,
+                        clientName: deleteClientConfirm.name,
+                        batchId: deleteClientConfirm.batchId,
+                        investmentAmount: beforeClient ? (beforeClient as any).investmentAmount : null,
+                        bdManager: beforeClient ? (beforeClient as any).bdManager : null,
+                      },
+                    });
+                  } catch {
+                    /* ignore */
+                  }
                 } catch (err) {
                   toast.error(err instanceof Error ? err.message : "删除客户失败");
                   return;

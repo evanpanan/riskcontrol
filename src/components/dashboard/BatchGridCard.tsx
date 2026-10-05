@@ -14,9 +14,10 @@ import { cn, formatCurrency, formatPercent, formatDate, calculateTradingWindows 
 import {
   getBatchMetrics,
   calculateBatchPnLSplit,
-  WARNING_DROP_THRESHOLD,
-  CRITICAL_DROP_THRESHOLD,
+  resolveThresholdOpts,
+  type ThresholdOpts,
 } from "@/lib/riskEngine";
+import { getRuntimeThresholds } from "@/lib/notifier";
 import { Batch, RiskLevel, Client, MarginCall } from "@prisma/client";
 import {
   Lock,
@@ -49,6 +50,9 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
   const metrics = getBatchMetrics(batch);
   const split = calculateBatchPnLSplit(batch, mv);
   const tradingInfo = calculateTradingWindows(batch.signDate);
+  const runtimeThresholds = resolveThresholdOpts(getRuntimeThresholds() as ThresholdOpts);
+  const warningPct = runtimeThresholds.warningDropPercent;
+  const marginPct = runtimeThresholds.marginDropPercent;
 
   const riskKey = batch.riskLevel === RiskLevel.NORMAL ? "normal" :
                   batch.riskLevel === RiskLevel.WARNING ? "warning" : "critical";
@@ -192,20 +196,20 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
               </div>
               <Progress
                 value={Math.max(0, metrics.safetyBufferPercent)}
-                max={CRITICAL_DROP_THRESHOLD * 100}
+                max={marginPct}
                 variant={progressVariant}
                 className="h-2 bg-transparent"
               />
               <div
                 className="absolute top-1/2 -translate-y-1/2 h-4 w-0.5 bg-foreground/60 -ml-px"
-                style={{ left: `${(WARNING_DROP_THRESHOLD / CRITICAL_DROP_THRESHOLD) * 100}%` }}
+                style={{ left: `${(warningPct / marginPct) * 100}%` }}
               >
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <div className="absolute h-4 w-0.5 -ml-px bg-dashed" />
                   </TooltipTrigger>
                   <TooltipContent side="top">
-                    <p className="text-xs">15% 预警线</p>
+                    <p className="text-xs">{warningPct.toFixed(2)}% 预警线</p>
                   </TooltipContent>
                 </Tooltip>
               </div>
