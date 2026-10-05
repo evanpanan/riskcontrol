@@ -103,39 +103,7 @@ export default function ClientsPage() {
   const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
   const [clientDetail, setClientDetail] = useState<string | null>(null);
   const [deleteClientConfirm, setDeleteClientConfirm] = useState<null | { id: string; batchId: string; name: string }>(null);
-  const [justSettledIds, setJustSettledIds] = useState<Record<string, number>>({});
-  const prevSettledByIdRef = useRef<Record<string, number | 0>>({});
-  useEffect(() => {
-    const current: Record<string, number | 0> = {};
-    let newly: Record<string, number> | null = null;
-    for (const c of (roleFilteredClients ?? []) as any[]) {
-      const id = c.id;
-      if (!id) continue;
-      if (c.status === ClientStatus.SETTLED && c.settledAt) {
-        const ts = new Date(c.settledAt as any).getTime();
-        current[id] = ts;
-        const prev = prevSettledByIdRef.current[id];
-        if (!prev || prev !== ts) {
-          newly = newly ?? {};
-          newly[id] = ts;
-        }
-      } else {
-        current[id] = 0;
-      }
-    }
-    prevSettledByIdRef.current = current;
-    if (newly) {
-      setJustSettledIds((prev) => ({ ...prev, ...newly! }));
-      const ids = Object.keys(newly);
-      window.setTimeout(() => {
-        setJustSettledIds((prev) => {
-          const next = { ...prev };
-          for (const id of ids) delete next[id];
-          return next;
-        });
-      }, 1600);
-    }
-  }, [roleFilteredClients]);
+  const mountedAtRef = useRef<number>(Date.now());
   const [addForm, setAddForm] = useState({
     name: "",
     investment: "",
@@ -816,15 +784,16 @@ export default function ClientsPage() {
                 </div>
               ) : (
                 allClients.map((c) => {
-                  const justSettled = !!justSettledIds[c.id];
                   const isSettled = c.status === ClientStatus.SETTLED;
+                  const settledTs = isSettled && c.settledAt ? new Date(c.settledAt as any).getTime() : 0;
+                  const justSettled = settledTs >= (mountedAtRef.current - 1500);
                   return (
                   <div
-                    key={c.id}
+                    key={`${c.id}-${isSettled ? `S${settledTs}` : 'A'}`}
                     className={cn(
                       "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group",
                       isSettled && [
-                        justSettled ? "animate-settle-highlight" : "settle-fade-gray",
+                        justSettled ? "animate-settle-flash-gray" : "settle-gray-static",
                       ]
                     )}
                   >

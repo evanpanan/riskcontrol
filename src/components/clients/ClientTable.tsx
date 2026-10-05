@@ -160,41 +160,8 @@ export function ClientTable({
   const [marginInputValue, setMarginInputValue] = useState<string>("");
   const [marginDialogTick, setMarginDialogTick] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
-  const [justSettledIds, setJustSettledIds] = useState<Record<string, number>>({});
-  const prevSettledByIdRef = useRef<Record<string, number | 0>>({});
+  const mountedAtRef = useRef<number>(Date.now());
   const effectiveLockedRequired = batch ? getLockedBatchRequiredMargin(batch) : batchRequiredMarginCall;
-
-  useEffect(() => {
-    const current: Record<string, number | 0> = {};
-    let newly: Record<string, number> | null = null;
-    for (const c of clients) {
-      const id = c.id;
-      if ((c as any).__redacted) continue;
-      if (c.status === ClientStatus.SETTLED && c.settledAt) {
-        const ts = new Date(c.settledAt as any).getTime();
-        current[id] = ts;
-        const prev = prevSettledByIdRef.current[id];
-        if (!prev || prev !== ts) {
-          newly = newly ?? {};
-          newly[id] = ts;
-        }
-      } else {
-        current[id] = 0;
-      }
-    }
-    prevSettledByIdRef.current = current;
-    if (newly) {
-      setJustSettledIds((prev) => ({ ...prev, ...newly! }));
-      const ids = Object.keys(newly);
-      window.setTimeout(() => {
-        setJustSettledIds((prev) => {
-          const next = { ...prev };
-          for (const id of ids) delete next[id];
-          return next;
-        });
-      }, 1600);
-    }
-  }, [clients]);
 
   const batchSummary = useMemo(() => {
     if (!batch) return null;
@@ -358,7 +325,8 @@ export function ClientTable({
             const realtimePnL = client.realtimePnL || 0;
             const estExit = client.estimatedExitAmount ?? client.investmentAmount;
             const isSettled = client.status === ClientStatus.SETTLED;
-            const justSettled = !!justSettledIds[client.id];
+            const settledTs = isSettled && client.settledAt ? new Date(client.settledAt as any).getTime() : 0;
+            const justSettled = settledTs >= (mountedAtRef.current - 1500);
             const unverifiedSettlement = isSettled && !(client as any).settlement;
             const split = getClientProfitSplit(client);
             const actualPnL = client.actualClientPnL ?? 0;
@@ -380,7 +348,7 @@ export function ClientTable({
 
             return (
               <TableRow
-                key={client.id}
+                key={`${client.id}-${isSettled ? `S${settledTs}` : 'A'}`}
                 className={cn(
                   "group h-[68px]",
                   isRedacted &&
@@ -389,8 +357,8 @@ export function ClientTable({
                     "opacity-70 bg-yellow-950/10 hover:bg-yellow-950/20",
                   !isRedacted && client.status === ClientStatus.SETTLED && [
                     justSettled
-                      ? "animate-settle-highlight"
-                      : "settle-fade-gray",
+                      ? "animate-settle-flash-gray"
+                      : "settle-gray-static",
                     "hover:bg-secondary/20",
                   ]
                 )}
