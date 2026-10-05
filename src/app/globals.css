@@ -311,16 +311,19 @@
     animation: drawer-scrim-in 220ms ease-out both;
   }
 
-  @keyframes settle-flash-to-gray {
-    0%   { background-color: hsl(var(--success) / 0.42); box-shadow: inset 0 0 0 2px hsl(var(--success) / 0.75); opacity: 1; filter: grayscale(0%); }
-    18%  { background-color: hsl(var(--warning) / 0.32); box-shadow: inset 0 0 0 2px hsl(var(--warning) / 0.68); opacity: 1; filter: grayscale(0%); }
-    36%  { background-color: hsl(var(--success) / 0.36); box-shadow: inset 0 0 0 2px hsl(var(--success) / 0.68); opacity: 1; filter: grayscale(0%); }
-    54%  { background-color: hsl(var(--warning) / 0.28); box-shadow: inset 0 0 0 2px hsl(var(--warning) / 0.60); opacity: 1; filter: grayscale(0%); }
-    72%  { background-color: hsl(var(--secondary) / 0.20); box-shadow: inset 0 0 0 0 transparent; opacity: 0.88; filter: grayscale(45%); }
-    100% { background-color: hsl(var(--secondary) / 0.15); box-shadow: inset 0 0 0 0 transparent; opacity: 0.6;  filter: grayscale(100%); }
+  @keyframes settle-focus-pulse {
+    0%   { background-color: hsl(var(--success) / 0.22); box-shadow: 0 0 0 0 hsl(var(--success) / 0.55), inset 0 0 0 3px hsl(var(--success) / 0.95); transform: translateX(0); opacity: 1; filter: grayscale(0%); }
+    12%  { background-color: hsl(var(--success) / 0.40); box-shadow: 0 0 0 6px hsl(var(--success) / 0.12), inset 0 0 0 3px hsl(var(--success) / 1); }
+    24%  { background-color: hsl(var(--warning) / 0.38); box-shadow: 0 0 0 0 hsl(var(--warning) / 0.55), inset 0 0 0 3px hsl(var(--warning) / 0.95); }
+    36%  { background-color: hsl(var(--warning) / 0.22); box-shadow: 0 0 0 6px hsl(var(--warning) / 0.12), inset 0 0 0 3px hsl(var(--warning) / 1); }
+    48%  { background-color: hsl(var(--primary) / 0.32); box-shadow: 0 0 0 0 hsl(var(--primary) / 0.55), inset 0 0 0 3px hsl(var(--primary) / 0.95); }
+    60%  { background-color: hsl(var(--primary) / 0.18); box-shadow: 0 0 0 6px hsl(var(--primary) / 0.12), inset 0 0 0 3px hsl(var(--primary) / 1); }
+    72%  { background-color: hsl(var(--success) / 0.36); box-shadow: 0 0 0 0 hsl(var(--success) / 0.45), inset 0 0 0 3px hsl(var(--success) / 0.90); }
+    84%  { background-color: hsl(var(--secondary) / 0.22); box-shadow: 0 0 0 4px hsl(var(--secondary) / 0.10), inset 0 0 0 0 transparent; }
+    100% { background-color: hsl(var(--secondary) / 0.15); box-shadow: 0 0 0 0 transparent, inset 0 0 0 0 transparent; opacity: 0.6; filter: grayscale(100%); transform: translateX(0); }
   }
-  .animate-settle-flash-gray {
-    animation: settle-flash-to-gray 2200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  .animate-settle-focus-pulse {
+    animation: settle-focus-pulse 2400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
     will-change: background-color, box-shadow, filter, opacity;
   }
   .settle-gray-static {

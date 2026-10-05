@@ -161,7 +161,47 @@ export function ClientTable({
   const [marginDialogTick, setMarginDialogTick] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
   const mountedAtRef = useRef<number>(Date.now());
+  const prevSettledByIdRef = useRef<Record<string, number>>({});
+  const [newlySettledIds, setNewlySettledIds] = useState<Record<string, number>>({});
+  const scrolledSettledRef = useRef<Set<string>>(new Set());
   const effectiveLockedRequired = batch ? getLockedBatchRequiredMargin(batch) : batchRequiredMarginCall;
+
+  useEffect(() => {
+    const currentMap: Record<string, number> = {};
+    const newly: Record<string, number> = {};
+    for (const c of clients) {
+      const id = c.id;
+      if ((c as any).__redacted) continue;
+      if (c.status === ClientStatus.SETTLED && c.settledAt) {
+        const ts = new Date(c.settledAt as any).getTime();
+        currentMap[id] = ts;
+        const prev = prevSettledByIdRef.current[id];
+        if (!prev || prev !== ts) newly[id] = ts;
+      }
+    }
+    prevSettledByIdRef.current = currentMap;
+    const hasNew = Object.keys(newly).length > 0;
+    if (hasNew) {
+      setNewlySettledIds((prev) => ({ ...prev, ...newly }));
+      window.setTimeout(() => {
+        setNewlySettledIds((prev) => {
+          const next = { ...prev };
+          for (const id of Object.keys(newly)) delete next[id];
+          return next;
+        });
+      }, 3200);
+      window.requestAnimationFrame(() => {
+        for (const id of Object.keys(newly)) {
+          if (scrolledSettledRef.current.has(id)) continue;
+          scrolledSettledRef.current.add(id);
+          const el = document.getElementById(`client-row-${id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }
+      });
+    }
+  }, [clients]);
 
   const batchSummary = useMemo(() => {
     if (!batch) return null;
@@ -326,7 +366,8 @@ export function ClientTable({
             const estExit = client.estimatedExitAmount ?? client.investmentAmount;
             const isSettled = client.status === ClientStatus.SETTLED;
             const settledTs = isSettled && client.settledAt ? new Date(client.settledAt as any).getTime() : 0;
-            const justSettled = settledTs >= (mountedAtRef.current - 1500);
+            const justSettled = !!newlySettledIds[client.id] &&
+              settledTs >= (mountedAtRef.current - 1500);
             const unverifiedSettlement = isSettled && !(client as any).settlement;
             const split = getClientProfitSplit(client);
             const actualPnL = client.actualClientPnL ?? 0;
@@ -348,6 +389,7 @@ export function ClientTable({
 
             return (
               <TableRow
+                id={`client-row-${client.id}`}
                 key={`${client.id}-${isSettled ? `S${settledTs}` : 'A'}`}
                 className={cn(
                   "group h-[68px]",
@@ -357,7 +399,7 @@ export function ClientTable({
                     "opacity-70 bg-yellow-950/10 hover:bg-yellow-950/20",
                   !isRedacted && client.status === ClientStatus.SETTLED && [
                     justSettled
-                      ? "animate-settle-flash-gray"
+                      ? "animate-settle-focus-pulse"
                       : "settle-gray-static",
                     "hover:bg-secondary/20",
                   ]

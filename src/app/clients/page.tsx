@@ -104,6 +104,45 @@ export default function ClientsPage() {
   const [clientDetail, setClientDetail] = useState<string | null>(null);
   const [deleteClientConfirm, setDeleteClientConfirm] = useState<null | { id: string; batchId: string; name: string }>(null);
   const mountedAtRef = useRef<number>(Date.now());
+  const prevSettledByIdRef = useRef<Record<string, number>>({});
+  const [newlySettledIds, setNewlySettledIds] = useState<Record<string, number>>({});
+  const scrolledSettledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const currentMap: Record<string, number> = {};
+    const newly: Record<string, number> = {};
+    for (const c of (roleFilteredClients ?? []) as any[]) {
+      const id = c.id;
+      if (!id) continue;
+      if (c.status === ClientStatus.SETTLED && c.settledAt) {
+        const ts = new Date(c.settledAt as any).getTime();
+        currentMap[id] = ts;
+        const prev = prevSettledByIdRef.current[id];
+        if (!prev || prev !== ts) newly[id] = ts;
+      }
+    }
+    prevSettledByIdRef.current = currentMap;
+    const hasNew = Object.keys(newly).length > 0;
+    if (hasNew) {
+      setNewlySettledIds((prev) => ({ ...prev, ...newly }));
+      window.setTimeout(() => {
+        setNewlySettledIds((prev) => {
+          const next = { ...prev };
+          for (const id of Object.keys(newly)) delete next[id];
+          return next;
+        });
+      }, 3200);
+      window.requestAnimationFrame(() => {
+        for (const id of Object.keys(newly)) {
+          if (scrolledSettledRef.current.has(id)) continue;
+          scrolledSettledRef.current.add(id);
+          const el = document.getElementById(`client-row-${id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+          }
+        }
+      });
+    }
+  }, [roleFilteredClients]);
   const [addForm, setAddForm] = useState({
     name: "",
     investment: "",
@@ -786,14 +825,16 @@ export default function ClientsPage() {
                 allClients.map((c) => {
                   const isSettled = c.status === ClientStatus.SETTLED;
                   const settledTs = isSettled && c.settledAt ? new Date(c.settledAt as any).getTime() : 0;
-                  const justSettled = settledTs >= (mountedAtRef.current - 1500);
+                  const justSettled = !!newlySettledIds[c.id] &&
+                    settledTs >= (mountedAtRef.current - 1500);
                   return (
                   <div
+                    id={`client-row-${c.id}`}
                     key={`${c.id}-${isSettled ? `S${settledTs}` : 'A'}`}
                     className={cn(
                       "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group",
                       isSettled && [
-                        justSettled ? "animate-settle-flash-gray" : "settle-gray-static",
+                        justSettled ? "animate-settle-focus-pulse" : "settle-gray-static",
                       ]
                     )}
                   >
