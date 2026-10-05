@@ -345,7 +345,7 @@ export function ClientTable({
 
             return (
               <TableRow
-                key={client.id}
+                key={`${client.id}-${isSettled && client.settledAt ? new Date(client.settledAt).getTime() : 'active'}`}
                 className={cn(
                   "group h-[68px]",
                   isRedacted &&
@@ -353,7 +353,7 @@ export function ClientTable({
                   !isRedacted && client.status === ClientStatus.EXIT_REQUESTED &&
                     "opacity-70 bg-yellow-950/10 hover:bg-yellow-950/20",
                   !isRedacted && client.status === ClientStatus.SETTLED &&
-                    "opacity-60 bg-secondary/15 hover:bg-secondary/20 grayscale"
+                    "bg-secondary/15 hover:bg-secondary/20 animate-settle-gray"
                 )}
               >
                 <TableCell>

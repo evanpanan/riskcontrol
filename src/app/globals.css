@@ -311,6 +311,30 @@
     animation: drawer-scrim-in 220ms ease-out both;
   }
 
+  @keyframes settle-fade-to-gray {
+    0% {
+      filter: grayscale(0%);
+      opacity: 1;
+      background-color: hsl(var(--success) / 0.12);
+      transform: translateY(0);
+    }
+    30% {
+      filter: grayscale(0%);
+      opacity: 0.98;
+      background-color: hsl(var(--warning) / 0.18);
+    }
+    100% {
+      filter: grayscale(100%);
+      opacity: 0.6;
+      background-color: hsl(var(--secondary) / 0.15);
+      transform: translateY(0);
+    }
+  }
+  .animate-settle-gray {
+    animation: settle-fade-to-gray 1100ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: filter, opacity, background-color;
+  }
+
   .risk-water-track {
     background: linear-gradient(
       90deg,

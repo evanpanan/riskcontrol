@@ -784,8 +784,11 @@ export default function ClientsPage() {
               ) : (
                 allClients.map((c) => (
                   <div
-                    key={c.id}
-                    className="grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group"
+                    key={`${c.id}-${c.status === ClientStatus.SETTLED && c.settledAt ? new Date(c.settledAt as any).getTime() : 'active'}`}
+                    className={cn(
+                      "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group",
+                      c.status === ClientStatus.SETTLED && "animate-settle-gray"
+                    )}
                   >
                     <div className="col-span-2">
                       <div className="flex items-center gap-2.5">
