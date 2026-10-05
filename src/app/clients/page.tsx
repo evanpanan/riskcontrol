@@ -70,7 +70,7 @@ import {
   Info,
   RefreshCw,
 } from "lucide-react";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { ClientStatus } from "@prisma/client";
 import { mergeClientStatusesOnClientList } from "@/lib/clientStatusStore";
@@ -103,6 +103,39 @@ export default function ClientsPage() {
   const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
   const [clientDetail, setClientDetail] = useState<string | null>(null);
   const [deleteClientConfirm, setDeleteClientConfirm] = useState<null | { id: string; batchId: string; name: string }>(null);
+  const [justSettledIds, setJustSettledIds] = useState<Record<string, number>>({});
+  const prevSettledByIdRef = useRef<Record<string, number | 0>>({});
+  useEffect(() => {
+    const current: Record<string, number | 0> = {};
+    let newly: Record<string, number> | null = null;
+    for (const c of (roleFilteredClients ?? []) as any[]) {
+      const id = c.id;
+      if (!id) continue;
+      if (c.status === ClientStatus.SETTLED && c.settledAt) {
+        const ts = new Date(c.settledAt as any).getTime();
+        current[id] = ts;
+        const prev = prevSettledByIdRef.current[id];
+        if (!prev || prev !== ts) {
+          newly = newly ?? {};
+          newly[id] = ts;
+        }
+      } else {
+        current[id] = 0;
+      }
+    }
+    prevSettledByIdRef.current = current;
+    if (newly) {
+      setJustSettledIds((prev) => ({ ...prev, ...newly! }));
+      const ids = Object.keys(newly);
+      window.setTimeout(() => {
+        setJustSettledIds((prev) => {
+          const next = { ...prev };
+          for (const id of ids) delete next[id];
+          return next;
+        });
+      }, 1600);
+    }
+  }, [roleFilteredClients]);
   const [addForm, setAddForm] = useState({
     name: "",
     investment: "",
@@ -782,12 +815,17 @@ export default function ClientsPage() {
                   <p>没有匹配的客户</p>
                 </div>
               ) : (
-                allClients.map((c) => (
+                allClients.map((c) => {
+                  const justSettled = !!justSettledIds[c.id];
+                  const isSettled = c.status === ClientStatus.SETTLED;
+                  return (
                   <div
-                    key={`${c.id}-${c.status === ClientStatus.SETTLED && c.settledAt ? new Date(c.settledAt as any).getTime() : 'active'}`}
+                    key={c.id}
                     className={cn(
                       "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group",
-                      c.status === ClientStatus.SETTLED && "animate-settle-gray"
+                      isSettled && [
+                        justSettled ? "animate-settle-highlight" : "settle-fade-gray",
+                      ]
                     )}
                   >
                     <div className="col-span-2">
@@ -942,7 +980,8 @@ export default function ClientsPage() {
                       </Button>
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
