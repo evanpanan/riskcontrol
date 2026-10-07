@@ -187,7 +187,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (err: any) {
     // DB 连接失败或 prisma schema 未 push → 吞掉，202 Accepted 告诉前端已经收到并本地 pending
     stored = "pending";
-    dbError = String(err?.message ?? err).slice(0, 200);
+    dbError = "database_unavailable";
+    try { console.error("[audit:post] db unavailable, stored=pending:", err?.message ?? String(err)); } catch {}
   }
 
   const baseHeaders = { "Cache-Control": "no-store" };

@@ -633,6 +633,7 @@ export default function SettingsPage() {
       payloadLocal.passwordHash = hashed.passwordHash;
       payloadLocal.salt = hashed.salt;
     }
+    const usersBefore = users.slice();
     let optimisticId = editingUserId ?? "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     let nextList: SystemAppUser[];
     if (editingUserId) {
@@ -667,11 +668,12 @@ export default function SettingsPage() {
       };
       nextList = [...users, newU];
     }
+    // 先乐观更新 UI（让用户看到提交反馈）
     setUsers(nextList);
     try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(nextList)); } catch {}
 
     let apiOk = false;
-    let storedHint: "db" | "pending" | null = null;
+    let storedHint: "db" | "pending" | "failed" | null = null;
     let apiError: string | null = null;
     try {
       const apiPayload: any = { ...payloadLocal };
@@ -696,6 +698,7 @@ export default function SettingsPage() {
         }
       } else {
         apiError = data?.error ?? `HTTP ${resp.status}`;
+        storedHint = data?.stored === "failed" ? "failed" : null;
       }
     } catch (err: any) {
       apiError = err?.message ?? "网络错误";
@@ -718,7 +721,7 @@ export default function SettingsPage() {
 
     if (apiOk) {
       const msg = editingUserId ? "账号已更新" : "账号创建成功";
-      if (storedHint === "pending") toast.success(msg + "（当前 DB 未连接，已保存在本地，稍后自动同步）");
+      if (storedHint === "pending") toast.success(msg + "（已受理，稍后同步到数据库）");
       else toast.success(msg);
       setSaved("user");
       setUserDlgOpen(false);
@@ -727,9 +730,14 @@ export default function SettingsPage() {
         try { await refreshMe(); } catch {}
       }, 280);
     } else {
-      toast.error((editingUserId ? "更新失败：" : "创建失败：") + (apiError ?? "服务端暂不可用，已保存在本地备用"));
-      setSaved("user");
-      setUserDlgOpen(false);
+      // 失败：回滚乐观更新 + 清 localStorage 回写备份
+      setUsers(usersBefore);
+      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(usersBefore)); } catch {}
+      toast.error(
+        (editingUserId ? "更新失败：" : "创建失败：") +
+        (apiError ?? "服务端暂不可用") +
+        "（账号未保存，请稍后重试）"
+      );
     }
     setUsersSaving(false);
   };
@@ -743,6 +751,8 @@ export default function SettingsPage() {
       title: "确认删除该账号？",
       run: async () => {
         setUsersSaving(true);
+        const usersBefore = users.slice();
+        // 乐观删除 UI
         setUsers((list) => list.filter((u) => u.id !== id));
         try {
           localStorage.setItem(
@@ -752,7 +762,7 @@ export default function SettingsPage() {
         } catch (e) {}
 
         let apiOk = false;
-        let storedHint: "db" | "pending" | null = null;
+        let storedHint: "db" | "pending" | "failed" | null = null;
         let apiError: string | null = null;
         try {
           const resp = await fetch(`/api/auth/manage/${encodeURIComponent(id)}`, {
@@ -765,6 +775,7 @@ export default function SettingsPage() {
             storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
           } else {
             apiError = data?.error ?? `HTTP ${resp.status}`;
+            storedHint = data?.stored === "failed" ? "failed" : null;
           }
         } catch (err: any) {
           apiError = err?.message ?? "网络错误";
@@ -786,14 +797,17 @@ export default function SettingsPage() {
         });
         if (apiOk) {
           const baseMsg = target ? `已删除账号 ${target.email}` : "已删除账号";
-          if (storedHint === "pending") toast.success(baseMsg + "（当前 DB 未连接，稍后自动同步）");
+          if (storedHint === "pending") toast.success(baseMsg + "（已受理，稍后同步到数据库）");
           else toast.success(baseMsg);
           setTimeout(async () => {
             try { await loadRemoteUsers(); } catch {}
             try { await refreshMe(); } catch {}
           }, 220);
         } else {
-          toast.error("删除失败：" + (apiError ?? "服务端暂不可用"));
+          // 失败：回滚删除
+          setUsers(usersBefore);
+          try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(usersBefore)); } catch {}
+          toast.error("删除失败：" + (apiError ?? "服务端暂不可用") + "（账号未删除，请稍后重试）");
         }
         setUsersSaving(false);
       },
@@ -804,6 +818,8 @@ export default function SettingsPage() {
       toast.error("仅系统管理员可启用或停用系统账号。");
       return;
     }
+    const prevEnabledStateMap = new Map<string, boolean>();
+    users.forEach((u) => prevEnabledStateMap.set(u.id, !!u.enabled));
     setUsers((list) => {
       const next = list.map((u) => (u.id === id ? { ...u, enabled } : u));
       try {
@@ -812,7 +828,7 @@ export default function SettingsPage() {
       return next;
     });
     void (async () => {
-      let storedHint: "db" | "pending" | null = null;
+      let storedHint: "db" | "pending" | "failed" | null = null;
       let apiError: string | null = null;
       try {
         const resp = await fetch(`/api/auth/manage/${encodeURIComponent(id)}`, {
@@ -825,6 +841,7 @@ export default function SettingsPage() {
           storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
         } else {
           apiError = data?.error ?? `HTTP ${resp.status}`;
+          storedHint = data?.stored === "failed" ? "failed" : null;
         }
       } catch (err: any) {
         apiError = err?.message ?? "网络错误";
@@ -837,8 +854,35 @@ export default function SettingsPage() {
         resource: `settings:account:${id}`,
         detail: { targetUserId: id, enabled, stored: storedHint, apiError },
       });
-      if (storedHint === "pending") toast((enabled ? "已启用账号（" : "已停用账号（") + "当前 DB 未连接，稍后自动同步）");
-      else if (apiError) toast.error("状态同步失败：" + apiError);
+      if (storedHint === "db") {
+        toast.success(enabled ? "已启用账号" : "已停用账号");
+      } else if (storedHint === "pending") {
+        toast.success((enabled ? "已启用账号（" : "已停用账号（") + "已受理，稍后同步到数据库）");
+      } else if (storedHint === "failed" || apiError) {
+        // 失败回滚 enabled
+        setUsers((list) =>
+          list.map((u) => {
+            if (u.id !== id) return u;
+            const oldVal = prevEnabledStateMap.get(id);
+            return { ...u, enabled: typeof oldVal === "boolean" ? oldVal : !!u.enabled };
+          })
+        );
+        try {
+          const raw = localStorage.getItem(USERS_LS_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              const rolled = parsed.map((u: any) =>
+                u && String((u as any).id) === String(id)
+                  ? { ...u, enabled: prevEnabledStateMap.get(id) ?? !!(u as any).enabled }
+                  : u
+              );
+              localStorage.setItem(USERS_LS_KEY, JSON.stringify(rolled));
+            }
+          }
+        } catch {}
+        toast.error("状态同步失败：" + (apiError ?? "未知错误") + "（请稍后重试）");
+      }
       try { await loadRemoteUsers(); } catch {}
     })();
   };

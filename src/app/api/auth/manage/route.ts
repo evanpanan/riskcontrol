@@ -130,8 +130,9 @@ export async function GET(req: NextRequest) {
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    try { console.error("[manage:get] db unavailable:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
-      { ok: true, receivedAt: new Date().toISOString(), users: [], stored: "pending", dbError: String(err?.message ?? err).slice(0, 200) },
+      { ok: true, receivedAt: new Date().toISOString(), users: [], stored: "pending", dbError: "database_unavailable" },
       { status: 202, headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -212,12 +213,14 @@ export async function POST(req: NextRequest) {
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    try { console.error("[manage:post] db unavailable, write rejected:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
       {
-        ok: true,
+        ok: false,
         receivedAt: new Date().toISOString(),
-        stored: "pending",
-        dbError: String(err?.message ?? err).slice(0, 200),
+        stored: "failed",
+        dbError: "database_unavailable",
+        error: "数据库未连接，账号未保存，请稍后重试",
         user: {
           id: newId ?? "u_pending_" + Date.now().toString(36),
           email,
@@ -227,7 +230,7 @@ export async function POST(req: NextRequest) {
           bdManagerFullName,
         },
       },
-      { status: 202, headers: { "Cache-Control": "no-store" } },
+      { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" } },
     );
   }
 }

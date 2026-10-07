@@ -202,15 +202,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    try { console.error("[manage:patch] db unavailable, write rejected:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
       {
-        ok: true,
+        ok: false,
         receivedAt: new Date().toISOString(),
-        stored: "pending",
-        dbError: String(err?.message ?? err).slice(0, 200),
+        stored: "failed",
+        dbError: "database_unavailable",
+        error: "数据库未连接，账号未更新，请稍后重试",
         id,
       },
-      { status: 202, headers: { "Cache-Control": "no-store" } },
+      { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" } },
     );
   }
 }
@@ -228,15 +230,17 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    try { console.error("[manage:delete] db unavailable, write rejected:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
       {
-        ok: true,
+        ok: false,
         receivedAt: new Date().toISOString(),
-        stored: "pending",
-        dbError: String(err?.message ?? err).slice(0, 200),
+        stored: "failed",
+        dbError: "database_unavailable",
+        error: "数据库未连接，账号未删除，请稍后重试",
         removed: { id },
       },
-      { status: 202, headers: { "Cache-Control": "no-store" } },
+      { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" } },
     );
   }
 }
