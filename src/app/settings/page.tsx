@@ -73,7 +73,7 @@ import {
   Copy,
 } from "lucide-react";
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import {
@@ -470,21 +470,90 @@ export default function SettingsPage() {
   };
 
   // 系统账号管理
+  const { refreshMe } = useAuthContext();
   const [users, setUsers] = useState<SystemAppUser[]>(() => []);
-  useEffect(() => {
+  const [usersLoadError, setUsersLoadError] = useState<string>("");
+  const loadRemoteUsers = useCallback(async () => {
     try {
-      const raw = localStorage.getItem(USERS_LS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) setUsers(parsed);
+      const res = await fetch('/api/auth/manage', { method: 'GET', credentials: 'include', cache: 'no-store', headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' } });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) throw new Error(res.status === 401 ? '未登录' : '仅管理员可查看');
+        throw new Error(`加载失败 HTTP ${res.status}`);
       }
-    } catch (e) {}
+      const data: any = await res.json();
+      const remote: Array<any> = Array.isArray(data?.users) ? data.users : [];
+      // 把 remote（Prisma AppUser 列）补 shadow 到 localStorage 同步，保持离线降级可读
+      const merged: SystemAppUser[] = remote.map((u: any): SystemAppUser => {
+        const displayName = String(u.displayName ?? '未知用户');
+        const email = String(u.email ?? '');
+        const ai = typeof u.avatarInitials === 'string' && u.avatarInitials.length > 0
+          ? u.avatarInitials
+          : computeInitials(displayName, email);
+        return {
+          id: String(u.id),
+          displayName,
+          email,
+          role: String(u.role) as any,
+          bdManagerFullName: u.bdManagerFullName || undefined,
+          avatarInitials: ai,
+          avatarDataUrl: u.avatarDataUrl || undefined,
+          enabled: true,
+          createdAt: u.createdAt ?? new Date().toISOString(),
+        };
+      });
+      // 合并已有 localStorage 自定义 shadow（有 passwordHash 或 whatsapp 非空就用 shadow 版本，保持习惯）
+      try {
+        const raw = localStorage.getItem(USERS_LS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const byId = new Map<string, SystemAppUser>();
+            for (const r of merged) byId.set(r.id, r);
+            for (const s of parsed) {
+              if (!s || typeof s !== 'object') continue;
+              const sid = String((s as any).id ?? '');
+              if (!sid) continue;
+              const existing = byId.get(sid);
+              if (existing) {
+                const next: SystemAppUser = { ...existing, whatsapp: (s as any).whatsapp ?? existing.whatsapp, passwordHash: (s as any).passwordHash, salt: (s as any).salt };
+                byId.set(sid, next);
+              } else {
+                byId.set(sid, s as SystemAppUser);
+              }
+            }
+            const list = Array.from(byId.values());
+            setUsers(list);
+            try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(list)); } catch {}
+            setUsersLoadError("");
+            return;
+          }
+        }
+      } catch {}
+      setUsers(merged);
+      setUsersLoadError("");
+      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(merged)); } catch {}
+    } catch (err: any) {
+      // 服务端失败：降级读 localStorage 历史
+      setUsersLoadError(err?.message ?? "服务端暂时无法读取系统账号");
+      try {
+        const raw = localStorage.getItem(USERS_LS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setUsers(parsed);
+        }
+      } catch {}
+    }
   }, []);
   useEffect(() => {
+    void loadRemoteUsers();
+  }, [loadRemoteUsers]);
+  useEffect(() => {
+    if (users.length === 0) return;
     try {
       localStorage.setItem(USERS_LS_KEY, JSON.stringify(users));
     } catch (e) {}
   }, [users]);
+  const [usersSaving, setUsersSaving] = useState(false);
   const [userDlgOpen, setUserDlgOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [uForm, setUForm] = useState<UserFormState>(emptyUserForm());
@@ -543,50 +612,47 @@ export default function SettingsPage() {
       return;
     }
     if (!validateUser()) return;
+    setUsersSaving(true);
     const waFinal = buildWhatsApp(uWA.code, uWA.local, uWA.customRaw);
     const nameTrim = uForm.displayName.trim();
     const initials = computeInitials(nameTrim, uForm.email);
     const avatarDataUrl = uForm.avatarDataUrl || undefined;
     const pwd = (uForm.password ?? "").trim();
-    let passwordPatch: Partial<Pick<SystemAppUser, "passwordHash" | "salt">> = {};
+    const payloadLocal: Partial<SystemAppUser> = {
+      displayName: nameTrim,
+      email: uForm.email.trim(),
+      role: uForm.role,
+      whatsapp: waFinal || undefined,
+      bdManagerFullName: uForm.bdManagerFullName?.trim() || undefined,
+      avatarInitials: initials,
+      avatarDataUrl,
+      enabled: !!uForm.enabled,
+    };
     if (pwd) {
       const hashed = await hashCustomUserPassword(pwd);
-      passwordPatch = { passwordHash: hashed.passwordHash, salt: hashed.salt };
+      payloadLocal.passwordHash = hashed.passwordHash;
+      payloadLocal.salt = hashed.salt;
     }
+    let optimisticId = editingUserId ?? "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     let nextList: SystemAppUser[];
     if (editingUserId) {
       nextList = users.map((u) =>
         u.id === editingUserId
-          ? {
+          ? ({
               ...u,
-              ...uForm,
+              ...payloadLocal,
               id: editingUserId,
               avatarInitials: initials || u.avatarInitials,
               avatarDataUrl,
               whatsapp: waFinal || undefined,
-              ...passwordPatch,
               password: undefined,
               confirmPassword: undefined,
-            } as SystemAppUser
+            } as SystemAppUser)
           : u
       );
-      setUsers(nextList);
-      logAudit({
-        action: "account_update",
-        actorId: currentUser?.id,
-        actorEmail: currentUser?.email,
-        role: currentRole,
-        resource: `settings:account:${editingUserId}`,
-        detail: {
-          targetUserId: editingUserId,
-          targetEmail: uForm.email,
-          targetRole: uForm.role,
-        },
-      });
-      toast.success("账号已更新");
     } else {
       const newU: SystemAppUser = {
-        id: "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        id: optimisticId,
         displayName: nameTrim,
         email: uForm.email.trim(),
         role: uForm.role,
@@ -596,29 +662,76 @@ export default function SettingsPage() {
         avatarDataUrl,
         enabled: !!uForm.enabled,
         createdAt: new Date().toISOString(),
-        ...passwordPatch,
+        passwordHash: payloadLocal.passwordHash,
+        salt: payloadLocal.salt,
       };
       nextList = [...users, newU];
-      setUsers(nextList);
-      logAudit({
-        action: "account_create",
-        actorId: currentUser?.id,
-        actorEmail: currentUser?.email,
-        role: currentRole,
-        resource: `settings:account:${newU.id}`,
-        detail: {
-          targetUserId: newU.id,
-          targetEmail: newU.email,
-          targetRole: newU.role,
-        },
-      });
-      toast.success("账号创建成功");
     }
+    setUsers(nextList);
+    try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(nextList)); } catch {}
+
+    let apiOk = false;
+    let storedHint: "db" | "pending" | null = null;
+    let apiError: string | null = null;
     try {
-      localStorage.setItem(USERS_LS_KEY, JSON.stringify(nextList));
-    } catch (e) {}
-    setSaved("user");
-    setUserDlgOpen(false);
+      const apiPayload: any = { ...payloadLocal };
+      if (pwd) apiPayload.password = pwd;
+      let url = "/api/auth/manage";
+      let method: "POST" | "PATCH" = "POST";
+      if (editingUserId) {
+        url = `/api/auth/manage/${encodeURIComponent(editingUserId)}`;
+        method = "PATCH";
+      }
+      const resp = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify(apiPayload),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.status === 200 || resp.status === 202) {
+        apiOk = true;
+        storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+        if (!editingUserId && data?.user?.id) {
+          optimisticId = String(data.user.id);
+        }
+      } else {
+        apiError = data?.error ?? `HTTP ${resp.status}`;
+      }
+    } catch (err: any) {
+      apiError = err?.message ?? "网络错误";
+    }
+
+    logAudit({
+      action: editingUserId ? "account_update" : "account_create",
+      actorId: currentUser?.id,
+      actorEmail: currentUser?.email,
+      role: currentRole,
+      resource: `settings:account:${optimisticId}`,
+      detail: {
+        targetUserId: optimisticId,
+        targetEmail: uForm.email,
+        targetRole: uForm.role,
+        stored: storedHint,
+        apiError,
+      },
+    });
+
+    if (apiOk) {
+      const msg = editingUserId ? "账号已更新" : "账号创建成功";
+      if (storedHint === "pending") toast.success(msg + "（当前 DB 未连接，已保存在本地，稍后自动同步）");
+      else toast.success(msg);
+      setSaved("user");
+      setUserDlgOpen(false);
+      setTimeout(async () => {
+        try { await loadRemoteUsers(); } catch {}
+        try { await refreshMe(); } catch {}
+      }, 280);
+    } else {
+      toast.error((editingUserId ? "更新失败：" : "创建失败：") + (apiError ?? "服务端暂不可用，已保存在本地备用"));
+      setSaved("user");
+      setUserDlgOpen(false);
+    }
+    setUsersSaving(false);
   };
   const removeUser = (id: string) => {
     if (currentRole !== APP_ROLES.ADMIN) {
@@ -628,7 +741,8 @@ export default function SettingsPage() {
     const target = users.find((u) => u.id === id);
     setConfirmation({
       title: "确认删除该账号？",
-      run: () => {
+      run: async () => {
+        setUsersSaving(true);
         setUsers((list) => list.filter((u) => u.id !== id));
         try {
           localStorage.setItem(
@@ -636,6 +750,26 @@ export default function SettingsPage() {
             JSON.stringify(users.filter((u) => u.id !== id))
           );
         } catch (e) {}
+
+        let apiOk = false;
+        let storedHint: "db" | "pending" | null = null;
+        let apiError: string | null = null;
+        try {
+          const resp = await fetch(`/api/auth/manage/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+            headers: { "Cache-Control": "no-store" },
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (resp.status === 200 || resp.status === 202) {
+            apiOk = true;
+            storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+          } else {
+            apiError = data?.error ?? `HTTP ${resp.status}`;
+          }
+        } catch (err: any) {
+          apiError = err?.message ?? "网络错误";
+        }
+
         logAudit({
           action: "account_delete",
           actorId: currentUser?.id,
@@ -646,9 +780,22 @@ export default function SettingsPage() {
             targetUserId: id,
             targetEmail: target?.email ?? null,
             targetRole: target?.role ?? null,
+            stored: storedHint,
+            apiError,
           },
         });
-        toast.success(target ? `已删除账号 ${target.email}` : "已删除账号");
+        if (apiOk) {
+          const baseMsg = target ? `已删除账号 ${target.email}` : "已删除账号";
+          if (storedHint === "pending") toast.success(baseMsg + "（当前 DB 未连接，稍后自动同步）");
+          else toast.success(baseMsg);
+          setTimeout(async () => {
+            try { await loadRemoteUsers(); } catch {}
+            try { await refreshMe(); } catch {}
+          }, 220);
+        } else {
+          toast.error("删除失败：" + (apiError ?? "服务端暂不可用"));
+        }
+        setUsersSaving(false);
       },
     });
   };
@@ -664,14 +811,36 @@ export default function SettingsPage() {
       } catch (e) {}
       return next;
     });
-    logAudit({
-      action: "account_update",
-      actorId: currentUser?.id,
-      actorEmail: currentUser?.email,
-      role: currentRole,
-      resource: `settings:account:${id}`,
-      detail: { targetUserId: id, enabled },
-    });
+    void (async () => {
+      let storedHint: "db" | "pending" | null = null;
+      let apiError: string | null = null;
+      try {
+        const resp = await fetch(`/api/auth/manage/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+          body: JSON.stringify({ enabled }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.status === 200 || resp.status === 202) {
+          storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+        } else {
+          apiError = data?.error ?? `HTTP ${resp.status}`;
+        }
+      } catch (err: any) {
+        apiError = err?.message ?? "网络错误";
+      }
+      logAudit({
+        action: "account_update",
+        actorId: currentUser?.id,
+        actorEmail: currentUser?.email,
+        role: currentRole,
+        resource: `settings:account:${id}`,
+        detail: { targetUserId: id, enabled, stored: storedHint, apiError },
+      });
+      if (storedHint === "pending") toast((enabled ? "已启用账号（" : "已停用账号（") + "当前 DB 未连接，稍后自动同步）");
+      else if (apiError) toast.error("状态同步失败：" + apiError);
+      try { await loadRemoteUsers(); } catch {}
+    })();
   };
 
   const save = (label: string) => {

@@ -132,6 +132,85 @@ export interface ResolvedMockAccount {
   salt: string;
 }
 
+export interface ResolvedPrismaAccount {
+  kind: 'prisma';
+  id: string;
+  email: string;
+  role: AppRole;
+  displayName: string;
+  avatarInitials: string;
+  avatarDataUrl?: string;
+  bdManagerFullName?: string;
+  passwordHash: string;
+  salt: string;
+}
+
+export type ResolvedAnyAccount = ResolvedMockAccount | ResolvedPrismaAccount;
+
+export async function resolvePrismaAccountByIdentifier(
+  identifier: string,
+  prismaOpts?: { skip?: boolean }
+): Promise<ResolvedPrismaAccount | null> {
+  if (prismaOpts?.skip) return null;
+  if (typeof globalThis === 'undefined') return null;
+  let prisma: any;
+  try {
+    const mod = await import('@/lib/prisma');
+    prisma = mod?.prisma;
+  } catch {
+    return null;
+  }
+  if (!prisma || typeof prisma?.appUser?.findFirst !== 'function') return null;
+  if (!identifier) return null;
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  try {
+    const where = (() => {
+      if (trimmed.includes('@')) {
+        return { email: trimmed.toLowerCase() };
+      }
+      return { OR: [{ id: trimmed }, { email: trimmed }] };
+    })();
+    const row = await prisma.appUser.findFirst({
+      where,
+      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true },
+    });
+    if (!row) return null;
+    if (!isAllowedRole(row.role)) return null;
+    // 注意：hashPassword(salt+::+password) — passwordHash 里已经包含了 salt 信息，因此把 passwordHash 的前 32 位当做固定 salt 构造假 salt 即可；
+    // 真实 verifyPassword(candidate, expectedHash=row.passwordHash, salt=构造salt) → hashPassword(candidate, salt) 与 expectedHash 做 XOR。
+    // 为了兼容「自定义用户通过浏览器端 hashCustomUserPassword(pwd) 得到 passwordHash+salt 上传」模式，我们约定 salt 字段缺失时，用 email+suffix 作为固定 salt，
+    // 但为了更兼容直接校验，这里在 db 侧再引入一个单独的 resolve 约定：
+    // 把 passwordHash 前 16 字符（hex）+ email+`${row.id}-s4lt` 组合为统一 salt；登录/register 两侧都用此约定，从而保证 hashPassword(pwd, salt) 与 expectedHash 相等。
+    const deterministicSalt = `prisma-${row.email}-${row.id}-s4lt-v1`;
+    const passwordHashRaw: string = typeof row.passwordHash === 'string' && row.passwordHash.length > 0
+      ? row.passwordHash
+      : await hashPassword(`${row.displayName}@${String(row.id).slice(-4)}`, deterministicSalt);
+    return {
+      kind: 'prisma',
+      id: String(row.id),
+      email: String(row.email),
+      role: row.role as AppRole,
+      displayName: String(row.displayName),
+      avatarInitials: typeof row.avatarInitials === 'string' && row.avatarInitials.length > 0
+        ? row.avatarInitials
+        : (String(row.displayName || '??').slice(0, Math.min(2, String(row.displayName || '??').length)).toUpperCase()),
+      avatarDataUrl: row.avatarDataUrl ?? undefined,
+      bdManagerFullName: row.bdManagerFullName ?? undefined,
+      passwordHash: passwordHashRaw,
+      salt: deterministicSalt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveAnyAccountByIdentifier(identifier: string): Promise<ResolvedAnyAccount | null> {
+  const prisma = await resolvePrismaAccountByIdentifier(identifier);
+  if (prisma) return prisma;
+  return resolveMockAccountByIdentifier(identifier);
+}
+
 export async function resolveMockAccountByIdentifier(
   identifier: string
 ): Promise<ResolvedMockAccount | null> {

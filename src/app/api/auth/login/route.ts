@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { signSessionJwt, buildSetCookieHeader, buildClearCookieHeader, RC_SESSION_COOKIE } from '@/lib/auth/session';
 import { isAllowedRole, type AppSessionUser } from '@/types/auth';
 import {
-  resolveMockAccountByIdentifier,
+  resolveAnyAccountByIdentifier,
   verifyPassword,
 } from '@/lib/auth/password';
+import type { ResolvedAnyAccount } from '@/lib/auth/password';
 
 export const runtime = 'nodejs';
 
@@ -89,8 +90,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const account = await resolveMockAccountByIdentifier(identifier);
-    const accountKey = account ? account.key : null;
+    const account: ResolvedAnyAccount | null = await resolveAnyAccountByIdentifier(identifier);
+    const accountKey = account?.kind === 'built-in' ? account.key : (account?.id ?? null);
     if (hitRateLimit(ip, accountKey)) {
       const retryAfterSec = Math.ceil(LOGIN_THROTTLE_WINDOW_MS / 1000);
       return NextResponse.json(
