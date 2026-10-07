@@ -288,6 +288,7 @@ export function generateMockData(): MockDataSet {
 
       clients.push({
         id: `client-${MOCK_BASE_SEED}-${i}-${c}`,
+        clientNo: null,
         batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
         name: clientName,
         investmentAmount,
@@ -461,6 +462,7 @@ export function generateMockData(): MockDataSet {
       const nextIdx = target.clients.length;
       const clone: Client = {
         id: `client-mb-${MOCK_BASE_SEED}-${person.name}-${part.batchIndex}-${p}`,
+        clientNo: null,
         batchId: target.id,
         name: person.name,
         investmentAmount: part.investmentAmount,

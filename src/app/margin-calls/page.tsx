@@ -173,6 +173,13 @@ export default function MarginCallsPage() {
           Icon: XCircle,
           color: "text-muted-foreground",
         };
+      default:
+        return {
+          variant: "secondary" as const,
+          label: "未知",
+          Icon: AlertCircle,
+          color: "text-muted-foreground",
+        };
     }
   };
 
