@@ -226,7 +226,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
     <Link
       href={`/batch/${batch.id}`}
       className={cn(
-        "group relative rounded-2xl overflow-hidden cursor-pointer flex flex-col min-h-[520px]",
+        "group relative rounded-2xl overflow-hidden cursor-pointer grid grid-rows-[auto_1fr_auto] h-full w-full",
         chrome
       )}
       onClick={handleClick}
@@ -246,25 +246,25 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== 股票持仓信息（需求#1新增5项）===== */}
-      <div className="mx-5 mb-4 rounded-xl border border-border/55 bg-background/40 p-3.5 space-y-2">
-        <div className="flex items-center justify-between">
+      <div className="mx-5 mb-4 rounded-xl border border-border/55 bg-background/40 p-3.5 space-y-2 min-h-[156px] flex flex-col">
+        <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
             <DollarSign className="h-3 w-3" />
             买入均价
           </div>
-          <p className="text-[11px] font-mono font-semibold tabular-nums">
+          <p className="text-[11px] font-mono font-semibold tabular-nums shrink-0">
             ${avgBuyPrice.toFixed(2)}
           </p>
         </div>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
             <Building2 className="h-3 w-3" />
             当前股价
           </div>
-          <div className="flex items-center justify-end gap-2 ml-auto">
+          <div className="flex items-center justify-end gap-2 ml-auto shrink-0">
             <span
               className={cn(
-                "rounded-md px-2 py-0.5 text-[10.5px] font-bold font-mono tabular-nums tracking-tight",
+                "rounded-md px-2 py-0.5 text-[10.5px] font-bold font-mono tabular-nums tracking-tight shrink-0",
                 priceChangePct > 0
                   ? "bg-success text-white shadow-[0_0_0_1px_hsl(var(--success)/0.4)_inset]"
                   : priceChangePct < 0
@@ -280,26 +280,26 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
               formatter="number"
               digits={2}
               prefix="$"
-              className="text-[12px] font-mono font-bold tabular-nums"
+              className="text-[12px] font-mono font-bold tabular-nums shrink-0"
             />
           </div>
         </div>
-        <div className="h-px bg-border/45 my-2" />
-        <div className="flex items-center justify-between">
+        <div className="h-px bg-border/45 my-2 shrink-0" />
+        <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
             <SharesIcon className="h-3 w-3" />
             持仓股数
           </div>
-          <p className="text-[11px] font-mono font-semibold tabular-nums">
+          <p className="text-[11px] font-mono font-semibold tabular-nums shrink-0">
             {formatCompactNumber(shares)}
           </p>
         </div>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
+        <div className="flex items-center justify-between flex-1 min-h-0">
+          <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground shrink-0">
             <Users className="h-3 w-3" />
             批次客户数
           </div>
-          <div className="flex flex-col items-end justify-end">
+          <div className="flex flex-col items-end justify-end shrink-0">
             <p className="text-[11px] font-mono font-semibold tabular-nums leading-tight">
               {batch.clients?.length ?? 0} 位
             </p>
@@ -318,9 +318,9 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== 风险程度（左=0% 绿=低风险 → 右=20% 红=已击穿）===== */}
-      <div className="px-5 pb-4">
+      <div className="px-5 pb-4 min-h-[92px]">
         <div className="flex items-center justify-between text-[10px] mb-1.5 gap-2">
-          <div className="flex items-center gap-1 text-muted-foreground">
+          <div className="flex items-center gap-1 text-muted-foreground shrink-0">
             {isProfitable ? (
               <>
                 <TrendingUp className="h-3 w-3 text-success" />
@@ -336,11 +336,11 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
           {isProfitable ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums leading-tight">
+                <div className="flex flex-col items-end gap-0.5 font-mono tabular-nums leading-tight min-w-0">
                   <span className={cn("font-bold text-[11px]", stageColor)}>
                     盈利中 +{totalPnLPct.toFixed(2)}%
                   </span>
-                  <span className="text-[10px] text-success/90 whitespace-nowrap overflow-hidden text-ellipsis max-w-[180px]">
+                  <span className="text-[10px] text-success/90 whitespace-nowrap overflow-hidden text-ellipsis">
                     +{formatCurrency(totalPnL)}
                   </span>
                 </div>
@@ -352,7 +352,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
               </TooltipContent>
             </Tooltip>
           ) : (
-            <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap", stageColor)}>
+            <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap shrink-0", stageColor)}>
               {stageLabel}
             </span>
           )}
@@ -402,7 +402,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== Stats row ===== */}
-      <div className="px-5 pb-4 grid grid-cols-3 gap-2">
+      <div className="px-5 pb-4 grid grid-cols-3 gap-2 min-h-[96px]">
         <StatTile
           label="当前仓位价值"
           valueNode={
@@ -471,8 +471,8 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== P&L split ===== */}
-      <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3">
-        <div className="grid grid-cols-2 gap-2.5">
+      <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3 min-h-[130px] flex items-stretch">
+        <div className="grid grid-cols-2 gap-2.5 w-full">
           <PnLChip
             label="机构盈利"
             pnl={split.institutionTotalPnL}

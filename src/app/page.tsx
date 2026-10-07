@@ -536,8 +536,8 @@ export default function DashboardPage() {
                 />
               );
               return (
-                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24">
-                  {anchor ? <div id={anchor}>{card}</div> : card}
+                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24 h-full">
+                  {anchor ? <div id={anchor} className="h-full">{card}</div> : card}
                 </div>
               );
             });
