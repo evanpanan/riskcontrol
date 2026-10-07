@@ -132,7 +132,7 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     try { console.error("[manage:get] db unavailable:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
-      { ok: true, receivedAt: new Date().toISOString(), users: [], stored: "pending", dbError: "database_unavailable" },
+      { ok: true, receivedAt: new Date().toISOString(), users: [], stored: "degraded", dbError: "database_unavailable" },
       { status: 202, headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -221,14 +221,6 @@ export async function POST(req: NextRequest) {
         stored: "failed",
         dbError: "database_unavailable",
         error: "数据库未连接，账号未保存，请稍后重试",
-        user: {
-          id: newId ?? "u_pending_" + Date.now().toString(36),
-          email,
-          displayName,
-          role,
-          avatarInitials,
-          bdManagerFullName,
-        },
       },
       { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" } },
     );

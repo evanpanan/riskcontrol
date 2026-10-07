@@ -692,7 +692,7 @@ export default function SettingsPage() {
       const data = await resp.json().catch(() => ({}));
       if (resp.status === 200 || resp.status === 202) {
         apiOk = true;
-        storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+        storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
         if (!editingUserId && data?.user?.id) {
           optimisticId = String(data.user.id);
         }
@@ -772,7 +772,7 @@ export default function SettingsPage() {
           const data = await resp.json().catch(() => ({}));
           if (resp.status === 200 || resp.status === 202) {
             apiOk = true;
-            storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+            storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
           } else {
             apiError = data?.error ?? `HTTP ${resp.status}`;
             storedHint = data?.stored === "failed" ? "failed" : null;
@@ -838,7 +838,7 @@ export default function SettingsPage() {
         });
         const data = await resp.json().catch(() => ({}));
         if (resp.status === 200 || resp.status === 202) {
-          storedHint = data?.stored === "db" ? "db" : data?.stored === "pending" ? "pending" : null;
+          storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
         } else {
           apiError = data?.error ?? `HTTP ${resp.status}`;
           storedHint = data?.stored === "failed" ? "failed" : null;
