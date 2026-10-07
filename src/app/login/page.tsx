@@ -166,7 +166,12 @@ function LoginPageInner() {
     if (Object.keys(nextErrors).length > 0) return;
 
     setIsSubmitting(true);
-    setTimeout(async () => {
+    // NOTE: run synchronously.  The former `setTimeout(..., 320)` wrapper
+    // caused navigation timers to be lost whenever React / Fast Refresh
+    // remounted the component between submission and the timer firing.  All
+    // setTimeouts for navigation are scheduled in the first synchronous tick
+    // of finishLogin so they cannot be lost.
+    (async () => {
       // Step 1: Client-side credential pre-verify for built-in accounts
       // (keeps toast UX tight; server is authoritative).
       let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
@@ -230,9 +235,11 @@ function LoginPageInner() {
         return;
       }
 
-      // Step 2: builtIn accounts → call serverLoginCredentials (service-side password
-      // re-verify, issues HttpOnly cookie).  custom accounts → optimistic local session.
-      const session = localSession;
+      // Step 2: builtIn accounts → call serverLoginCredentials (service-side
+      // password re-verify + HttpOnly cookie).  custom accounts → optimistic local.
+      // NOTE: use `let session` because serverLoginCredentials can enrich the
+      // identity with server-returned authoritative fields.
+      let session = localSession;
       const kind = kindHint;
       const onSuccessAudit = () => {
         logAudit({
@@ -247,71 +254,119 @@ function LoginPageInner() {
 
       const finishLogin = async () => {
         onSuccessAudit();
-        setWelcomeState({
-          visible: true,
-          displayName: session.displayName,
-          role: session.role,
-          email: session.email,
-        });
-        let cookieIssued = false;
-        if (kind === "builtIn") {
-          const serverUser = await serverLoginCredentials(identifier, password);
-          if (serverUser && serverUser.email) {
-            // Use server-returned identity (authoritative).
-            session.id = serverUser.id;
-            session.email = serverUser.email;
-            session.role = serverUser.role;
-            session.displayName = serverUser.displayName;
-            session.avatarInitials = serverUser.avatarInitials;
-            session.avatarDataUrl = serverUser.avatarDataUrl;
-            session.bdManagerFullName = serverUser.bdManagerFullName;
-            cookieIssued = true;
-          } else {
-            // Server rejected: treat as failed.
-            setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
-            setIsSubmitting(false);
-            setWelcomeState(null);
-            logAuthDeny({
-              action: 'login_denied',
-              resource: 'auth:login',
-              reason: 'server_password_verify_rejected',
-              userId: session.id,
-              role: session.role,
-            });
-            toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" });
-            return false;
-          }
-        } else {
-          loginAsCustom(session);
-        }
-        if (remember) {
-          try {
-            window.localStorage.setItem("risk_control_remember_email", session.email);
-            window.localStorage.setItem(
-              "risk_control_last_login_at",
-              new Date().toISOString().slice(0, 16).replace("T", " ")
-            );
-          } catch { /* ignore */ }
-        } else {
-          try { window.localStorage.removeItem("risk_control_remember_email"); } catch { /* ignore */ }
-        }
-        const dest = nextPath ? decodeURIComponent(nextPath) : "/";
-        const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-        setTimeout(() => {
-          toast.success(`欢迎回来，${session.displayName}`);
-        }, 80);
-        setTimeout(() => {
-          if (cookieIssued) {
+        // FIRST: register navigation timers BEFORE rendering the welcome
+        // overlay.  Even if the overlay render throws a runtime error during
+        // React commit / CSS-in-JS style injection, these setTimeouts are
+        // already scheduled on the event loop and will still fire.
+        let cookieIssuedForNavigation = false;
+        let effectiveDestination: string = "/";
+        const doNavigate = () => {
+          const dest = effectiveDestination;
+          const abs = `${window.location.protocol}//${window.location.host}${dest}`;
+          if (cookieIssuedForNavigation) {
             try { window.location.replace(abs); } catch { window.location.href = abs; }
           } else {
-            router.push(dest);
+            try { router.push(dest); } catch { window.location.href = abs; }
           }
+        };
+        // Primary: navigate after the welcome animation (~ 780ms feels natural).
+        const primaryTimer = window.setTimeout(() => {
+          try { doNavigate(); } catch { /* ignore */ }
         }, 780);
-        return true;
+        // Failsafe (HARD GUARANTEE): if pathname is still /login at 3.0s, force
+        // navigate.  This works even if the welcome overlay rendered with
+        // errors, or Fast Refresh unmounted the component.
+        const failsafeTimer = window.setTimeout(() => {
+          try {
+            if (typeof window !== "undefined" && window.location.pathname === "/login") {
+              doNavigate();
+            }
+          } catch { /* ignore */ }
+        }, 3000);
+        const cleanupTimers = () => {
+          try { clearTimeout(primaryTimer); } catch { /* ignore */ }
+          try { clearTimeout(failsafeTimer); } catch { /* ignore */ }
+        };
+
+        try {
+          setWelcomeState({
+            visible: true,
+            displayName: session.displayName,
+            role: session.role,
+            email: session.email,
+          });
+          let cookieIssued = false;
+          if (kind === "builtIn") {
+            const serverUser = await serverLoginCredentials(identifier, password);
+            if (serverUser && serverUser.email) {
+              // Server identity is authoritative.  Merge (server fields override
+              // the optimistic local one).
+              session = {
+                ...session,
+                id: serverUser.id,
+                email: serverUser.email,
+                role: serverUser.role,
+                displayName: serverUser.displayName || session.displayName,
+                avatarInitials: serverUser.avatarInitials || session.avatarInitials,
+                avatarDataUrl: serverUser.avatarDataUrl || session.avatarDataUrl,
+                bdManagerFullName: serverUser.bdManagerFullName || session.bdManagerFullName,
+              };
+              cookieIssued = true;
+            } else {
+              // Server rejected: treat as failed.
+              cleanupTimers();
+              setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
+              setIsSubmitting(false);
+              setWelcomeState(null);
+              logAuthDeny({
+                action: 'login_denied',
+                resource: 'auth:login',
+                reason: 'server_password_verify_rejected',
+                userId: session.id,
+                role: session.role,
+              });
+              toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" });
+              return false;
+            }
+          } else {
+            loginAsCustom(session);
+          }
+          if (remember) {
+            try {
+              window.localStorage.setItem("risk_control_remember_email", session.email);
+              window.localStorage.setItem(
+                "risk_control_last_login_at",
+                new Date().toISOString().slice(0, 16).replace("T", " ")
+              );
+            } catch { /* ignore */ }
+          } else {
+            try { window.localStorage.removeItem("risk_control_remember_email"); } catch { /* ignore */ }
+          }
+          const dest = nextPath ? decodeURIComponent(nextPath) : "/";
+          effectiveDestination = dest;
+          cookieIssuedForNavigation = cookieIssued;
+          setTimeout(() => {
+            try { toast.success(`欢迎回来，${session.displayName}`); } catch { /* ignore */ }
+          }, 80);
+          return true;
+        } catch (err) {
+          // Any runtime error → still force navigate (cookie is probably set
+          // by serverLoginCredentials before the throw).  But clean timers
+          // first so we don't double-navigate, then force a final attempt.
+          cleanupTimers();
+          try {
+            if (typeof window !== "undefined" && window.location.pathname === "/login") {
+              const dest = nextPath ? decodeURIComponent(nextPath) : "/";
+              const abs = `${window.location.protocol}//${window.location.host}${dest}`;
+              window.location.href = abs;
+            }
+          } catch { /* ignore */ }
+          return true;
+        }
       };
 
       void finishLogin().finally(() => setIsSubmitting(false));
-    }, 320);
+    })();
   };
 
   return (

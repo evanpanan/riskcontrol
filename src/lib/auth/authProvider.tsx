@@ -68,17 +68,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setSession = useCallback((next: AppSessionUser | null) => {
     setUser((prev) => {
-      if (!next && !prev) return prev;
-      if (next && prev && JSON.stringify(next) === JSON.stringify(prev)) return prev;
-      // only dispatch event for NON-null transitions to avoid setSession(null) → refreshMe() 401 → setSession(null) infinite recursion
-      if (next) {
-        try {
-          window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
-        } catch {
-          /* ignore */
-        }
+      if (!next) {
+        if (!prev) return prev;
+        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        return null;
       }
-      return next;
+      // Sanitize: drop undefined keys so React setState stays a plain object
+      // (some server payloads omit optional fields like avatarDataUrl /
+      // bdManagerFullName / displayName, so merge with prev for the same user id).
+      const sameId = !!prev && next.id === prev.id;
+      const base = sameId ? prev : null;
+      const sanitizedRaw: Partial<AppSessionUser> & { id: string; email: string; role: AppRole } = {
+        id: next.id,
+        email: next.email,
+        role: next.role,
+      };
+      if (next.displayName !== undefined) sanitizedRaw.displayName = next.displayName;
+      else if (base && base.displayName) sanitizedRaw.displayName = base.displayName;
+      if (next.avatarInitials !== undefined) sanitizedRaw.avatarInitials = next.avatarInitials;
+      else if (base && base.avatarInitials) sanitizedRaw.avatarInitials = base.avatarInitials;
+      if (next.avatarDataUrl !== undefined) sanitizedRaw.avatarDataUrl = next.avatarDataUrl;
+      else if (base && base.avatarDataUrl) sanitizedRaw.avatarDataUrl = base.avatarDataUrl;
+      if (next.bdManagerFullName !== undefined) sanitizedRaw.bdManagerFullName = next.bdManagerFullName;
+      else if (base && base.bdManagerFullName) sanitizedRaw.bdManagerFullName = base.bdManagerFullName;
+      const sanitized = sanitizedRaw as AppSessionUser;
+      if (prev && JSON.stringify(prev) === JSON.stringify(sanitized)) return prev;
+      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(sanitized)); } catch {}
+      try {
+        window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: sanitized }));
+      } catch {
+        /* ignore */
+      }
+      return sanitized;
     });
   }, []);
 
@@ -192,10 +213,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: data.user.id,
         email: data.user.email,
         role: isAllowedRole(data.user.role) ? data.user.role : APP_ROLES.RISK_MANAGER,
-        displayName: data.user.displayName,
-        avatarInitials: data.user.avatarInitials,
-        avatarDataUrl: data.user.avatarDataUrl,
-        bdManagerFullName: data.user.bdManagerFullName,
+        displayName: data.user.displayName || data.user.email.split('@')[0] || 'User',
+        avatarInitials: data.user.avatarInitials || (data.user.displayName || data.user.email || '??').slice(0, 2).toUpperCase(),
+        avatarDataUrl: data.user.avatarDataUrl || undefined,
+        bdManagerFullName: data.user.bdManagerFullName || undefined,
       };
       try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(fetched)); } catch {}
       setSession(fetched);
