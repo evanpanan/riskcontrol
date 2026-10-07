@@ -27,7 +27,8 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
         setTick((x) => x + 1);
       } catch (error) {
         const devMode =
-          process.env.NODE_ENV === "development" ||
+          typeof window !== "undefined" &&
+          process.env.NODE_ENV === "development" &&
           /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
         if (devMode && (window as any).__RISK_RESET_TEST_DATA__) {
           try {
@@ -63,8 +64,8 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
   if (!batch) {
     const devMode =
       typeof window !== "undefined" &&
-      (process.env.NODE_ENV === "development" ||
-        /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host));
+      process.env.NODE_ENV === "development" &&
+      /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
     return (
       <div className="max-w-4xl mx-auto text-center py-20 px-4 space-y-6">
       <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">

@@ -9,6 +9,13 @@ export const config = {
     '/batch/:path*',
     '/settings/:path*',
     '/settings',
+    '/margin-calls/:path*',
+    '/margin-calls',
+    '/alerts/:path*',
+    '/alerts',
+    '/market/:path*',
+    '/market',
+    '/bd/:path*',
   ],
 };
 

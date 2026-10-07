@@ -18,6 +18,7 @@ import {
   calculateClientSettlement,
   isTopupBlockedByLegacyLedger,
 } from "@/lib/riskEngine";
+import { getStoredThresholds } from "@/lib/thresholds";
 import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
 import { commitBatchFinance, getMockData } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -236,6 +237,15 @@ interface BatchDetailContentProps {
 }
 
 export function BatchDetailContent({ batch, compact = false, onBack, onChange }: BatchDetailContentProps) {
+  const thresholds = useMemo(() => {
+    try {
+      return getStoredThresholds();
+    } catch {
+      return null;
+    }
+  }, [batch.id]);
+  const warningPct = thresholds?.warningDropPercent ?? 15;
+  const marginPct = thresholds?.marginDropPercent ?? 20;
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
@@ -966,7 +976,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
             <div className="mt-1 flex justify-between text-[9px] font-mono tabular-nums">
               <span className="text-success font-semibold">0%</span>
-              <span className="text-danger font-semibold">20%</span>
+              <span className="text-danger font-semibold">{Math.round(marginPct)}%</span>
             </div>
           </div>
 
@@ -976,9 +986,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <p className="text-sm font-mono font-semibold">{formatCurrency(baseCapital)}</p>
             </div>
             <div className="rounded-lg bg-secondary/50 p-3">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">80% 预警阈值</p>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+                {Math.round(warningPct)}% 预警阈值（含补仓）
+              </p>
               <p className="text-sm font-mono font-semibold text-warning">
-                {formatCurrency(baseCapital * 0.8)}
+                {formatCurrency((metrics.activeSubsetInitialPrincipal ?? baseCapital) * (1 - warningPct / 100))}
               </p>
             </div>
             <div className="rounded-lg bg-secondary/50 p-3">
@@ -996,7 +1008,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               )}
             >
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-                需补仓金额 (击穿20%)
+                需补仓金额 (击穿 {Math.round(marginPct)}%)
               </p>
               <p
                 className={cn(

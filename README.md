@@ -100,13 +100,18 @@
 - **Yield 收益率去变色恒 foreground**：综合收益率 KPI 不再因涨跌切换红绿，永久显示默认 foreground 色，搭配镜像 defs 渐变
 
 ### 🔐 登录与 HttpOnly 会话（P0 安全整改）
+- **服务端权威密码校验（P0-2 A1 一轮补修，v2.1）**：`POST /api/auth/login` 入参收缩为仅 `{identifier, password}`，**绝对不接受客户端声明的 id/role/displayName/avatar/preVerified**；服务端 `resolveMockAccountByIdentifier` 按账号 key 或邮箱查表 → `verifyPassword` 比对 HMAC 哈希 → 只有通过才构造 AppSessionUser 并签 session；IP 级 60s≤10 次 + IP+账号级 60s≤5 次双限流；账号不存在/密码错误/限流/角色非法统一返回 **401 「凭据错误或账号不存在，请勿尝试枚举」**（防用户名枚举）；built-in 账号 100% 走服务端校验才能获得 Cookie；Settings 自定义账号保持浏览器本地乐观模式（暂无服务端表，demo 级保留）
 - **服务端强制 HttpOnly Cookie 会话（P0-4 修复 / 路线 A 真做）**：不再把 JWT 放浏览器 `localStorage`；`POST /api/auth/login` 返回 Set-Cookie `rc_session_v1`（HttpOnly / Path=/ / SameSite=Lax / 生产 Secure / 12h），JS 完全读不到；`/api/auth/me` 返回当前用户；`/api/auth/logout` 清 Cookie
-- **Next.js Middleware 5 路径强守卫**：`src/middleware.ts` matcher=['/','/clients*','/batch*','/settings*'] 无有效签名直接 302 `/login?next=`，无效 cookie 立即清；`/settings` 还需 INSTITUTION_ROLES 四档
+- **Next.js Middleware 12 路径强守卫（P0-4 A2 matcher 补漏，v2.1）**：`src/middleware.ts` matcher=['/','/clients*','/batch*','/settings*','/settings','/margin-calls/:path*','/margin-calls','/alerts/:path*','/alerts','/market/:path*','/market','/bd/:path*'] 无有效签名直接 307 `/login?next=`，无效 cookie 立即清；`/settings` 还需 INSTITUTION_ROLES 四档
 - **JWT 自研 HMAC-SHA256 手搓，Edge+Node 双兼容**：[session.ts](src/lib/auth/session.ts) 完全弃 Node.js `require('crypto')`，改用 Web Crypto `globalThis.crypto.subtle`（middleware Edge Runtime 原生可用），含恒时 XOR diff 防时序侧信道
-- **一键抹账（P0-1 修复）**：清空客户台账前自动 ZIP 备份并触发下载，备份 JSON 可于 [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) 导入还原；操作写入 audit log
+- **一键抹账（P0-1 修复 + v2.1 双条件收紧）**：清空客户台账前自动 ZIP 备份并触发下载，备份 JSON 可于 [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) 导入还原；操作写入 audit log；**v2.1 新增：devMode 判定从「(NODE_ENV=dev) || (localhost|127.0.0.1|:300[0-9]$)」双或收紧为「NODE_ENV=development AND localhost/127.0.0.1/300x 端口」**（见 layout.tsx L62、page.tsx ×3、batch/[id]/page.tsx ×2、audit.ts），避免生产环境若意外占 300x 端口被挂上抹账函数
 - **登录入口加固（P0-2 修复）**：`layout.tsx` `devMode 自动登录` 彻底移除；任何未登录受保护路径必须走 `/login` 表单 + 邮箱密码校验；Banner 必须显示当前角色
 - **自建 ADMIN 越权（P0-3 修复）**：Settings 页 4 处 RoleGate 包裹（新增账号 / ADMIN 角色选框 / 阈值卡 / 收件人编辑），只有角色本身允许的 UI 才渲染；客户端+服务端双校验
 - **🛡 登录欢迎过渡动画（商用级）**：点击"登录进入工作台"→凭据校验通过 → [page.tsx WelcomeTransitionOverlay](src/app/login/page.tsx#L527-L709) 全屏遮罩：Logo 旋转光晕 + Authentication Verified 副文案 +「欢迎登录 RiskControl」渐变字 + 身份卡（首字母头像/角色徽章/邮箱）+ 进度条填充+扫光 + 780ms 后整页 `window.location.replace` 跳工作台（**避免 SPA NextRouter.push 跨 Set-Cookie 边界丢会话**）；7 段内联 keyframes（fade-in / pop-in / slide-up / pulse-soft / spin-slow / progress-fill / progress-shimmer / blink）
+- **🖼 阈值口径 & 接入引擎（P1-5 / P1-6 A3+A4 一轮补修，v2.1）**：
+  - `riskEngine.getBatchMetrics` 删除内嵌 IIFE 直接摸 localStorage `risk_control_settings` 的死代码，统一 `import { getStoredThresholds } from "./thresholds"`（A4 收口配置源单点）
+  - BatchDetail 预警阈值基数：`baseCapital × 0.8` → **`(metrics.activeSubsetInitialPrincipal ?? baseCapital) × (1 - warningPct/100)`**，含补仓累计注资；两处写死 `20%` / `击穿 20%` 改为 `marginPct` 动态读（A3 口径 100% 对齐引擎，不再有补仓后假阈值）
+  - Settings 页「优先出资比例 / 劣后出资比例」两个控件 v2.1 置灰 disabled + 黄虚线徽章「暂未接入引擎」+ 描述改为「当前版本固定 70/30，后续版本开放」（PRIORITY_RATIO 常量仍在引擎生效，控件防假操作）
 
 ### ✅ 审计整改 13 项修复汇总（2026-10-05 · Internal Audit v2 Completed）
 
@@ -306,9 +311,9 @@ node node_modules/next/dist/bin/next dev -p 3000
 | **OPERATIONS 运营专员** | `operations@institution.com`（built-in key：`op_wangsy`） | `Wangsy@Risk2026` | 客户资料编辑 / 批次录入；不能改阈值 / 不能补仓 / 不能删客户 |
 | **BD_MANAGER 商务经理**（4 位） | `lixiaoming.bd@institution.com`（Li@Client2026）<br>`wangsy.bd@institution.com`（Wang@Client2026）<br>`zhangzhiqiang.bd@institution.com`（Zhang@Client2026）<br>`liujia.bd@institution.com`（Liu@Client2026） | 括号内 | 仅看自己名下客户 + 对应批次；不能操作任何系统设置 / 不能删客户 |
 
-> **密码口径**：所有内置（built-in）账号密码经 `SHA-256 + 固定 salt`（`mock-builtin-${key}-${id}-s4lt`）校验，见 [password.ts](src/lib/auth/password.ts)；Settings 页由 ADMIN 创建的自定义账号，初始密码为 `{displayName}@{id 最后 4 位}`（SHA-256 + 随机 salt），用户首次于 Settings 设置页自助修改。
+> **密码口径**：演示环境所有内置（built-in）账号密码经 `SHA-256 + 固定 salt`（`mock-builtin-${key}-${id}-s4lt`）校验，见 [password.ts](src/lib/auth/password.ts)；**⚠ 内置口令以明文存在 `BUILTIN_PASSWORDS` 源码常量中，仅供原型 / 演示 / 本地 mock 使用**，不要用于任何真实环境或真实账号复用；生产部署应接真实 IdP（OAuth2/SAML）而不是本 mock 账号库。Settings 页由 ADMIN 创建的自定义账号，初始密码为 `{displayName}@{id 最后 4 位}`（SHA-256 + 随机 salt），用户首次于 Settings 设置页自助修改。
 >
-> **会话口径**：`POST /api/auth/login` → 服务端签发 `rc_session_v1` **HttpOnly Cookie**（12h Max-Age / SameSite=Lax / 生产加 Secure），由 [middleware.ts](src/middleware.ts) 在 `/ /clients /batch /settings` 5 条 matcher 上强制守卫；JWT 体用 `HMAC-SHA256 (Web Crypto 手搓，Edge Runtime + Node.js 双兼容)` 自校验，payload 必含 `sub/email/role/displayName/iat/exp/iss=rc-internal`，恒时 XOR diff 防时序。
+> **会话口径**：`POST /api/auth/login` → 服务端签发 `rc_session_v1` **HttpOnly Cookie**（12h Max-Age / SameSite=Lax / 生产加 Secure），由 [middleware.ts](src/middleware.ts) 在 **`/ /clients /batch /settings /margin-calls /alerts /market /bd` 共 12 条 matcher** 上强制守卫；JWT 体用 `HMAC-SHA256 (Web Crypto 手搓，Edge Runtime + Node.js 双兼容)` 自校验，payload 必含 `sub/email/role/displayName/iat/exp/iss=rc-internal`，恒时 XOR diff 防时序。
 >
 > **清空前账本**：客户台账清空会自动打 ZIP 备份并弹出下载；备份可于 [LedgerRecovery.tsx](src/components/batch/LedgerRecovery.tsx) 恢复入口导入还原。
 

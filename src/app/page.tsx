@@ -49,10 +49,10 @@ export default function DashboardPage() {
     } catch (err) {
       if (!(err instanceof Error)) throw err;
       const devMode =
-        process.env.NODE_ENV === "development" ||
-        (typeof window !== "undefined" &&
-          /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host));
-      if (devMode && typeof window !== "undefined" && (window as any).__RISK_RESET_TEST_DATA__) {
+        typeof window !== "undefined" &&
+        process.env.NODE_ENV === "development" &&
+        /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
+      if (devMode && (window as any).__RISK_RESET_TEST_DATA__) {
         try {
           (window as any).__RISK_RESET_TEST_DATA__(true);
           reloadMockData();
@@ -130,7 +130,8 @@ export default function DashboardPage() {
         setTick((t) => t + 1);
       } catch (err) {
         const devMode =
-          process.env.NODE_ENV === "development" ||
+          typeof window !== "undefined" &&
+          process.env.NODE_ENV === "development" &&
           /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
         if (devMode && (window as any).__RISK_RESET_TEST_DATA__) {
           (window as any).__RISK_RESET_TEST_DATA__(false);
@@ -293,8 +294,8 @@ export default function DashboardPage() {
       {mockError ? (() => {
         const devMode =
           typeof window !== "undefined" &&
-          (process.env.NODE_ENV === "development" ||
-            /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host));
+          process.env.NODE_ENV === "development" &&
+          /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
         return (
         <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

@@ -37,7 +37,11 @@ interface AuthContextValue {
   forceLogout: () => void;
   logoutToLogin: () => void;
   loginAsCustom: (user: AppSessionUser) => void;
+  // NOTE: serverLogin(AppSessionUser) was historically used for role-switcher and
+  // custom-local accounts.  Real, credentialed login must go through
+  // serverLoginCredentials(identifier, password).
   serverLogin: (user: AppSessionUser) => Promise<boolean>;
+  serverLoginCredentials: (identifier: string, password: string) => Promise<AppSessionUser | null>;
   serverLogout: () => Promise<boolean>;
   refreshMe: () => Promise<AppSessionUser | null>;
   updateCurrentUser: (patch: Partial<AppSessionUser>) => void;
@@ -159,40 +163,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const serverLogin = useCallback(async (nextUser: AppSessionUser): Promise<boolean> => {
-    if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return false;
+  const serverLoginCredentials = useCallback(async (identifier: string, password: string): Promise<AppSessionUser | null> => {
+    if (!identifier || !password) return null;
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          id: nextUser.id,
-          email: nextUser.email,
-          role: nextUser.role,
-          displayName: nextUser.displayName,
-          avatarInitials: nextUser.avatarInitials,
-          avatarDataUrl: nextUser.avatarDataUrl,
-          bdManagerFullName: nextUser.bdManagerFullName,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+        },
+        body: JSON.stringify({ identifier, password }),
       });
       if (!res.ok) {
         try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
         setUser((prev) => (prev ? null : prev));
-        return false;
+        return null;
       }
-      const data = (await res.json()) as any;
-      const fetched = (data?.user as AppSessionUser) ?? nextUser;
+      const data = await res.json() as { ok?: boolean; user?: AppSessionUser };
+      if (!data?.ok || !data?.user) {
+        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        setUser((prev) => (prev ? null : prev));
+        return null;
+      }
+      const fetched: AppSessionUser = {
+        id: data.user.id,
+        email: data.user.email,
+        role: isAllowedRole(data.user.role) ? data.user.role : APP_ROLES.RISK_MANAGER,
+        displayName: data.user.displayName,
+        avatarInitials: data.user.avatarInitials,
+        avatarDataUrl: data.user.avatarDataUrl,
+        bdManagerFullName: data.user.bdManagerFullName,
+      };
       try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(fetched)); } catch {}
       setSession(fetched);
-      return true;
-    } catch (err) {
-      // Network error: fallback to optimistic local session (same user info) without server cookie.
-      // Will keep UI alive; /api/auth/me will clear it on next mount.
-      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(nextUser)); } catch {}
-      setSession(nextUser);
-      return true;
+      return fetched;
+    } catch {
+      try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+      setUser((prev) => (prev ? null : prev));
+      return null;
     }
+  }, [setSession]);
+
+  // Legacy shim: serverLogin(user) was used by client-side role switcher and custom user
+  // paths.  Credentialed (real) login must use serverLoginCredentials.
+  const serverLogin = useCallback(async (nextUser: AppSessionUser): Promise<boolean> => {
+    if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return false;
+    try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(nextUser)); } catch {}
+    setSession(nextUser);
+    return true;
   }, [setSession]);
 
   const serverLogout = useCallback(async (): Promise<boolean> => {
@@ -310,12 +331,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logoutToLogin,
     loginAsCustom,
     serverLogin,
+    serverLoginCredentials,
     serverLogout,
     refreshMe,
     updateCurrentUser,
     hasRole,
     hasAnyRole,
-  }), [user, isLoading, switchToMockRole, forceLogout, logoutToLogin, loginAsCustom, serverLogin, serverLogout, refreshMe, updateCurrentUser, hasRole, hasAnyRole]);
+  }), [user, isLoading, switchToMockRole, forceLogout, logoutToLogin, loginAsCustom, serverLogin, serverLoginCredentials, serverLogout, refreshMe, updateCurrentUser, hasRole, hasAnyRole]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -323,13 +345,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (window as any).__RC_DEBUG__ = {
       refreshMe,
       serverLogin,
+      serverLoginCredentials,
       serverLogout,
       logoutToLogin,
       switchToMockRole,
       loginAsCustom,
       updateCurrentUser,
     };
-  }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser, refreshMe, serverLogin, serverLogout]);
+  }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser, refreshMe, serverLogin, serverLoginCredentials, serverLogout]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

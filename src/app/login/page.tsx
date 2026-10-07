@@ -36,7 +36,7 @@ import {
   verifyPassword,
 } from "@/lib/auth/password";
 import { cn } from "@/lib/utils";
-import { logAudit } from "@/lib/auth/audit";
+import { logAudit, logAuthDeny } from "@/lib/auth/audit";
 
 const PASSWORD_MIN_LENGTH = 6;
 
@@ -54,7 +54,7 @@ function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, switchToMockRole, loginAsCustom } = useCurrentUser();
-  const { serverLogin } = useAuthContext();
+  const { serverLoginCredentials } = useAuthContext();
 
   const [hydrated, setHydrated] = useState(false);
   const [email, setEmail] = useState("");
@@ -62,7 +62,7 @@ function LoginPageInner() {
   const [showPwd, setShowPwd] = useState(false);
   const [remember, setRemember] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({});
   const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
   const [welcomeState, setWelcomeState] = useState<{
     visible: boolean;
@@ -157,8 +157,9 @@ function LoginPageInner() {
 
   const handleLoginForm = (e: React.FormEvent) => {
     e.preventDefault();
-    const nextErrors: { email?: string; password?: string } = {};
-    if (!validateEmail(email)) nextErrors.email = "请输入有效的企业邮箱";
+    const nextErrors: { email?: string; password?: string; form?: string } = {};
+    const identifier = email.trim();
+    if (!identifier) nextErrors.email = "请输入企业邮箱或账号";
     const pwd = validatePassword(password);
     if (!pwd.ok) nextErrors.password = pwd.hint;
     setErrors(nextErrors);
@@ -166,15 +167,62 @@ function LoginPageInner() {
 
     setIsSubmitting(true);
     setTimeout(async () => {
-      const resolved = await resolveSessionByCredentials(email, password);
-      if (!resolved) {
+      // Step 1: Client-side credential pre-verify for built-in accounts
+      // (keeps toast UX tight; server is authoritative).
+      let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
+      let localSession: AppSessionUser | null = null;
+      const e = identifier;
+      const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
+        ([key, m]) => key === e || m.email === e
+      );
+      if (builtIn) {
+        const [key, m] = builtIn;
+        const sess: AppSessionUser = {
+          id: m.id,
+          email: m.email,
+          role: m.role,
+          displayName: m.displayName,
+          avatarInitials: m.avatarInitials,
+          avatarDataUrl: m.avatarDataUrl,
+          bdManagerFullName: m.bdManagerFullName,
+        };
+        const rec = await getBuiltInMockAccountByEmail(m.email);
+        if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
+          kindHint = "builtIn";
+          localSession = sess;
+        }
+      } else {
+        try {
+          const custom = Object.values(getCustomMockUsers()).find(
+            (a: any) => a.email === e
+          ) as any;
+          if (custom) {
+            const sess: AppSessionUser = {
+              id: custom.id,
+              email: custom.email,
+              role: custom.role,
+              displayName: custom.displayName,
+              avatarInitials: custom.avatarInitials || (custom.displayName || "??").slice(0, 2).toUpperCase(),
+              avatarDataUrl: custom.avatarDataUrl,
+              bdManagerFullName: custom.bdManagerFullName,
+            };
+            const rec = await getCustomMockAccountByEmail(e);
+            if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
+              kindHint = "custom";
+              localSession = sess;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (!localSession) {
         setErrors({ password: "账号或密码不正确，请重试" });
         setIsSubmitting(false);
         logAudit({
           action: "login_failed",
-          actorEmail: email,
+          actorEmail: identifier,
           resource: "auth:login",
-          detail: { reason: "invalid_credentials", email: email },
+          detail: { reason: "local_verify_failed", email: identifier },
         });
         toast.error("登录失败：账号或密码不正确", {
           description: "如忘记密码，请联系系统管理员重置。",
@@ -182,7 +230,10 @@ function LoginPageInner() {
         return;
       }
 
-      const { session, kind } = resolved;
+      // Step 2: builtIn accounts → call serverLoginCredentials (service-side password
+      // re-verify, issues HttpOnly cookie).  custom accounts → optimistic local session.
+      const session = localSession;
+      const kind = kindHint;
       const onSuccessAudit = () => {
         logAudit({
           action: "login_success",
@@ -202,7 +253,37 @@ function LoginPageInner() {
           role: session.role,
           email: session.email,
         });
-        const ok = await serverLogin(session);
+        let cookieIssued = false;
+        if (kind === "builtIn") {
+          const serverUser = await serverLoginCredentials(identifier, password);
+          if (serverUser && serverUser.email) {
+            // Use server-returned identity (authoritative).
+            session.id = serverUser.id;
+            session.email = serverUser.email;
+            session.role = serverUser.role;
+            session.displayName = serverUser.displayName;
+            session.avatarInitials = serverUser.avatarInitials;
+            session.avatarDataUrl = serverUser.avatarDataUrl;
+            session.bdManagerFullName = serverUser.bdManagerFullName;
+            cookieIssued = true;
+          } else {
+            // Server rejected: treat as failed.
+            setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
+            setIsSubmitting(false);
+            setWelcomeState(null);
+            logAuthDeny({
+              action: 'login_denied',
+              resource: 'auth:login',
+              reason: 'server_password_verify_rejected',
+              userId: session.id,
+              role: session.role,
+            });
+            toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" });
+            return false;
+          }
+        } else {
+          loginAsCustom(session);
+        }
         if (remember) {
           try {
             window.localStorage.setItem("risk_control_remember_email", session.email);
@@ -216,34 +297,20 @@ function LoginPageInner() {
         }
         const dest = nextPath ? decodeURIComponent(nextPath) : "/";
         const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-        const roleLabel: Record<AppSessionUser["role"], string> = {
-          ADMIN: "系统管理员",
-          RISK_MANAGER: "风控总监",
-          BD_MANAGER: "商务经理",
-          OPERATIONS: "运营专员",
-        };
-        void roleLabel;
         setTimeout(() => {
           toast.success(`欢迎回来，${session.displayName}`);
         }, 80);
         setTimeout(() => {
-          try { window.location.replace(abs); } catch { window.location.href = abs; }
+          if (cookieIssued) {
+            try { window.location.replace(abs); } catch { window.location.href = abs; }
+          } else {
+            router.push(dest);
+          }
         }, 780);
-        return ok;
+        return true;
       };
 
-      if (kind === "builtIn") {
-        const key = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-          ([, m]) => m.email === session.email
-        )?.[0];
-        if (key) {
-          void finishLogin().finally(() => setIsSubmitting(false));
-        } else {
-          void finishLogin().finally(() => setIsSubmitting(false));
-        }
-      } else {
-        void finishLogin().finally(() => setIsSubmitting(false));
-      }
+      void finishLogin().finally(() => setIsSubmitting(false));
     }, 320);
   };
 

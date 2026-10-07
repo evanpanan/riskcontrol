@@ -1,6 +1,7 @@
 import { Client, Batch, MarginCall, RiskLevel, BatchStatus, ClientStatus } from "@prisma/client";
 import { calculateTradingWindows } from "./utils";
 import { getProfitSettings, DEFAULT_PROFIT_SETTINGS } from "./profitSettings";
+import { getStoredThresholds } from "./thresholds";
 
 export const PRIORITY_RATIO = 0.7;
 export const SUBORDINATE_RATIO = 0.3;
@@ -279,22 +280,14 @@ export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
   const rescue = calculateRescueStats(batch, price);
   const rc = batch.finance?.remainingCapital ?? batch.initialTotalAmount;
   const activeSubsetInitialPrincipal = money(rc + rescue.totalRescueAmount);
-  const opts: import("./thresholds").StoredThresholds | undefined = (typeof window !== "undefined") ? undefined : undefined;
-  const stored = (() => {
-    try {
-      if (typeof window === "undefined") return undefined;
-      const raw = window.localStorage.getItem("risk_control_settings");
-      if (!raw) return undefined;
-      const p = JSON.parse(raw) as any;
-      return {
-        warningDropPercent: Number(p?.warningThreshold) || undefined,
-        marginDropPercent: Number(p?.marginThreshold) || undefined,
-      };
-    } catch {
-      return undefined;
-    }
-  })();
-  const base = calculateBatchRiskMetrics(rc, getAccountMarketValue(batch, price), rescue.totalRescueAmount, stored ?? opts ?? undefined);
+  let stored: ThresholdOpts | undefined;
+  try {
+    const t = getStoredThresholds();
+    if (t) stored = { warningDropPercent: t.warningDropPercent, marginDropPercent: t.marginDropPercent };
+  } catch {
+    stored = undefined;
+  }
+  const base = calculateBatchRiskMetrics(rc, getAccountMarketValue(batch, price), rescue.totalRescueAmount, stored);
   return {
     ...base,
     activeSubsetInitialPrincipal,

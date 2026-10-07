@@ -1,4 +1,9 @@
-import { MOCK_USER_META, type MockUserKey } from '@/types/auth';
+import {
+  MOCK_USER_META,
+  type MockUserKey,
+  type AppRole,
+  isAllowedRole,
+} from '@/types/auth';
 
 const TEXT_ENCODER = new TextEncoder();
 
@@ -111,6 +116,50 @@ export async function getBuiltInMockAccountByEmail(email: string): Promise<(Buil
   const [key] = hit;
   const rec = BUILTIN_CACHE.get(key);
   return rec ? { ...rec, key } : null;
+}
+
+export interface ResolvedMockAccount {
+  kind: 'built-in';
+  key: MockUserKey;
+  id: string;
+  email: string;
+  role: AppRole;
+  displayName: string;
+  avatarInitials: string;
+  avatarDataUrl?: string;
+  bdManagerFullName?: string;
+  passwordHash: string;
+  salt: string;
+}
+
+export async function resolveMockAccountByIdentifier(
+  identifier: string
+): Promise<ResolvedMockAccount | null> {
+  if (!identifier) return null;
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  const entries = Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>;
+  const hit = entries.find(([key, meta]) => key === trimmed || meta.email === trimmed);
+  if (!hit) return null;
+  const [key, meta] = hit;
+  const cred = BUILTIN_PASSWORDS[key];
+  const passwordPlain = cred?.password ?? `${key}__${String(Date.now())}`;
+  const salt = `mock-builtin-${key}-${meta.id}-s4lt`;
+  const passwordHash = await hashPassword(passwordPlain, salt);
+  if (!isAllowedRole(meta.role)) return null;
+  return {
+    kind: 'built-in',
+    key,
+    id: meta.id,
+    email: meta.email,
+    role: meta.role,
+    displayName: meta.displayName,
+    avatarInitials: meta.avatarInitials,
+    avatarDataUrl: meta.avatarDataUrl,
+    bdManagerFullName: meta.bdManagerFullName,
+    passwordHash,
+    salt,
+  };
 }
 
 export interface CustomMockAccountRecord {

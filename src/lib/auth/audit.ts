@@ -106,7 +106,7 @@ export function logAudit(evt: {
         console.warn('[audit] persist failed', err?.message || err);
       }
     }
-    if (typeof window !== 'undefined' && (process.env.NODE_ENV === 'development' || window.location.hostname === 'localhost' || /^127\.0\.0\.1$|:300[0-9]$/.test(window.location.host))) {
+    if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development' && (window.location.hostname === 'localhost' || /^127\.0\.0\.1$|:300[0-9]$/.test(window.location.host))) {
       console.log('[AUDIT]', JSON.stringify(entry));
     }
   } catch (outerErr: any) {
@@ -125,7 +125,8 @@ export interface AuditDenyParams {
     | 'data_scope_filtered'
     | 'operation_denied'
     | 'button_hidden'
-    | 'card_removed';
+    | 'card_removed'
+    | 'login_denied';
   resource: string;
   reason?: string;
   userId?: string;

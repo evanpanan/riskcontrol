@@ -937,34 +937,40 @@ export default function SettingsPage() {
               触发后立即发送补仓警报（默认 20%）
             </p>
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 opacity-75">
             <Label className="text-xs flex items-center gap-1.5">
               <Building2 className="h-3 w-3" />
               优先出资比例
+              <span className="ml-1 inline-flex h-4 items-center px-1.5 rounded-full border border-dashed border-warning/40 text-[9px] tracking-wide text-warning/90 bg-warning/5">
+                暂未接入引擎
+              </span>
             </Label>
             <div className="relative">
-              <Field type="number" name="priorityRatio" className="font-mono font-semibold pr-10" />
+              <Field type="number" name="priorityRatio" className="font-mono font-semibold pr-10" disabled />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              客户优先出资占比（默认 70%）
+              客户优先出资占比（默认 70%），当前版本固定 70/30，后续版本开放
             </p>
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 opacity-75">
             <Label className="text-xs flex items-center gap-1.5">
               <Building2 className="h-3 w-3" />
               劣后出资比例
+              <span className="ml-1 inline-flex h-4 items-center px-1.5 rounded-full border border-dashed border-warning/40 text-[9px] tracking-wide text-warning/90 bg-warning/5">
+                暂未接入引擎
+              </span>
             </Label>
             <div className="relative">
-              <Field type="number" name="subordinateRatio" className="font-mono font-semibold pr-10" />
+              <Field type="number" name="subordinateRatio" className="font-mono font-semibold pr-10" disabled />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              机构劣后出资占比（默认 30%）
+              机构劣后出资占比（默认 30%），当前版本固定 70/30，后续版本开放
             </p>
           </div>
         </div>
