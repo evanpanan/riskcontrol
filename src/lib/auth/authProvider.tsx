@@ -29,6 +29,36 @@ export const SESSION_UPDATED_EVENT = 'rbac:session-updated';
 
 const SERVER_ME_CACHE_KEY = '__rc_me_cache_v1';
 
+// Safe storage helpers: typeof window guards + robust JSON.  These are the single point
+// of contact with browser storage APIs so callers never see SSR errors and broken / empty
+// JSON NEVER throws "Unexpected end of input".
+const cache = {
+  get(): AppSessionUser | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.sessionStorage.getItem(SERVER_ME_CACHE_KEY);
+      if (!raw || typeof raw !== 'string' || raw.length === 0) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && isAllowedRole(parsed.role)) {
+        return parsed as AppSessionUser;
+      }
+    } catch { /* ignore */ }
+    try { window.sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch { /* ignore */ }
+    return null;
+  },
+  set(user: AppSessionUser | null): void {
+    if (typeof window === 'undefined') return;
+    try {
+      if (!user) window.sessionStorage.removeItem(SERVER_ME_CACHE_KEY);
+      else window.sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(user));
+    } catch { /* ignore */ }
+  },
+  clear(): void {
+    if (typeof window === 'undefined') return;
+    try { window.sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch { /* ignore */ }
+  },
+};
+
 interface AuthContextValue {
   user: AppSessionUser | null;
   role: AppRole;
@@ -70,12 +100,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((prev) => {
       if (!next) {
         if (!prev) return prev;
-        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        cache.clear();
         return null;
       }
-      // Sanitize: drop undefined keys so React setState stays a plain object
-      // (some server payloads omit optional fields like avatarDataUrl /
-      // bdManagerFullName / displayName, so merge with prev for the same user id).
       const sameId = !!prev && next.id === prev.id;
       const base = sameId ? prev : null;
       const sanitizedRaw: Partial<AppSessionUser> & { id: string; email: string; role: AppRole } = {
@@ -93,17 +120,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else if (base && base.bdManagerFullName) sanitizedRaw.bdManagerFullName = base.bdManagerFullName;
       const sanitized = sanitizedRaw as AppSessionUser;
       if (prev && JSON.stringify(prev) === JSON.stringify(sanitized)) return prev;
-      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(sanitized)); } catch {}
-      try {
-        window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: sanitized }));
-      } catch {
-        /* ignore */
+      cache.set(sanitized);
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: sanitized }));
+        } catch {
+          /* ignore */
+        }
       }
       return sanitized;
     });
   }, []);
 
   const refreshMe = useCallback(async (): Promise<AppSessionUser | null> => {
+    if (typeof window === 'undefined') return null;
     if (refreshingRef.current) return null;
     refreshingRef.current = true;
     try {
@@ -113,31 +143,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' },
       });
       if (!res.ok) {
-        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
-        // Don't setSession(null) here to avoid self-recursion via SESSION_UPDATED.
-        // Simply clear server cache; caller (logout / loginFail) will set null explicitly.
+        cache.clear();
         setUser((prev) => (prev ? null : prev));
         return null;
       }
       const data = await res.json() as any;
       if (data?.ok && data?.user && typeof data.user === 'object' && isAllowedRole(data.user.role)) {
         const u = data.user as AppSessionUser;
-        try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(u)); } catch {}
+        cache.set(u);
         setSession(u);
         return u;
       }
-      try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+      cache.clear();
       setUser((prev) => (prev ? null : prev));
       return null;
     } catch {
-      let cached: AppSessionUser | null = null;
-      try {
-        const raw = sessionStorage.getItem(SERVER_ME_CACHE_KEY);
-        if (raw) {
-          const p = JSON.parse(raw) as AppSessionUser;
-          if (isAllowedRole(p.role)) cached = p;
-        }
-      } catch { cached = null; }
+      const cached = cache.get();
       if (cached) {
         setSession(cached);
       } else {
@@ -150,7 +171,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setSession]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    // For auth routes (/login, /signup etc.) NEVER block interaction behind the
+    // server-side refreshMe round-trip.  The user must be able to click the
+    // login button and get navigation timers scheduled before any HTTP fetch
+    // resolves.  Otherwise a slow /api/auth/me + concurrent navigation
+    // produces an isLoading deadlock (login → router.replace(/') → AppShell
+    // isLoading=true blocks → redirect back to /login → login button dead).
+    const isAuthRoute =
+      typeof window !== 'undefined' &&
+      (window.location.pathname.startsWith('/login') ||
+        window.location.pathname.startsWith('/signup'));
     let cancelled = false;
+    if (isAuthRoute) {
+      firstHydrateDoneRef.current = true;
+      setIsLoading(false);
+      // Still call refreshMe for session cookie recovery (cross-tab login),
+      // but do NOT keep isLoading=true while waiting.
+      void refreshMe().finally(() => {
+        if (cancelled) return;
+        firstHydrateDoneRef.current = true;
+        setIsLoading(false);
+      });
+      return () => { cancelled = true; };
+    }
     (async () => {
       await refreshMe();
       if (cancelled) return;
@@ -159,22 +203,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshMe]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handler = (evt: Event) => {
       const ce = evt as CustomEvent;
-      // Skip SESSION_UPDATED dispatch for nulls (which we blocked above anyway) and only refresh for a new user that's non-null
       if (!ce?.detail) return;
-      // Avoid re-entrant: if we just setSession(u) and dispatched from the SAME tab, do nothing.
-      // Only apply state change if the new user differs (cross-tab sync signal).
-      // DO NOT call refreshMe() here → that causes infinite recursion.
       setUser((prev) => {
         const next = ce.detail as AppSessionUser;
         if (!prev) return next;
         if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
-        try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(next)); } catch {}
+        cache.set(next);
         return next;
       });
     };
@@ -185,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const serverLoginCredentials = useCallback(async (identifier: string, password: string): Promise<AppSessionUser | null> => {
+    if (typeof window === 'undefined') return null;
     if (!identifier || !password) return null;
     try {
       const res = await fetch('/api/auth/login', {
@@ -199,13 +240,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ identifier, password }),
       });
       if (!res.ok) {
-        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        cache.clear();
         setUser((prev) => (prev ? null : prev));
         return null;
       }
       const data = await res.json() as { ok?: boolean; user?: AppSessionUser };
       if (!data?.ok || !data?.user) {
-        try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+        cache.clear();
         setUser((prev) => (prev ? null : prev));
         return null;
       }
@@ -218,36 +259,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         avatarDataUrl: data.user.avatarDataUrl || undefined,
         bdManagerFullName: data.user.bdManagerFullName || undefined,
       };
-      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(fetched)); } catch {}
+      cache.set(fetched);
       setSession(fetched);
       return fetched;
     } catch {
-      try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+      cache.clear();
       setUser((prev) => (prev ? null : prev));
       return null;
     }
   }, [setSession]);
 
-  // Legacy shim: serverLogin(user) was used by client-side role switcher and custom user
-  // paths.  Credentialed (real) login must use serverLoginCredentials.
   const serverLogin = useCallback(async (nextUser: AppSessionUser): Promise<boolean> => {
     if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return false;
-    try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(nextUser)); } catch {}
+    cache.set(nextUser);
     setSession(nextUser);
     return true;
   }, [setSession]);
 
   const serverLogout = useCallback(async (): Promise<boolean> => {
-    try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+    cache.clear();
     clearSession();
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch {
-      /* ignore */
+    if (typeof window !== 'undefined') {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch {
+        /* ignore */
+      }
     }
     setUser(null);
     return true;
@@ -297,15 +338,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     }
     clearSession();
-    try { sessionStorage.removeItem(SERVER_ME_CACHE_KEY); } catch {}
+    cache.clear();
     void serverLogout().finally(() => {
       setSession(null);
-      const nextUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
-      const qs = nextUrl && nextUrl !== '/' && !nextUrl.startsWith('/login')
-        ? `?next=${encodeURIComponent(nextUrl)}`
-        : '';
-      const dest = `/login${qs}`;
+      let dest = '/login';
       if (typeof window !== 'undefined') {
+        const nextUrl = window.location.pathname + window.location.search;
+        const qs = nextUrl && nextUrl !== '/' && !nextUrl.startsWith('/login')
+          ? `?next=${encodeURIComponent(nextUrl)}`
+          : '';
+        dest = `/login${qs}`;
         try { window.location.replace(dest); } catch { window.location.href = dest; }
       }
     });
@@ -320,11 +362,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((prev) => {
       if (!prev) return prev;
       const next: AppSessionUser = { ...prev, ...patch };
-      try { sessionStorage.setItem(SERVER_ME_CACHE_KEY, JSON.stringify(next)); } catch {}
-      try {
-        window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
-      } catch {
-        /* ignore */
+      cache.set(next);
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent(SESSION_UPDATED_EVENT, { detail: next }));
+        } catch {
+          /* ignore */
+        }
       }
       return next;
     });

@@ -258,9 +258,11 @@ function LoginPageInner() {
         // overlay.  Even if the overlay render throws a runtime error during
         // React commit / CSS-in-JS style injection, these setTimeouts are
         // already scheduled on the event loop and will still fire.
+        // Guarded with typeof window to avoid SSR path issues.
         let cookieIssuedForNavigation = false;
         let effectiveDestination: string = "/";
         const doNavigate = () => {
+          if (typeof window === "undefined") return;
           const dest = effectiveDestination;
           const abs = `${window.location.protocol}//${window.location.host}${dest}`;
           if (cookieIssuedForNavigation) {
@@ -270,13 +272,13 @@ function LoginPageInner() {
           }
         };
         // Primary: navigate after the welcome animation (~ 780ms feels natural).
-        const primaryTimer = window.setTimeout(() => {
+        const primaryTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
           try { doNavigate(); } catch { /* ignore */ }
         }, 780);
         // Failsafe (HARD GUARANTEE): if pathname is still /login at 3.0s, force
         // navigate.  This works even if the welcome overlay rendered with
         // errors, or Fast Refresh unmounted the component.
-        const failsafeTimer = window.setTimeout(() => {
+        const failsafeTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
           try {
             if (typeof window !== "undefined" && window.location.pathname === "/login") {
               doNavigate();
@@ -284,23 +286,31 @@ function LoginPageInner() {
           } catch { /* ignore */ }
         }, 3000);
         const cleanupTimers = () => {
-          try { clearTimeout(primaryTimer); } catch { /* ignore */ }
-          try { clearTimeout(failsafeTimer); } catch { /* ignore */ }
+          try {
+            if (typeof window !== "undefined" && primaryTimer !== null) clearTimeout(primaryTimer);
+          } catch { /* ignore */ }
+          try {
+            if (typeof window !== "undefined" && failsafeTimer !== null) clearTimeout(failsafeTimer);
+          } catch { /* ignore */ }
         };
 
         try {
-          setWelcomeState({
-            visible: true,
-            displayName: session.displayName,
-            role: session.role,
-            email: session.email,
-          });
+          // Note: intentionally call setWelcomeState AFTER timer registration.
+          // If overlay render explodes, timers still fire.
+          try {
+            setWelcomeState({
+              visible: true,
+              displayName: session.displayName,
+              role: session.role,
+              email: session.email,
+            });
+          } catch {
+            /* ignore: welcome state error must not stop navigation */
+          }
           let cookieIssued = false;
           if (kind === "builtIn") {
             const serverUser = await serverLoginCredentials(identifier, password);
             if (serverUser && serverUser.email) {
-              // Server identity is authoritative.  Merge (server fields override
-              // the optimistic local one).
               session = {
                 ...session,
                 id: serverUser.id,
@@ -313,11 +323,10 @@ function LoginPageInner() {
               };
               cookieIssued = true;
             } else {
-              // Server rejected: treat as failed.
               cleanupTimers();
+              try { setWelcomeState(null); } catch { /* ignore */ }
               setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
               setIsSubmitting(false);
-              setWelcomeState(null);
               logAuthDeny({
                 action: 'login_denied',
                 resource: 'auth:login',
@@ -325,7 +334,7 @@ function LoginPageInner() {
                 userId: session.id,
                 role: session.role,
               });
-              toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" });
+              try { toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" }); } catch { /* ignore */ }
               return false;
             }
           } else {
@@ -333,26 +342,34 @@ function LoginPageInner() {
           }
           if (remember) {
             try {
-              window.localStorage.setItem("risk_control_remember_email", session.email);
-              window.localStorage.setItem(
-                "risk_control_last_login_at",
-                new Date().toISOString().slice(0, 16).replace("T", " ")
-              );
+              if (typeof window !== "undefined") {
+                window.localStorage.setItem("risk_control_remember_email", session.email);
+                window.localStorage.setItem(
+                  "risk_control_last_login_at",
+                  new Date().toISOString().slice(0, 16).replace("T", " ")
+                );
+              }
             } catch { /* ignore */ }
           } else {
-            try { window.localStorage.removeItem("risk_control_remember_email"); } catch { /* ignore */ }
+            try {
+              if (typeof window !== "undefined") window.localStorage.removeItem("risk_control_remember_email");
+            } catch { /* ignore */ }
           }
           const dest = nextPath ? decodeURIComponent(nextPath) : "/";
           effectiveDestination = dest;
           cookieIssuedForNavigation = cookieIssued;
-          setTimeout(() => {
-            try { toast.success(`欢迎回来，${session.displayName}`); } catch { /* ignore */ }
-          }, 80);
+          try {
+            if (typeof window !== "undefined") {
+              window.setTimeout(() => {
+                try { toast.success(`欢迎回来，${session.displayName}`); } catch { /* ignore */ }
+              }, 80);
+            }
+          } catch { /* ignore */ }
           return true;
         } catch (err) {
           // Any runtime error → still force navigate (cookie is probably set
-          // by serverLoginCredentials before the throw).  But clean timers
-          // first so we don't double-navigate, then force a final attempt.
+          // by serverLoginCredentials before the throw).  Clean timers first
+          // so we don't double-navigate, then force a final attempt.
           cleanupTimers();
           try {
             if (typeof window !== "undefined" && window.location.pathname === "/login") {
