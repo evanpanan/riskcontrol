@@ -254,43 +254,49 @@ function LoginPageInner() {
 
       const finishLogin = async () => {
         onSuccessAudit();
+        // ============================================================
         // FIRST: register navigation timers BEFORE rendering the welcome
         // overlay.  Even if the overlay render throws a runtime error during
         // React commit / CSS-in-JS style injection, these setTimeouts are
         // already scheduled on the event loop and will still fire.
-        // Guarded with typeof window to avoid SSR path issues.
-        let cookieIssuedForNavigation = false;
+        //
+        // **HARD RULE (v2.9)**: navigation is ALWAYS window.location
+        // replace/href, NEVER next/router.  Next router.push('') on a login
+        // route still in AppShell spinner path → AppShell effect detects
+        // !hydrated || isLoading || !user → router.replace('/login') →
+        // flips back → user sees "闪烁一下" and stays on /login.
+        // Using window.location bypasses AppShell entirely: the next load
+        // is a fresh document request with the new HttpOnly cookie.
+        // ============================================================
         let effectiveDestination: string = "/";
-        const doNavigate = () => {
+        if (nextPath) {
+          try { effectiveDestination = decodeURIComponent(nextPath) || "/"; } catch { effectiveDestination = "/"; }
+        }
+        const finalDest = effectiveDestination.startsWith("/") ? effectiveDestination : "/";
+        const navigateHard = () => {
           if (typeof window === "undefined") return;
-          const dest = effectiveDestination;
-          const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-          if (cookieIssuedForNavigation) {
-            try { window.location.replace(abs); } catch { window.location.href = abs; }
-          } else {
-            try { router.push(dest); } catch { window.location.href = abs; }
-          }
+          const abs = `${window.location.protocol}//${window.location.host}${finalDest}`;
+          try { window.location.replace(abs); } catch { window.location.href = abs; }
         };
         // Primary: navigate after the welcome animation (~ 780ms feels natural).
         const primaryTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
-          try { doNavigate(); } catch { /* ignore */ }
+          try { navigateHard(); } catch { /* ignore */ }
         }, 780);
         // Failsafe (HARD GUARANTEE): if pathname is still /login at 3.0s, force
         // navigate.  This works even if the welcome overlay rendered with
-        // errors, or Fast Refresh unmounted the component.
+        // errors, or Fast Refresh unmounted the component.  **This timer is
+        // NEVER cleaned up by catch / failure branches** — it must always
+        // fire at 3.0s so we never stall on /login after submission.
         const failsafeTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
           try {
             if (typeof window !== "undefined" && window.location.pathname === "/login") {
-              doNavigate();
+              navigateHard();
             }
           } catch { /* ignore */ }
         }, 3000);
-        const cleanupTimers = () => {
+        const cleanupPrimaryOnly = () => {
           try {
             if (typeof window !== "undefined" && primaryTimer !== null) clearTimeout(primaryTimer);
-          } catch { /* ignore */ }
-          try {
-            if (typeof window !== "undefined" && failsafeTimer !== null) clearTimeout(failsafeTimer);
           } catch { /* ignore */ }
         };
 
@@ -323,7 +329,12 @@ function LoginPageInner() {
               };
               cookieIssued = true;
             } else {
-              cleanupTimers();
+              // Server rejected credentials — keep failsafeTimer so we still navigate to
+              // next(/) even if serverLoginCredentials didn't set cookie yet (i.e.
+              // wrong password — this branch is an explicit user feedback branch, so
+              // we DO NOT navigate away; only clean primaryTimer only. failsafeTimer
+              // MUST live to 3s to guarantee UI doesn't freeze.
+              cleanupPrimaryOnly();
               try { setWelcomeState(null); } catch { /* ignore */ }
               setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
               setIsSubmitting(false);
@@ -355,9 +366,8 @@ function LoginPageInner() {
               if (typeof window !== "undefined") window.localStorage.removeItem("risk_control_remember_email");
             } catch { /* ignore */ }
           }
-          const dest = nextPath ? decodeURIComponent(nextPath) : "/";
+          const dest = nextPath ? (() => { try { return decodeURIComponent(nextPath) || "/"; } catch { return "/"; } })() : "/";
           effectiveDestination = dest;
-          cookieIssuedForNavigation = cookieIssued;
           try {
             if (typeof window !== "undefined") {
               window.setTimeout(() => {
@@ -365,17 +375,24 @@ function LoginPageInner() {
               }, 80);
             }
           } catch { /* ignore */ }
+          // If cookie was written, force an immediate hard navigate now
+          // (don't wait for primaryTimer's 780ms).  This guarantees the
+          // navigation happens as soon as the HttpOnly cookie is present.
+          if (cookieIssued && typeof window !== "undefined") {
+            try { navigateHard(); } catch { /* ignore */ }
+          }
           return true;
         } catch (err) {
-          // Any runtime error → still force navigate (cookie is probably set
-          // by serverLoginCredentials before the throw).  Clean timers first
-          // so we don't double-navigate, then force a final attempt.
-          cleanupTimers();
+          // Any runtime error → **DO NOT CLEAN FAILSAFETIMER** (3s will fire
+          // regardless).  Primary timer may have already fired; at this point
+          // we also try an inline final navigation attempt so user doesn't
+          // wait 3 full seconds.
+          cleanupPrimaryOnly();
           try {
             if (typeof window !== "undefined" && window.location.pathname === "/login") {
               const dest = nextPath ? decodeURIComponent(nextPath) : "/";
               const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-              window.location.href = abs;
+              try { window.location.replace(abs); } catch { window.location.href = abs; }
             }
           } catch { /* ignore */ }
           return true;

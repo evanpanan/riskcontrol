@@ -58,9 +58,49 @@ export default function RootLayout({
       (function() {
         var LS_KEY = ${JSON.stringify(FINANCE_STORE_KEY)};
         var RAW_KEYS = ${JSON.stringify(RAW_KEYS)};
+        // ============================================================
+        // CHUNK-LOAD FALLBACK (dev HMR recovery, executes BEFORE React mounts)
+        // Fixes the exact symptom: user clicks login → React chunks
+        // /_next/static/chunks/{main-app,app-pages-internals,app/login/page,app/layout}.js
+        // all return 404 because Next 14.2.8 dev HMR invalidation → login
+        // page renders as SSR nodes=3 empty shell and button click has no
+        // handler → "登录失败闪烁一下". 下面这一段 inline script 永远会：
+        //   1) 监听 4 个核心 script 的 onerror；
+        //   2) 2000ms 内 #__next 里还是空的 → 自动 reload 1 次；
+        //   3) __RC_RELOADED_BY_CHUNK_GUARD__ 防止 reload 循环。
+        // ============================================================
+        try {
+          var GUARD_KEY = "__RC_RELOADED_BY_CHUNK_GUARD__";
+          var isDev = ("development" === ${JSON.stringify(process.env.NODE_ENV)} === true || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
+          if (isDev && !window.sessionStorage.getItem(GUARD_KEY)) {
+            var badChunk = false;
+            var markBad = function() { badChunk = true; };
+            // 404-recovery: capture any script that fails whose src.startsWith('/_next/static/chunks/')
+            window.addEventListener('error', function(ev) {
+              try {
+                var t = ev && ev.target;
+                if (t && t.tagName && t.tagName.toLowerCase() === 'script' && t.src && t.src.indexOf('/_next/static/chunks/') >= 0) {
+                  badChunk = true;
+                }
+              } catch(e) {}
+            }, true);
+            // 2000ms 之内如果 #__next 还是空壳（nodes 登录页 nodes=3）说明 React 没挂载） → reload 1 次
+            window.setTimeout(function() {
+              try {
+                var next = document.getElementById('__next');
+                var empty = !next || next.children.length === 0 || (next.children.length === 1 && next.firstElementChild && next.firstElementChild.className === '');
+                if (badChunk || empty) {
+                  window.sessionStorage.setItem(GUARD_KEY, '1');
+                  window.location.reload();
+                }
+              } catch(e) {}
+            }, 2000);
+          }
+        } catch (_chunkGuardErr) {}
+
         // 1) 先判定环境，非开发环境直接退出，不注册任何重置能力
         var devMode = (${JSON.stringify(process.env.NODE_ENV)} === "development")
-          && /localhost|127\.0\.0\.1|:300[0-9]$/.test(window.location.host);
+          && /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
         if (!devMode) return;
 
         // 2) 仅在 devMode 成立时才挂载重置函数
