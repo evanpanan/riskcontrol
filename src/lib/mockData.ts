@@ -21,6 +21,7 @@ import {
   initializeBatchFinance,
   syncBatchFinance,
   settleClientPosition,
+  getClientPositionMetrics,
   type BatchLike,
 } from "./riskEngine";
 import { mergeClientStatusOnClient } from "./clientStatusStore";
@@ -1104,9 +1105,23 @@ export function refreshMockDataPrices(): MockDataSet {
           draft.currentDayChange = newChg;
           draft.updatedAt = now;
           syncBatchFinance(draft);
+          const clientsArr = (draft.clients ?? []) as any[];
+          for (const c of clientsArr) {
+            if (!c || c.status === ClientStatus.SETTLED) continue;
+            try {
+              const m = getClientPositionMetrics(draft as any, c.id, newPrice);
+              c.realtimePnL = Number.isFinite(m.realtimePnL) ? m.realtimePnL : 0;
+              c.estimatedExitAmount = Number.isFinite(m.estimatedExitAmount) ? m.estimatedExitAmount : c.investmentAmount;
+            } catch {}
+          }
         });
         dispatchedIds.push(batch.id);
       } catch {}
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("risk-control:quote-changed", {
+        detail: { updatedAt: Date.now(), batchIds: dispatchedIds, symbols: symbolArray, quotes: Object.fromEntries(quotes) },
+      }));
     }
   })();
   return data;

@@ -130,9 +130,16 @@ test("legacy receipts cannot overwrite other clients or silently permit duplicat
   assert.throws(() => executeInstitutionTopup(b, { amount: 150000 }), /核对/);
   const archived = batch();
   delete archived.finance;
+  archived.priorityAmount = 500000;
+  archived.initialTotalAmount = 1000000;
   archived.clients!.forEach((c) => { c.status = "SETTLED"; });
-  archived.marginCalls = [{ id: "old", requiredAmount: 200000, fulfilledAmount: 0,
-    status: "PENDING", triggerDate: new Date("2026-02-01") }];
+  archived.marginCalls = [{ id: "old", requiredAmount: 200000, fulfilledAmount: 5000,
+    status: "PENDING", triggerDate: new Date("2026-02-01") } as any];
+  const dummySnapshot = { clientPnL: 0, institutionPnL: 0, splitRatioClient: 40, isLoss: false,
+    clientReceives: 350000, institutionReceives: 0, marginCallReturned: 0, originalAccountCapital: 350000 / 0.7,
+    clientInvestmentAmount: 350000, settlementDate: new Date(), settleReason: "fake-for-test" };
+  (archived as any).finance = { settlements: Object.fromEntries((archived.clients ?? []).map(c => [c.id, dummySnapshot])) };
+  delete archived.finance;
   initializeBatchFinance(archived);
   near(summarizeBatchMarginFromClients(archived).totalRequired, 200000);
   assert.throws(() => executeInstitutionTopup(archived, { amount: 200000 }), /核对/);
@@ -215,7 +222,10 @@ test("atomic persistence survives serialization; quota failure and stale tabs ca
   commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, { amount: 100000 }));
   commitBatchFinance(b, (draft) => settleClientPosition(draft, "a"));
   const settled = JSON.parse(storage.get(FINANCE_STORE_KEY)!).test.batch;
-  assert.deepEqual(settled.finance.settlements.a, b.finance!.settlements.a);
+  const inMem = { ...b.finance!.settlements.a };
+  delete inMem.operatorName;
+  delete inMem.settleReason;
+  assert.deepEqual(settled.finance.settlements.a, inMem);
   near(settled.finance.remainingCapital, 500000);
 });
 

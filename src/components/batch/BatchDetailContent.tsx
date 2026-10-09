@@ -25,7 +25,7 @@ const _money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const money: (v: number) => number = _money;
 import { getStoredThresholds } from "@/lib/thresholds";
 import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
-import { commitBatchFinance, getMockData } from "@/lib/mockData";
+import { commitBatchFinance, getMockData, FINANCE_STORE_KEY } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
@@ -267,15 +267,19 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   useEffect(() => {
     setHydrated(true);
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "risk_control_client_status_v1") setTick((t) => t + 1);
+      if (e.key === "risk_control_client_status_v1" || e.key === FINANCE_STORE_KEY) setTick((t) => t + 1);
     };
     window.addEventListener("storage", onStorage);
     const onCustom = () => setTick((t) => t + 1);
     window.addEventListener("risk-control:client-status-changed", onCustom);
+    window.addEventListener("risk-control:finance-changed", onCustom);
+    window.addEventListener("risk-control:quote-changed", onCustom);
     const id = window.setInterval(onCustom, 3500);
     return () => {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("risk-control:client-status-changed", onCustom);
+      window.removeEventListener("risk-control:finance-changed", onCustom);
+      window.removeEventListener("risk-control:quote-changed", onCustom);
       window.clearInterval(id);
     };
   }, []);

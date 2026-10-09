@@ -199,11 +199,18 @@ export default function ClientsPage() {
   }, []);
 
   useEffect(() => {
+    const onStorage = () => setTick((t) => t + 1);
+    window.addEventListener("storage", onStorage);
     const onCustom = () => setTick((t) => t + 1);
     window.addEventListener("risk-control:client-status-changed", onCustom);
+    window.addEventListener("risk-control:finance-changed", onCustom);
+    window.addEventListener("risk-control:quote-changed", onCustom);
     const id = window.setInterval(onCustom, 3500);
     return () => {
+      window.removeEventListener("storage", onStorage);
       window.removeEventListener("risk-control:client-status-changed", onCustom);
+      window.removeEventListener("risk-control:finance-changed", onCustom);
+      window.removeEventListener("risk-control:quote-changed", onCustom);
       window.clearInterval(id);
     };
   }, []);

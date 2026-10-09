@@ -124,10 +124,14 @@ export default function BDManagerProfilePage() {
     const id = window.setInterval(() => setTick((t) => t + 1), 3500);
     const onCustom = () => setTick((t) => t + 1);
     window.addEventListener("risk-control:client-status-changed", onCustom);
+    window.addEventListener("risk-control:finance-changed", onCustom);
+    window.addEventListener("risk-control:quote-changed", onCustom);
     return () => {
       window.removeEventListener("storage", onStorage);
       window.clearInterval(id);
       window.removeEventListener("risk-control:client-status-changed", onCustom);
+      window.removeEventListener("risk-control:finance-changed", onCustom);
+      window.removeEventListener("risk-control:quote-changed", onCustom);
     };
   }, []);
 

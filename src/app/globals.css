@@ -332,6 +332,23 @@
     background-color: hsl(var(--secondary) / 0.15);
   }
 
+  @keyframes price-flash-up {
+    0%   { background-color: hsl(var(--success) / 0.22); border-color: hsl(var(--success) / 0.60); box-shadow: 0 0 0 0 hsl(var(--success) / 0.55); }
+    35%  { background-color: hsl(var(--success) / 0.42); border-color: hsl(var(--success) / 0.95); box-shadow: 0 0 0 6px hsl(var(--success) / 0.14); }
+    100% { background-color: hsl(var(--secondary) / 0.40); border-color: hsl(var(--border) / 0.40); box-shadow: 0 0 0 0 transparent; }
+  }
+  .animate-price-flash-up {
+    animation: price-flash-up 1500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes price-flash-down {
+    0%   { background-color: hsl(var(--danger) / 0.22); border-color: hsl(var(--danger) / 0.60); box-shadow: 0 0 0 0 hsl(var(--danger) / 0.55); }
+    35%  { background-color: hsl(var(--danger) / 0.42); border-color: hsl(var(--danger) / 0.95); box-shadow: 0 0 0 6px hsl(var(--danger) / 0.14); }
+    100% { background-color: hsl(var(--secondary) / 0.40); border-color: hsl(var(--border) / 0.40); box-shadow: 0 0 0 0 transparent; }
+  }
+  .animate-price-flash-down {
+    animation: price-flash-down 1500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
   .risk-water-track {
     background: linear-gradient(
       90deg,

@@ -68,9 +68,20 @@ export default function MarginCallsPage() {
     const handler = () => setTick((t) => t + 1);
     window.addEventListener("risk-control:client-single-margin", handler);
     window.addEventListener("risk-control:margin-fulfilled", handler);
+    window.addEventListener("risk-control:finance-changed", handler);
+    window.addEventListener("risk-control:quote-changed", handler);
+    window.addEventListener("risk-control:client-status-changed", handler);
+    const onStorage = () => setTick((t) => t + 1);
+    window.addEventListener("storage", onStorage);
+    const id = window.setInterval(handler, 5000);
     return () => {
       window.removeEventListener("risk-control:client-single-margin", handler);
       window.removeEventListener("risk-control:margin-fulfilled", handler);
+      window.removeEventListener("risk-control:finance-changed", handler);
+      window.removeEventListener("risk-control:quote-changed", handler);
+      window.removeEventListener("risk-control:client-status-changed", handler);
+      window.removeEventListener("storage", onStorage);
+      window.clearInterval(id);
     };
   }, []);
 

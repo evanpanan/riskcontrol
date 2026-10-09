@@ -20,8 +20,26 @@ import {
 } from "lucide-react";
 import { RiskLevel, MarginCallStatus } from "@prisma/client";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 export default function AlertsPage() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const handler = () => setTick((t) => t + 1);
+    window.addEventListener("risk-control:finance-changed", handler);
+    window.addEventListener("risk-control:quote-changed", handler);
+    window.addEventListener("risk-control:client-status-changed", handler);
+    const onStorage = () => setTick((t) => t + 1);
+    window.addEventListener("storage", onStorage);
+    const id = window.setInterval(handler, 5000);
+    return () => {
+      window.removeEventListener("risk-control:finance-changed", handler);
+      window.removeEventListener("risk-control:quote-changed", handler);
+      window.removeEventListener("risk-control:client-status-changed", handler);
+      window.removeEventListener("storage", onStorage);
+      window.clearInterval(id);
+    };
+  }, []);
   const { batches } = getMockData();
   const criticalBatches = batches.filter((b) => b.riskLevel === RiskLevel.CRITICAL);
   const warningBatches = batches.filter((b) => b.riskLevel === RiskLevel.WARNING);

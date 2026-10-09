@@ -209,15 +209,26 @@ export default function MarketPage() {
     const interval = setInterval(() => {
       const nyse = getNYSEInfo();
       if (!nyse.shouldBreathe) return;
-      try { refreshMockDataPrices(); } catch (err) {
-        toast.error(err instanceof Error ? err.message : "行情更新失败");
-        clearInterval(interval);
-        return;
-      }
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
     }, sec * 1000);
-    return () => clearInterval(interval);
+    const handler = () => {
+      mockDataRef.current = getMockData();
+      setTick((t) => t + 1);
+    };
+    window.addEventListener("risk-control:finance-changed", handler);
+    window.addEventListener("risk-control:quote-changed", handler);
+    const onStorage = () => {
+      mockDataRef.current = getMockData();
+      setTick((t) => t + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("risk-control:finance-changed", handler);
+      window.removeEventListener("risk-control:quote-changed", handler);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [settings]);
 
   const handleRefresh = () => {

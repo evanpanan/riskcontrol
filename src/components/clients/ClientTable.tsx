@@ -55,6 +55,8 @@ import {
   isTopupBlockedByLegacyLedger,
   summarizeBatchMarginFromClients,
   getLockedBatchRequiredMargin,
+  calculateClientSettlement,
+  getAccountMarketValue,
   type BatchLike,
   type ClientMarginState,
 } from "@/lib/riskEngine";
@@ -318,13 +320,25 @@ export function ClientTable({
         <TableHeader className="bg-secondary/30">
           <TableRow className="hover:bg-secondary/30 border-border/50">
             <TableHead className="w-[180px]">客户信息</TableHead>
-            <TableHead>
-              <div className="flex items-center">
+            <TableHead className="w-[120px] min-w-[100px] max-w-[140px]">
+              <div className="flex items-center whitespace-nowrap">
                 商务经理
               </div>
             </TableHead>
             <TableHead className="text-right">投资金额</TableHead>
             <TableHead className="text-center">分成比例</TableHead>
+            <TableHead className="text-right">
+              <div className="flex items-center gap-1 justify-end">
+                <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
+                机构盈利
+              </div>
+            </TableHead>
+            <TableHead className="text-right">
+              <div className="flex items-center gap-1 justify-end">
+                <DollarSign className="h-3.5 w-3.5 text-success" />
+                客户盈利
+              </div>
+            </TableHead>
             {shouldMergeProfitCols ? (
               <TableHead className="text-right">
                 <div className="flex items-center gap-1 justify-end">
@@ -412,6 +426,38 @@ export function ClientTable({
             const clientMarginPctOfTotal = (batchSummary?.totalRequired ?? 0) > 0
               ? (clientRequired / (batchSummary?.totalRequired ?? 1)) * 100
               : clientRatio;
+            const settlementCalc = (() => {
+              if (isRedacted) return { institutionPnL: 0, clientPnL: 0 };
+              try {
+                if (client.status === ClientStatus.SETTLED && (client as any).settlement) {
+                  const snap = (client as any).settlement;
+                  return {
+                    institutionPnL: Number(snap.institutionPnL ?? 0),
+                    clientPnL: Number(snap.clientPnL ?? 0),
+                  };
+                }
+                if (!batch || !batch.priorityAmount || !(batch.priorityAmount > 0)) {
+                  return { institutionPnL: 0, clientPnL: 0 };
+                }
+                const priceFinal = (batch as any).currentStockPrice ?? (batch as any).stockPriceAtStart ?? 0;
+                const mvFinal = (() => {
+                  try { return getAccountMarketValue(batch as any); }
+                  catch { return client.estimatedExitAmount ?? client.investmentAmount; }
+                })();
+                const r = calculateClientSettlement(
+                  client as any,
+                  batch as any,
+                  mvFinal,
+                  priceFinal,
+                );
+                return {
+                  institutionPnL: Number(r.institutionPnL ?? 0),
+                  clientPnL: Number(r.clientPnL ?? 0),
+                };
+              } catch {
+                return { institutionPnL: 0, clientPnL: 0 };
+              }
+            })();
 
             return (
               <TableRow
@@ -475,16 +521,16 @@ export function ClientTable({
                     </div>
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell className="w-[120px] min-w-[100px] max-w-[140px]">
                   {isRedacted ? (
                     <span className="text-sm text-muted-foreground italic">—</span>
                   ) : (
                     <Link
                       href={`/bd/${encodeURIComponent(client.bdManager)}`}
-                      className="text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors"
+                      className="text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors block w-full"
                       title={`查看 ${client.bdManager} 的所有客户`}
                     >
-                      <span>{client.bdManager}</span>
+                      <span className="block truncate whitespace-nowrap min-w-0">{client.bdManager}</span>
                     </Link>
                   )}
                 </TableCell>
@@ -528,6 +574,82 @@ export function ClientTable({
                             * 客户亏损全额由机构劣后资金承担
                           </p>
                         </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="text-muted-foreground italic">—</span>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help w-[140px] ml-auto">
+                          <p
+                            className={cn(
+                              "font-mono font-bold text-sm whitespace-nowrap tabular-nums",
+                              settlementCalc.institutionPnL > 0 && "text-success",
+                              settlementCalc.institutionPnL < 0 && "text-danger",
+                              settlementCalc.institutionPnL === 0 && "text-muted-foreground",
+                            )}
+                          >
+                            {settlementCalc.institutionPnL > 0 ? (
+                              <span className="flex items-center gap-0.5 justify-end">
+                                <TrendingUp className="h-3 w-3" />
+                                +{formatCurrency(settlementCalc.institutionPnL)}
+                              </span>
+                            ) : settlementCalc.institutionPnL < 0 ? (
+                              <span className="flex items-center gap-0.5 justify-end">
+                                <TrendingDown className="h-3 w-3" />
+                                {formatCurrency(settlementCalc.institutionPnL)}
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-0.5 justify-end">
+                                <Minus className="h-3 w-3" /> {formatCurrency(0)}
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="end">
+                        <p className="text-xs w-[200px]">
+                          按客户本金占优先池权重 × 机构劣后本金及补仓分摊对应的机构侧净利润（扣除劣后本金与补仓本金回退）
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="text-muted-foreground italic">—</span>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help w-[140px] ml-auto">
+                          <p
+                            className={cn(
+                              "font-mono font-bold text-sm whitespace-nowrap tabular-nums",
+                              settlementCalc.clientPnL > 0 && "text-success",
+                              settlementCalc.clientPnL === 0 && "text-muted-foreground",
+                            )}
+                          >
+                            {settlementCalc.clientPnL > 0 ? (
+                              <span className="flex items-center gap-0.5 justify-end">
+                                <PlusCircle className="h-3 w-3" />
+                                +{formatCurrency(settlementCalc.clientPnL)}
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-0.5 justify-end">
+                                <ShieldCheck className="h-3 w-3 text-primary/80" /> 保本
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" align="end">
+                        <p className="text-xs w-[200px]">
+                          客户签约分成对应的最终净利润（客户本金 100% 保底，只有正向行情才产生盈利）
+                        </p>
                       </TooltipContent>
                     </Tooltip>
                   )}

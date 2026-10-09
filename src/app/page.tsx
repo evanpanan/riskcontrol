@@ -91,20 +91,28 @@ export default function DashboardPage() {
     const id = setInterval(() => {
       const nyse = getNYSEInfo();
       if (!nyse.shouldBreathe) return;
-      try { refreshMockDataPrices(); } catch (err) {
-        toast.error(err instanceof Error ? err.message : "行情更新失败");
-        clearInterval(id);
-        return;
-      }
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
     }, Math.max(2000, s.realtimeTickIntervalSec * 1000));
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    const handler = () => setTick((t) => t + 1);
+    const handler = () => {
+      mockDataRef.current = getMockData();
+      setTick((t) => t + 1);
+    };
     window.addEventListener("risk-control:finance-changed", handler);
-    return () => window.removeEventListener("risk-control:finance-changed", handler);
+    window.addEventListener("risk-control:quote-changed", handler);
+    const onStorage = () => {
+      mockDataRef.current = getMockData();
+      setTick((t) => t + 1);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("risk-control:finance-changed", handler);
+      window.removeEventListener("risk-control:quote-changed", handler);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   // ===== 风险预警弹窗 ACK & 构建alert列表 =====

@@ -40,6 +40,7 @@ import { toast } from "sonner";
 import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { KLineDialog } from "@/components/quote/KLineDialog";
+import { refreshMockDataPrices } from "@/lib/mockData";
 
 function getQuoteSettings(): LiveQuoteSettings {
   return getLiveQuoteSettings();
@@ -63,9 +64,11 @@ export function TopBar() {
   const [quoteTick, setQuoteTick] = useState(0);
   const quoteTickRef = useRef(0);
   const [liveQuote, setLiveQuote] = useState<BrowserQuote | null>(null);
+  const prevPriceRef = useRef<number>(0);
   const [quoteFetching, setQuoteFetching] = useState(false);
   const [klineOpen, setKlineOpen] = useState(false);
   const [nyseTick, setNyseTick] = useState(0);
+  const [quoteFlashDir, setQuoteFlashDir] = useState<"up" | "down" | null>(null);
 
   useEffect(() => {
     setHydrated(true);
@@ -79,8 +82,39 @@ export function TopBar() {
     try {
       setQuote(getQuoteSettings());
       const onQuoteChanged = (e: Event) => {
-        const ce = e as CustomEvent<LiveQuoteSettings>;
-        if (ce?.detail) setQuote({ ...DEFAULT_LIVE_QUOTE, ...ce.detail });
+        const ce = e as CustomEvent<any>;
+        if (!ce?.detail) return;
+        if (ce.detail.symbol || ce.detail.displaySymbol) {
+          setQuote((q) => ({ ...DEFAULT_LIVE_QUOTE, ...q, ...ce.detail }));
+          return;
+        }
+        if (typeof ce.detail.updatedAt === "number") {
+          setLastUpdated(ce.detail.updatedAt);
+          setSecondsAgo(0);
+          const symKey = (quote.symbol || "").trim().toUpperCase();
+          const quotes = ce.detail.quotes as Record<string, { price: number; changePercent: number }> | undefined;
+          if (symKey && quotes && typeof quotes[symKey] === "object") {
+            const q = quotes[symKey]!;
+            const old = prevPriceRef.current || Number(liveQuote?.price || 0);
+            const np = Number(q.price);
+            if (Number.isFinite(np)) {
+              if (old > 0 && Math.abs(np - old) > 1e-6) {
+                const dir: "up" | "down" = np > old ? "up" : "down";
+                setQuoteFlashDir(dir);
+                window.setTimeout(() => setQuoteFlashDir(null), 1500);
+              }
+              prevPriceRef.current = np;
+              setLiveQuote({
+                symbol: symKey,
+                provider: ce.detail.provider || (liveQuote?.provider ?? null) as any,
+                source: (ce.detail.source as any) || (liveQuote?.source as any) || "LIVE",
+                fetchedAt: new Date(ce.detail.updatedAt).toISOString(),
+                price: String(q.price),
+                changePct: String(q.changePercent || 0),
+              } as any);
+            }
+          }
+        }
       };
       const onStorage = (e: StorageEvent) => {
         if (e.key === LIVE_QUOTE_SETTINGS_KEY) {
@@ -94,7 +128,7 @@ export function TopBar() {
         window.removeEventListener("storage", onStorage);
       };
     } catch {}
-  }, []);
+  }, [quote.symbol, liveQuote?.price, liveQuote?.provider, liveQuote?.source]);
 
   // 实时行情 tick：按 NYSE 时段动态刷新；休市期间完全停止 setQuoteTick 引起的 rerender（防止FlashNumber视觉抖动）
   useEffect(() => {
@@ -121,6 +155,7 @@ export function TopBar() {
       try {
         const q = await fetchQuoteBrowser(quote.symbol);
         if (!cancelled) setLiveQuote(q);
+        refreshMockDataPrices();
       } catch {} finally {
         if (!cancelled) setQuoteFetching(false);
       }
@@ -138,6 +173,7 @@ export function TopBar() {
         try {
           const q = await fetchQuoteBrowser(quote.symbol);
           if (!cancelled) setLiveQuote(q);
+          refreshMockDataPrices();
         } catch {} finally {
           if (!cancelled) setQuoteFetching(false);
           scheduleFetch();
@@ -174,6 +210,7 @@ export function TopBar() {
 
   const handleRefresh = () => {
     setIsRefreshing(true);
+    try { refreshMockDataPrices(); } catch {}
     setTimeout(() => {
       setIsRefreshing(false);
       setLastUpdated(Date.now());
@@ -308,7 +345,11 @@ export function TopBar() {
               <button
                 type="button"
                 onClick={() => setKlineOpen(true)}
-                className="hidden md:inline-flex items-center gap-2 pl-3 pr-3.5 py-1.5 rounded-full bg-secondary/40 border border-border/40 hover:bg-secondary/60 hover:border-primary/30 transition-colors focus:outline-none focus:ring-2 focus:ring-ring"
+                className={cn(
+                  "hidden md:inline-flex items-center gap-2 pl-3 pr-3.5 py-1.5 rounded-full bg-secondary/40 border border-border/40 hover:bg-secondary/60 hover:border-primary/30 transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
+                  quoteFlashDir === "up" && "animate-price-flash-up",
+                  quoteFlashDir === "down" && "animate-price-flash-down",
+                )}
                 title={`${symbol} 最新价 $${Number(price).toFixed(2)} · 点击查看 K 线`}
               >
                 {quoteFetching ? (
