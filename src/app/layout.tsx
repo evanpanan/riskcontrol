@@ -58,50 +58,6 @@ export default function RootLayout({
       (function() {
         var LS_KEY = ${JSON.stringify(FINANCE_STORE_KEY)};
         var RAW_KEYS = ${JSON.stringify(RAW_KEYS)};
-        // ============================================================
-        // CHUNK-LOAD FALLBACK (dev HMR recovery, executes BEFORE React mounts)
-        // Fixes the exact symptom: user clicks login → React chunks
-        // /_next/static/chunks/{main-app,app-pages-internals,app/login/page,app/layout}.js
-        // all return 404 because Next 14.2.8 dev HMR invalidation → login
-        // page renders as SSR nodes=3 empty shell and button click has no
-        // handler → "登录失败闪烁一下". 下面这一段 inline script 永远会：
-        //   1) 监听 4 个核心 script 的 onerror；
-        //   2) 2000ms 内 #__next 里还是空的 → 自动 reload 1 次；
-        //   3) __RC_RELOADED_BY_CHUNK_GUARD__ 防止 reload 循环。
-        // ============================================================
-        try {
-          var GUARD_KEY = "__RC_RELOADED_BY_CHUNK_GUARD__";
-          var isDev = (${JSON.stringify(process.env.NODE_ENV)} === "development") || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
-          if (isDev && !window.sessionStorage.getItem(GUARD_KEY)) {
-            var badChunk = false;
-            var markBad = function() { badChunk = true; };
-            // 404-recovery: capture any script that fails whose src.startsWith('/_next/static/chunks/')
-            window.addEventListener('error', function(ev) {
-              try {
-                var t = ev && ev.target;
-                if (t && t.tagName && t.tagName.toLowerCase() === 'script' && t.src && t.src.indexOf('/_next/static/chunks/') >= 0) {
-                  badChunk = true;
-                }
-              } catch(e) {}
-            }, true);
-            // 2000ms 之内如果 #__next 还是空壳，**同时必须 badChunk 已经命中**（说明
-            // 真的有 /_next/static/chunks/* script 加载失败才是 chunk 404 的场景），
-            // 才 reload 1 次。否则正常 React hydrate 本身就需要 2-3s，不要误 reload。
-            window.setTimeout(function() {
-              try {
-                var next = document.getElementById('__next');
-                var hasMain = next && next.querySelector && !!next.querySelector('main');
-                // empty = 没有 #__next 或 #__next 下一个 main 都没有（连 SSR HTML 都没渲出来）
-                var empty = !next || !hasMain;
-                if (badChunk && empty) {
-                  window.sessionStorage.setItem(GUARD_KEY, '1');
-                  window.location.reload();
-                }
-              } catch(e) {}
-            }, 2500);
-          }
-        } catch (_chunkGuardErr) {}
-
         // 1) 先判定环境，非开发环境直接退出，不注册任何重置能力
         var devMode = (${JSON.stringify(process.env.NODE_ENV)} === "development")
           || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
