@@ -71,7 +71,7 @@ export default function RootLayout({
         // ============================================================
         try {
           var GUARD_KEY = "__RC_RELOADED_BY_CHUNK_GUARD__";
-          var isDev = ("development" === ${JSON.stringify(process.env.NODE_ENV)} === true || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
+          var isDev = (${JSON.stringify(process.env.NODE_ENV)} === "development") || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
           if (isDev && !window.sessionStorage.getItem(GUARD_KEY)) {
             var badChunk = false;
             var markBad = function() { badChunk = true; };
@@ -100,7 +100,7 @@ export default function RootLayout({
 
         // 1) 先判定环境，非开发环境直接退出，不注册任何重置能力
         var devMode = (${JSON.stringify(process.env.NODE_ENV)} === "development")
-          && /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
+          || /localhost|127\\.0\\.0\\.1|:300[0-9]$/.test(window.location.host);
         if (!devMode) return;
 
         // 2) 仅在 devMode 成立时才挂载重置函数
