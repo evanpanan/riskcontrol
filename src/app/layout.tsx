@@ -84,17 +84,21 @@ export default function RootLayout({
                 }
               } catch(e) {}
             }, true);
-            // 2000ms 之内如果 #__next 还是空壳（nodes 登录页 nodes=3）说明 React 没挂载） → reload 1 次
+            // 2000ms 之内如果 #__next 还是空壳，**同时必须 badChunk 已经命中**（说明
+            // 真的有 /_next/static/chunks/* script 加载失败才是 chunk 404 的场景），
+            // 才 reload 1 次。否则正常 React hydrate 本身就需要 2-3s，不要误 reload。
             window.setTimeout(function() {
               try {
                 var next = document.getElementById('__next');
-                var empty = !next || next.children.length === 0 || (next.children.length === 1 && next.firstElementChild && next.firstElementChild.className === '');
-                if (badChunk || empty) {
+                var hasMain = next && next.querySelector && !!next.querySelector('main');
+                // empty = 没有 #__next 或 #__next 下一个 main 都没有（连 SSR HTML 都没渲出来）
+                var empty = !next || !hasMain;
+                if (badChunk && empty) {
                   window.sessionStorage.setItem(GUARD_KEY, '1');
                   window.location.reload();
                 }
               } catch(e) {}
-            }, 2000);
+            }, 2500);
           }
         } catch (_chunkGuardErr) {}
 
