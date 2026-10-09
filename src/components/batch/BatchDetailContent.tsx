@@ -17,7 +17,12 @@ import {
   settleClientPosition,
   calculateClientSettlement,
   isTopupBlockedByLegacyLedger,
+  SUBORDINATE_RATIO,
+  PRIORITY_RATIO,
 } from "@/lib/riskEngine";
+// settlement amount rounding (2 decimals, bank rounding safe)
+const _money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
+const money: (v: number) => number = _money;
 import { getStoredThresholds } from "@/lib/thresholds";
 import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
 import { commitBatchFinance, getMockData } from "@/lib/mockData";
@@ -1563,12 +1568,47 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         summary={(() => {
           const client = batch.clients?.find((c) => c.id === settleTarget);
           if (!client) return [];
-          const result = calculateClientSettlement(client, batch as any, mv, batch.currentStockPrice ?? batch.stockPriceAtStart);
+          const mvFinal = mv;
+          const priceFinal = batch.currentStockPrice ?? batch.stockPriceAtStart;
+          const result = calculateClientSettlement(client, batch as any, mvFinal, priceFinal);
+          // ====== 新增 8 大结算明细字段（用户需求 #2）======
+          const weight = (batch.priorityAmount ?? (batch as any).originalPriority ?? batch.initialTotalAmount ?? 0) > 0
+            ? client.investmentAmount / (batch.priorityAmount ?? (batch as any).originalPriority ?? batch.initialTotalAmount ?? 1)
+            : 0;
+          // ① 初始投资总金额 = 客户本金 + 对应归属的机构劣后本金
+          const institutionInitialCapitalAttributed = (batch.subordinateAmount ?? 0) * weight;
+          const rescueStats = calculateRescueStats(batch, priceFinal);
+          const institutionRescueAttributed = rescueStats.totalRescueAmount * weight;
+          const initialInvestmentTotal = money(client.investmentAmount + institutionInitialCapitalAttributed + institutionRescueAttributed);
+          // ② 当前总价值 = 客户实收 + 机构实收（两边合计）
+          const totalCurrentValue = money(result.clientReceives + result.institutionReceives);
+          // ③ 收益率（按初始投资总金额算，两边合计）
+          const yieldPct = Math.abs(initialInvestmentTotal) > 1e-6
+            ? (totalCurrentValue - initialInvestmentTotal) / initialInvestmentTotal * 100
+            : 0;
+          // ④ 机构归属价值 / 机构利润
+          const institutionAttributedValue = money(result.institutionReceives);
+          const institutionAttributedPnL = money(institutionAttributedValue - institutionInitialCapitalAttributed - institutionRescueAttributed);
+          // ⑤ 客户归属价值 / 客户利润 = clientReceives / clientPnL
+          const clientAttributedValue = money(result.clientReceives);
+          const clientAttributedPnL = money(result.clientPnL);
           return [
+            // ------- 新增 8 大明细（上方） -------
+            { label: "初始投资总金额", value: formatCurrency(initialInvestmentTotal), accent: "primary" },
+            { label: "当前总价值", value: formatCurrency(totalCurrentValue), accent: (yieldPct >= 0 ? "success" : "danger") },
+            { label: "机构投入金额", value: formatCurrency(institutionInitialCapitalAttributed + institutionRescueAttributed), accent: "muted" },
+            { label: "客户投入金额", value: formatCurrency(client.investmentAmount), accent: "muted" },
+            { label: "收益率（整体）", value: `${yieldPct >= 0 ? "+" : ""}${yieldPct.toFixed(2)}%`, accent: (yieldPct >= 0 ? "success" : "danger") },
+            { label: "客户签约分成", value: `${result.splitRatioClient}%`, accent: "muted" },
+            { label: "机构归属价值", value: formatCurrency(institutionAttributedValue), accent: "muted" },
+            { label: "客户归属价值", value: formatCurrency(clientAttributedValue), accent: "primary" },
+            { label: "机构利润", value: `${institutionAttributedPnL >= 0 ? "+" : ""}${formatCurrency(institutionAttributedPnL)}`, accent: (institutionAttributedPnL >= 0 ? "success" : "danger") },
+            { label: "客户利润", value: `${clientAttributedPnL >= 0 ? "+" : ""}${formatCurrency(clientAttributedPnL)}`, accent: (clientAttributedPnL >= 0 ? "success" : "warning") },
+            // ------- 原有 4 项（下方保持兼容） -------
             { label: "客户原始本金", value: formatCurrency(client.investmentAmount) },
             { label: "客户实收", value: formatCurrency(result.clientReceives) },
             { label: "机构实收（含补仓）", value: formatCurrency(result.institutionReceives) },
-            { label: "客户签约分成", value: `${result.splitRatioClient}%` },
+            { label: "客户签约分成（原）", value: `${result.splitRatioClient}%` },
           ];
         })()}
         onConfirm={() => {

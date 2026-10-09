@@ -759,11 +759,11 @@ function PnLChip(props: {
             )}
           </div>
           {hasBoth ? (
-            <div className="flex flex-col gap-0.5 mt-0.5">
-              <div className="flex items-baseline justify-between w-full gap-2">
-                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap">已实现</span>
+            <div className="flex flex-col gap-0.5 mt-0.5 min-w-0 w-full overflow-hidden">
+              <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">已实现</span>
                 <span className={cn(
-                  "text-[12px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums",
+                  "text-[11px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
                   Math.abs(props.realized) < CARD_PNL_EPS
                     ? "text-muted-foreground"
                     : props.realized >= 0
@@ -775,10 +775,10 @@ function PnLChip(props: {
                   {Math.abs(props.realized) >= CARD_PNL_EPS && props.realized >= 0 ? "+" : ""}{formatCurrency(props.realized)}
                 </span>
               </div>
-              <div className="flex items-baseline justify-between w-full gap-2">
-                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap">未实现</span>
+              <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">未实现</span>
                 <span className={cn(
-                  "text-[12px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums",
+                  "text-[11px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
                   Math.abs(props.unrealized) < CARD_PNL_EPS
                     ? "text-muted-foreground"
                     : props.unrealized >= 0
@@ -790,18 +790,21 @@ function PnLChip(props: {
                   {Math.abs(props.unrealized) >= CARD_PNL_EPS && props.unrealized >= 0 ? "+" : ""}{formatCurrency(props.unrealized)}
                 </span>
               </div>
-              <div className="flex items-baseline justify-between w-full gap-2 pt-1 mt-0.5 border-t border-border/40">
-                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap">合计</span>
-                <div className="flex items-baseline gap-2">
+              <div className="flex flex-col justify-end gap-0.5 pt-1 mt-0.5 border-t border-border/40 min-w-0 w-full overflow-hidden">
+                <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                  <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">收益率</span>
                   <span className={cn(
-                    "text-[10.5px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0",
+                    "text-[10px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0 font-semibold truncate",
                     z ? "text-muted-foreground/80" : positive ? "text-success/90" : (props.institutionSide ? "text-danger/90" : "text-warning/90")
                   )}>
                     {props.pnlPercent >= 0 && !z ? "+" : ""}
                     {props.pnlPercent.toFixed(2)}%
                   </span>
+                </div>
+                <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                  <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">合计</span>
                   <span className={cn(
-                    "text-[14px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums",
+                    "text-[12.5px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
                     z ? "text-muted-foreground" : positive ? "text-success" : (props.institutionSide ? "text-danger" : "text-warning")
                   )}>
                     {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}
@@ -810,26 +813,27 @@ function PnLChip(props: {
               </div>
             </div>
           ) : (
-            <>
-              <div className="flex items-center justify-between w-full shrink-0 gap-2">
-                <span className="text-[10.5px] text-muted-foreground font-medium whitespace-nowrap shrink-0 opacity-0">合计</span>
+            <div className="flex flex-col gap-0.5 min-w-0 w-full overflow-hidden">
+              <div className="flex items-center justify-between w-full shrink-0 gap-2 min-w-0">
+                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">收益率</span>
                 <span className={cn(
-                  "text-[11px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0",
+                  "text-[10px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0 font-semibold truncate",
                   z ? "text-muted-foreground/80" : positive ? "text-success/90" : (props.institutionSide ? "text-danger/90" : "text-warning/90")
                 )}>
                   {props.pnlPercent >= 0 && !z ? "+" : ""}
                   {props.pnlPercent.toFixed(2)}%
                 </span>
               </div>
-              <div className="flex items-baseline min-w-0 w-full">
+              <div className="flex items-baseline min-w-0 w-full justify-between gap-2">
+                <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">合计</span>
                 <span className={cn(
-                  "text-[14px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums w-full",
+                  "text-[12.5px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
                   z ? "text-muted-foreground" : positive ? "text-success" : (props.institutionSide ? "text-danger" : "text-warning")
                 )}>
                   {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}
                 </span>
               </div>
-            </>
+            </div>
           )}
         </div>
       </TooltipTrigger>
