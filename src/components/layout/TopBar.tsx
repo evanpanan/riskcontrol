@@ -91,7 +91,8 @@ export function TopBar() {
         if (typeof ce.detail.updatedAt === "number") {
           setLastUpdated(ce.detail.updatedAt);
           setSecondsAgo(0);
-          const symKey = (quote.symbol || "").trim().toUpperCase();
+          const qNow = getQuoteSettings();
+          const symKey = (qNow.symbol || "").trim().toUpperCase();
           const quotes = ce.detail.quotes as Record<string, { price: number; changePercent: number }> | undefined;
           if (symKey && quotes && typeof quotes[symKey] === "object") {
             const q = quotes[symKey]!;
@@ -106,7 +107,7 @@ export function TopBar() {
               prevPriceRef.current = np;
               setLiveQuote({
                 symbol: symKey,
-                provider: ce.detail.provider || (liveQuote?.provider ?? null) as any,
+                provider: (q as any).provider || (liveQuote?.provider ?? null) as any,
                 source: (ce.detail.source as any) || (liveQuote?.source as any) || "LIVE",
                 fetchedAt: new Date(ce.detail.updatedAt).toISOString(),
                 price: String(q.price),
@@ -128,7 +129,7 @@ export function TopBar() {
         window.removeEventListener("storage", onStorage);
       };
     } catch {}
-  }, [quote.symbol, liveQuote?.price, liveQuote?.provider, liveQuote?.source]);
+  }, [liveQuote?.price, liveQuote?.provider, liveQuote?.source]);
 
   // 实时行情 tick：按 NYSE 时段动态刷新；休市期间完全停止 setQuoteTick 引起的 rerender（防止FlashNumber视觉抖动）
   useEffect(() => {

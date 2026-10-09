@@ -25,7 +25,7 @@ import {
   type BatchLike,
 } from "./riskEngine";
 import { mergeClientStatusOnClient } from "./clientStatusStore";
-import { getNYSEInfo } from "./liveQuote";
+import { getNYSEInfo, LIVE_QUOTE_SETTINGS_KEY } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
 
 export class RevisionMismatchError extends Error {
@@ -43,7 +43,7 @@ export interface MockDataSet {
 }
 
 // Scenario quote only, not a live market price. Actual symbol comes from settings.
-const STOCKS = [{ symbol: "", name: "", basePrice: 10 }];
+const STOCKS = [{ symbol: "XMAX", name: "XMAX Corp.", basePrice: 10 }];
 
 export const BD_MANAGERS = ["李晓明 (Evan Li)", "王思远 (Sylvia Wang)", "张志强 (Jack Zhang)", "刘佳 (Jennifer Liu)"];
 
@@ -787,7 +787,7 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
   if (process.env.NODE_ENV !== "development" || typeof window === "undefined") {
     throw new Error("仅允许在本地开发预览中重置测试数据。");
   }
-  const keys = [FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
+  const keys = [FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY, LIVE_QUOTE_SETTINGS_KEY, MOCK_PERSIST_KEY, "risk_control_client_status_v1",
     "risk_control_notifications_v1", "risk_control_xmax_notifications_v1", "risk_control_alert_ack_v1", "risk_control_xmax_alert_ack_v1"];
   const storage = window.localStorage;
   const backup = Object.fromEntries(keys.map((key) => [key, storage.getItem(key)]));
@@ -1096,7 +1096,9 @@ export function refreshMockDataPrices(): MockDataSet {
       if (!found) continue;
       const newPrice = found.price;
       const newChg = found.changePercent;
-      if (Math.abs(newPrice - batch.currentStockPrice) <= 1e-6 && Math.abs(newChg - (batch.currentDayChange ?? 0)) <= 1e-6) {
+      const priceDiff = Math.abs(newPrice - batch.currentStockPrice);
+      const chgDiff = Math.abs(newChg - (batch.currentDayChange ?? 0));
+      if (priceDiff <= 1e-6 && chgDiff <= 1e-6 && (batch as any)._realtimeSynced && typeof (batch as any)._lastClientRealtimeSync === "number" && (Date.now() - (batch as any)._lastClientRealtimeSync) < 30_000) {
         continue;
       }
       try {
@@ -1104,6 +1106,8 @@ export function refreshMockDataPrices(): MockDataSet {
           draft.currentStockPrice = newPrice;
           draft.currentDayChange = newChg;
           draft.updatedAt = now;
+          (draft as any)._realtimeSynced = true;
+          (draft as any)._lastClientRealtimeSync = Date.now();
           syncBatchFinance(draft);
           const clientsArr = (draft.clients ?? []) as any[];
           for (const c of clientsArr) {
@@ -1119,8 +1123,10 @@ export function refreshMockDataPrices(): MockDataSet {
       } catch {}
     }
     if (typeof window !== "undefined") {
+      const quoteDict: Record<string, { price: number; changePercent: number }> = {};
+      quotes.forEach((v, k) => { quoteDict[k] = v; });
       window.dispatchEvent(new CustomEvent("risk-control:quote-changed", {
-        detail: { updatedAt: Date.now(), batchIds: dispatchedIds, symbols: symbolArray, quotes: Object.fromEntries(quotes) },
+        detail: { updatedAt: Date.now(), batchIds: dispatchedIds, symbols: symbolArray, quotes: quoteDict },
       }));
     }
   })();

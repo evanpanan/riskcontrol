@@ -22,6 +22,7 @@ export const metadata: Metadata = {
 const RAW_KEYS = [
   FINANCE_STORE_KEY,
   FINANCE_STORE_KEY_LEGACY,
+  "risk_control_live_quote_v2",
   "risk_control_mock_margin_patches_v1",
   "risk_control_client_status_v1",
   "risk_control_notifications_v1",

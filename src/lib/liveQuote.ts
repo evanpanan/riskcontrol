@@ -83,7 +83,7 @@ export interface LiveQuoteSettings {
 }
 
 export const DEFAULT_LIVE_QUOTE: LiveQuoteSettings = {
-  symbol: "",
+  symbol: "XMAX",
   refreshSec: 8,
   showOnTopBar: true,
   colorUp: "text-success",
@@ -94,12 +94,15 @@ export function getLiveQuoteSettings(): LiveQuoteSettings {
   try {
     if (typeof window === "undefined") return { ...DEFAULT_LIVE_QUOTE };
     const raw = localStorage.getItem(LIVE_QUOTE_SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_LIVE_QUOTE };
-    const parsed = JSON.parse(raw);
+    const parsed = raw ? JSON.parse(raw) : {};
     const next: LiveQuoteSettings = { ...DEFAULT_LIVE_QUOTE, ...(parsed || {}) };
     next.symbol = String(next.symbol || "").trim().toUpperCase();
+    if (!next.symbol) next.symbol = DEFAULT_LIVE_QUOTE.symbol;
     const refreshSecRaw = Number(next.refreshSec) || 0;
     next.refreshSec = Math.max(1, Math.min(3600, refreshSecRaw)) || 8;
+    try {
+      localStorage.setItem(LIVE_QUOTE_SETTINGS_KEY, JSON.stringify(next));
+    } catch {}
     return next;
   } catch {
     return { ...DEFAULT_LIVE_QUOTE };

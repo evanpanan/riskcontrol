@@ -732,6 +732,21 @@ export function calculateRealtimeClientMetrics(client: Client, batch: BatchLike,
     clientShares, isPriceAboveStart: snapshot ? snapshot.clientPnL > 0 : (batch.currentStockPrice ?? 0) > entryPrice,
   };
 }
+export function getClientPositionMetrics(batch: BatchLike, clientId: string, overridePrice?: number) {
+  const save = (batch as any).currentStockPrice;
+  if (typeof overridePrice === "number" && Number.isFinite(overridePrice)) {
+    (batch as any).currentStockPrice = overridePrice;
+  }
+  try {
+    const client = batch.clients?.find((c) => c.id === clientId) as Client | undefined;
+    if (!client) return { realtimePnL: 0, estimatedExitAmount: 0, marketValueShare: 0, clientShares: 0, isPriceAboveStart: false };
+    return calculateRealtimeClientMetrics(client, batch, (batch as any).currentMarketValue ?? calculateCurrentMarketValue(batch));
+  } finally {
+    if (typeof overridePrice === "number") {
+      (batch as any).currentStockPrice = save;
+    }
+  }
+}
 export function calculateBatchStatus(batch: Batch): BatchStatus {
   const trading = calculateTradingWindows(batch.signDate);
   if (trading.monthsElapsed >= 24) return BatchStatus.CLOSED;
