@@ -17,13 +17,23 @@ import {
   settleClientPosition,
   calculateClientSettlement,
   isTopupBlockedByLegacyLedger,
+  requestClientExit,
+  cancelClientExit,
+  getExitEligibility,
+  calculateEarlyExitFee,
   SUBORDINATE_RATIO,
   PRIORITY_RATIO,
+  getBatchRiskTier,
+  getBatchTriggeredTiers,
+  getBatchNextTierGap,
+  getCollateralRatio,
 } from "@/lib/riskEngine";
 // settlement amount rounding (2 decimals, bank rounding safe)
 const _money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const money: (v: number) => number = _money;
 import { getStoredThresholds } from "@/lib/thresholds";
+import { getStoredRiskTiers, type RiskTier } from "@/lib/riskTiers";
+import { detectFlashCrash, recordPriceSnapshot, getFlashCrashThresholds } from "@/lib/flashCrash";
 import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
 import { commitBatchFinance, getMockData, FINANCE_STORE_KEY } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -101,6 +111,8 @@ import {
   Users2,
   Archive,
   Gauge,
+  Layers,
+  ShieldAlert,
 } from "lucide-react";
 
 const MONEY_EPS = 0.005;
@@ -254,6 +266,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [topupCollateralType, setTopupCollateralType] = useState<"cash" | "stock">("stock");
   const [settleTarget, setSettleTarget] = useState<string | null>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -285,6 +298,18 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   }, []);
 
   const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
+  // T+2 履约倒计时文案
+  const getCountdownText = (dueDate: Date | string): string => {
+    const due = new Date(dueDate);
+    const diffMs = due.getTime() - Date.now();
+    if (diffMs <= 0) return "已到期";
+    const days = Math.floor(diffMs / 86400000);
+    const hours = Math.floor((diffMs % 86400000) / 3600000);
+    const mins = Math.floor((diffMs % 3600000) / 60000);
+    if (days > 0) return `剩余 ${days}天 ${hours}小时`;
+    if (hours > 0) return `剩余 ${hours}小时 ${mins}分钟`;
+    return `剩余 ${mins}分钟`;
+  };
   const marginSummary = summarizeBatchMarginFromClients(batch as any);
   const metrics = { ...getBatchMetrics(batch as any), requiredMarginCall: marginSummary.totalPending };
   const baseCapital = (batch as any).finance?.remainingCapital ?? batch.initialTotalAmount ?? 0;
@@ -327,6 +352,28 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     : metrics.dropPercent >= 15
     ? "bg-warning"
     : "bg-success";
+
+  // Phase 5: 多档风控阈值
+  const riskTiers = useMemo(() => getStoredRiskTiers(), [tick]);
+  const activeRiskTier = getBatchRiskTier(batch as any);
+  const triggeredTiers = getBatchTriggeredTiers(batch as any);
+  const nextTierGap = getBatchNextTierGap(batch as any);
+  // Phase 5.3: 担保比例警戒线
+  const collateralRatio = getCollateralRatio(batch as any);
+
+  // Phase 6.1: 盘中闪跌检测 — 每次 tick 记录价格快照并检测闪跌
+  const currentPriceForFlash = Number((batch as any).currentStockPrice ?? (batch as any).stockPriceAtStart ?? 0);
+  const flashCrashStatus = useMemo(() => {
+    if (currentPriceForFlash <= 0) return null;
+    return detectFlashCrash(batch.id, currentPriceForFlash);
+  }, [batch.id, currentPriceForFlash, tick]);
+  const flashCrashThresholds = useMemo(() => getFlashCrashThresholds(), [tick]);
+  // 记录价格快照（每次价格变动或 tick）
+  useEffect(() => {
+    if (currentPriceForFlash > 0) {
+      recordPriceSnapshot(batch.id, currentPriceForFlash);
+    }
+  }, [batch.id, currentPriceForFlash, tick]);
 
   const bdManagers = useMemo(() => {
     const set = new Set((batch.clients || []).map((c) => c.bdManager));
@@ -494,6 +541,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
       amount: marginSummary.totalPending, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
+      collateralType: topupCollateralType,
     }));
     if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
     window.dispatchEvent(
@@ -536,6 +584,42 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         detail: { batchId: batch.id, clientId, newStatus },
       })
     );
+    onChange?.();
+  };
+
+  // Phase 3: 客户退出申请
+  const handleRequestExit = (clientId: string) => {
+    try {
+      const canonical = getMockData().batches.find((b) => b.id === batch.id);
+      if (!canonical) return;
+      commitBatchFinance(canonical, (draft) => {
+        requestClientExit(draft, clientId, { operatorName: user?.displayName });
+      });
+      toast.success("已提交退出申请，等待 15 天通知期后可结算");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "退出申请失败");
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
+    setTick((t) => t + 1);
+    onChange?.();
+  };
+
+  // Phase 3: 取消退出申请
+  const handleCancelExit = (clientId: string) => {
+    try {
+      const canonical = getMockData().batches.find((b) => b.id === batch.id);
+      if (!canonical) return;
+      commitBatchFinance(canonical, (draft) => {
+        cancelClientExit(draft, clientId, { operatorName: user?.displayName });
+      });
+      toast.success("已取消退出申请");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "取消退出失败");
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
+    setTick((t) => t + 1);
     onChange?.();
   };
 
@@ -989,6 +1073,176 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
+          {/* Phase 5: 多档风控阈值进度条 */}
+          <div className="space-y-2 pt-3 border-t border-border/40">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
+                <Layers className="h-3.5 w-3.5" />
+                多档风控阈值
+              </p>
+              {activeRiskTier ? (
+                <Badge
+                  variant={
+                    activeRiskTier.color === "danger" || activeRiskTier.color === "destructive"
+                      ? "danger"
+                      : activeRiskTier.color === "warning"
+                      ? "warning"
+                      : activeRiskTier.color === "info"
+                      ? "info"
+                      : "secondary"
+                  }
+                  className="text-[10px] gap-1"
+                >
+                  当前：{activeRiskTier.name} ({activeRiskTier.dropPercent}%)
+                </Badge>
+              ) : nextTierGap ? (
+                <Badge variant="secondary" className="text-[10px]">
+                  距 {nextTierGap.tier.name} 还剩 {nextTierGap.gap.toFixed(1)}%
+                </Badge>
+              ) : null}
+            </div>
+            <div className="relative h-3 w-full rounded-full bg-secondary/60 overflow-hidden">
+              {riskTiers.filter((t) => t.enabled).map((t, idx, arr) => {
+                const prevDrop = idx === 0 ? 0 : arr[idx - 1].dropPercent;
+                const leftPct = Math.min(100, Math.max(0, (prevDrop / marginPct) * 100));
+                const widthPct = Math.min(100 - leftPct, Math.max(0, ((t.dropPercent - prevDrop) / marginPct) * 100));
+                const isTriggered = triggeredTiers.some((tr) => tr.id === t.id);
+                const colorMap: Record<string, string> = {
+                  info: "bg-info/50",
+                  warning: "bg-warning/60",
+                  danger: "bg-danger/70",
+                  destructive: "bg-destructive/80",
+                };
+                return (
+                  <div
+                    key={t.id}
+                    className={cn(
+                      "absolute inset-y-0 transition-all",
+                      colorMap[t.color] ?? "bg-secondary",
+                      isTriggered && "ring-2 ring-inset ring-white/40"
+                    )}
+                    style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                    title={`${t.name}：${t.dropPercent}%`}
+                  />
+                );
+              })}
+              {/* 当前跌幅指针 */}
+              {!isProfitable && metrics.dropPercent > 0 && (
+                <div
+                  className="absolute inset-y-0 w-[2px] bg-white shadow-[0_0_4px_rgba(0,0,0,0.8)] z-10"
+                  style={{ left: `${Math.min(100, (metrics.dropPercent / marginPct) * 100)}%` }}
+                />
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+              {riskTiers.filter((t) => t.enabled).map((t) => {
+                const isTriggered = triggeredTiers.some((tr) => tr.id === t.id);
+                const dotColor: Record<string, string> = {
+                  info: "bg-info",
+                  warning: "bg-warning",
+                  danger: "bg-danger",
+                  destructive: "bg-destructive",
+                };
+                return (
+                  <div key={t.id} className="flex items-center gap-1">
+                    <span className={cn("h-2 w-2 rounded-full", dotColor[t.color] ?? "bg-secondary", isTriggered && "ring-1 ring-white")} />
+                    <span className={cn("text-[10px] font-mono", isTriggered ? "font-bold" : "text-muted-foreground")}>
+                      {t.name} {t.dropPercent}%
+                    </span>
+                    {isTriggered && (
+                      <span className="text-[9px] text-muted-foreground">
+                        {t.action === "margin_call" ? "·补仓" : t.action === "liquidation" ? "·强平" : "·通知"}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Phase 5.3: 担保比例警戒线 */}
+          <div
+            className={cn(
+              "rounded-lg p-3 border flex items-center justify-between",
+              collateralRatio.breached
+                ? "bg-danger/10 border-danger/40"
+                : "bg-secondary/40 border-border/40"
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <ShieldAlert className={cn("h-4 w-4", collateralRatio.breached ? "text-danger" : "text-muted-foreground")} />
+              <div>
+                <p className="text-[11px] font-medium">WIN100 担保比例</p>
+                <p className="text-[10px] text-muted-foreground">
+                  担保品市值 / 客户股票市值（协议要求 ≥ 3:7 = {(3 / 7 * 100).toFixed(1)}%）
+                </p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className={cn(
+                "text-sm font-mono font-bold",
+                collateralRatio.breached ? "text-danger" : "text-success"
+              )}>
+                {(collateralRatio.ratio * 100).toFixed(1)}%
+              </p>
+              {collateralRatio.breached ? (
+                <p className="text-[10px] text-danger font-medium">⚠ 低于警戒线</p>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">
+                  安全 · 高出 {(collateralRatio.ratio - collateralRatio.threshold) * 100 >= 0 ? ((collateralRatio.ratio - collateralRatio.threshold) * 100).toFixed(1) : 0}%
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Phase 6.1: 盘中闪跌检测 */}
+          <div
+            className={cn(
+              "rounded-lg p-3 border",
+              flashCrashStatus?.triggered
+                ? "bg-danger/10 border-danger/40"
+                : "bg-secondary/40 border-border/40"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className={cn("h-4 w-4", flashCrashStatus?.triggered ? "text-danger" : "text-muted-foreground")} />
+                <div>
+                  <p className="text-[11px] font-medium">盘中闪跌检测</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    检测 N 分钟内跌幅是否超阈值（即使未到击穿线也预警）
+                  </p>
+                </div>
+              </div>
+              {flashCrashStatus?.triggered ? (
+                <Badge variant="danger" className="text-[10px]">⚠ 闪跌预警</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px]">正常</Badge>
+              )}
+            </div>
+            {flashCrashStatus && (
+              <div className="mt-2 space-y-1">
+                {flashCrashStatus.details.map((d, i) => (
+                  <div key={i} className="flex items-center justify-between text-[11px]">
+                    <span className="text-muted-foreground">
+                      {d.windowMinutes} 分钟窗口（阈值 {d.dropPercent}%）
+                    </span>
+                    <span className={cn(
+                      "font-mono font-medium",
+                      d.triggered ? "text-danger" : "text-success"
+                    )}>
+                      {d.actualDropPercent.toFixed(2)}%
+                      {d.triggered && " ⚠ 触发"}
+                    </span>
+                  </div>
+                ))}
+                {flashCrashStatus.details.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">暂无启用的闪跌阈值</p>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="grid gap-3 grid-cols-2 md:grid-cols-4 pt-4 border-t border-border/40">
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">初始总投资</p>
@@ -1041,7 +1295,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center">
                   <Landmark className="h-4 w-4 text-primary" />
                 </div>
-                🏦 机构盈利拆分
+                🏦 WIN100 盈利拆分
               </CardTitle>
               <PnlStageBadge
                 realized={split.realizedInstitutionPnL}
@@ -1081,7 +1335,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <div className="grid grid-cols-2 gap-2 pt-3 border-t border-border/40 text-[11px]">
               <div className="space-y-1 rounded-lg bg-secondary/50 p-2.5">
                 <p className="text-muted-foreground flex items-center gap-1">
-                  <Target className="h-3 w-3" /> 劣后本金
+                  <Target className="h-3 w-3" /> WIN100 担保本金
                 </p>
                 <p className="font-mono font-semibold">{formatCurrency(batch.subordinateAmount)}</p>
               </div>
@@ -1260,6 +1514,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 viewerUser={user ?? undefined}
                 batchRequiredMarginCall={lockedBatchRequiredMargin > 0 ? lockedBatchRequiredMargin : metrics.requiredMarginCall}
                 onClientStatusChange={handleClientStatusChange}
+                onRequestExit={handleRequestExit}
+                onCancelExit={handleCancelExit}
                 batch={batch as any}
                 onLedgerRecovery={() => setRecoveryOpen(true)}
                 onBatchMutated={() => {
@@ -1387,7 +1643,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <History className="h-4 w-4 text-warning" />
-              机构补仓记录
+              WIN100 补仓记录
               <Badge variant="secondary" className="text-[10px] ml-1">
                 {batch.marginCalls?.length || 0} 条
               </Badge>
@@ -1397,14 +1653,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">以下机构出资与客户原始本金独立记账，补仓仓位本金及全部收益归机构。</p>
+            <p className="text-xs text-muted-foreground">以下 WIN100 担保出资与客户原始本金独立记账，补仓仓位本金及全部收益归 WIN100。</p>
             {((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings ?? []).map((warning) => (
               <p key={warning} role="alert" className="text-xs text-warning">{warning}</p>
             ))}
             <div className="max-h-48 overflow-auto rounded-lg border border-border/50">
               <table className="w-full text-xs tabular-nums">
                 <thead className="sticky top-0 bg-card text-muted-foreground">
-                  <tr><th className="p-2 text-left">机构成交时间</th><th>出资金额</th><th>成交价</th><th>买入份额</th></tr>
+                  <tr><th className="p-2 text-left">WIN100 成交时间</th><th>出资金额</th><th>成交价</th><th>买入份额</th></tr>
                 </thead>
                 <tbody>
                   {((batch as import("@/lib/riskEngine").BatchLike).finance?.trades ?? []).map((trade) => (
@@ -1433,6 +1689,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                       "rounded-xl p-3.5 border space-y-3",
                       mc.status === "PENDING"
                         ? "bg-danger/5 border-danger/30"
+                        : mc.status === "OVERDUE"
+                        ? "bg-danger/10 border-danger/50 ring-1 ring-danger/30"
                         : mc.status === "FULLFILLED"
                         ? "bg-success/5 border-success/30"
                         : "bg-secondary/30 border-border"
@@ -1447,6 +1705,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                         variant={
                           mc.status === "PENDING"
                             ? "danger"
+                            : mc.status === "OVERDUE"
+                            ? "danger"
                             : mc.status === "FULLFILLED"
                             ? "success"
                             : "secondary"
@@ -1455,6 +1715,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                       >
                         {mc.status === "PENDING"
                           ? "待处理"
+                          : mc.status === "OVERDUE"
+                          ? "T+2 逾期"
                           : mc.status === "FULLFILLED"
                           ? "已完成"
                           : "已过期"}
@@ -1475,10 +1737,44 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                         <p className="text-muted-foreground">触发日期</p>
                         <p className="font-mono">{formatDate(mc.triggerDate)}</p>
                       </div>
+                      <div className="space-y-0.5 text-right">
+                        <p className="text-muted-foreground">T+2 到期日</p>
+                        <p className={cn(
+                          "font-mono font-semibold",
+                          mc.status === "OVERDUE" ? "text-danger" : ""
+                        )}>
+                          {mc.dueDate ? formatDate(mc.dueDate) : "-"}
+                        </p>
+                      </div>
+                      <div className="space-y-0.5">
+                        <p className="text-muted-foreground">补仓形式</p>
+                        <p className="font-mono font-semibold">
+                          {mc.collateralType === "cash" ? "现金" : mc.collateralType === "stock" ? "股票" : "待确认"}
+                        </p>
+                      </div>
                       {mc.fulfilledDate && (
                         <div className="space-y-0.5 text-right">
                           <p className="text-muted-foreground">到账日期</p>
                           <p className="font-mono">{formatDate(mc.fulfilledDate)}</p>
+                        </div>
+                      )}
+                      {/* T+2 倒计时（仅 PENDING 状态显示） */}
+                      {mc.status === "PENDING" && mc.dueDate && (
+                        <div className="space-y-0.5 col-span-2 border-t border-border/40 pt-2">
+                          <p className="text-muted-foreground">履约倒计时</p>
+                          <p className="font-mono font-semibold text-warning">
+                            {getCountdownText(mc.dueDate)}
+                          </p>
+                        </div>
+                      )}
+                      {mc.status === "OVERDUE" && (
+                        <div className="space-y-0.5 col-span-2 border-t border-danger/30 pt-2">
+                          <p className="text-danger font-semibold flex items-center gap-1">
+                            <AlertTriangle className="h-3 w-3" /> 已超过 T+2 履约期限
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            WIN100 未在 T+2 交易日内完成补仓，请尽快履约或触发新一轮补仓。
+                          </p>
                         </div>
                       )}
                       {mc.fulfilledAmount !== undefined && mc.fulfilledAmount !== null && (
@@ -1520,7 +1816,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 确认补仓操作
               </DialogTitle>
               <DialogDescription className="text-left">
-                按本轮锁定缺口记录机构补仓。每笔按当前价格独立记录份额，本金和收益全部归机构。
+                按本轮锁定缺口记录 WIN100 补仓。每笔按当前价格独立记录份额，本金和收益全部归 WIN100。
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -1541,12 +1837,50 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </p>
               </div>
             </div>
+            {/* 补仓形式选择：WIN100 决定现金或股票 */}
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold text-foreground">补仓形式（由 WIN100 决定）</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTopupCollateralType("stock")}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-all",
+                    topupCollateralType === "stock"
+                      ? "border-primary bg-primary/10 ring-1 ring-primary"
+                      : "border-border/60 bg-secondary/30 hover:border-border"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-xs font-semibold">股票补仓</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">按当前价买入 XMAX 份额，本金及收益归 WIN100</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTopupCollateralType("cash")}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition-all",
+                    topupCollateralType === "cash"
+                      ? "border-primary bg-primary/10 ring-1 ring-primary"
+                      : "border-border/60 bg-secondary/30 hover:border-border"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <DollarSign className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-xs font-semibold">现金补仓</span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">仅记金额，不买入股票，独立于市值计算</p>
+                </button>
+              </div>
+            </div>
             <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
               <div className="space-y-0.5">
                 <p>补仓完成后将：</p>
                 <p>· 累计补仓金额 + ${metrics.requiredMarginCall.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-                <p>· 原始仓位和机构补仓仓位分别核算，股票价格不变</p>
+                <p>· 原始仓位和 WIN100 补仓仓位分别核算，股票价格不变</p>
                 <p>· 客户保本进度与分成比例保持不变</p>
               </div>
             </div>
@@ -1568,7 +1902,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         open={!!settleTarget}
         onOpenChange={(open) => { if (!open) setSettleTarget(null); }}
         title="确认客户退出结算"
-        description="按签约比例结算客户利润；对应机构原始仓位、历次补仓本金和收益同时按占比结清。结算后金额、价格和比例永久冻结，不可重新激活。"
+        description="按签约比例结算客户利润；对应 WIN100 原始担保仓位、历次补仓本金和收益同时按占比结清。结算后金额、价格和比例永久冻结，不可重新激活。"
         summary={(() => {
           const client = batch.clients?.find((c) => c.id === settleTarget);
           if (!client) return [];
@@ -1579,7 +1913,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           const weight = (batch.priorityAmount ?? (batch as any).originalPriority ?? batch.initialTotalAmount ?? 0) > 0
             ? client.investmentAmount / (batch.priorityAmount ?? (batch as any).originalPriority ?? batch.initialTotalAmount ?? 1)
             : 0;
-          // ① 初始投资总金额 = 客户本金 + 对应归属的机构劣后本金
+          // ① 初始投资总金额 = 客户本金 + 对应归属的 WIN100 担保本金
           const institutionInitialCapitalAttributed = (batch.subordinateAmount ?? 0) * weight;
           const rescueStats = calculateRescueStats(batch, priceFinal);
           const institutionRescueAttributed = rescueStats.totalRescueAmount * weight;
@@ -1596,22 +1930,33 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           // ⑤ 客户归属价值 / 客户利润 = clientReceives / clientPnL
           const clientAttributedValue = money(result.clientReceives);
           const clientAttributedPnL = money(result.clientPnL);
+          // ====== Phase 3: 提前退出费 ======
+          const exitElig = getExitEligibility(batch as any, client as any);
+          const isEarlyExit = exitElig.isEarlyExit;
+          const earlyExitInfo = isEarlyExit ? calculateEarlyExitFee(client.investmentAmount) : null;
+          const earlyExitFee = earlyExitInfo?.fee ?? 0;
+          const clientReceivesAfterFee = money(Math.max(0, result.clientReceives - earlyExitFee));
           return [
             // ------- 新增 8 大明细（上方） -------
             { label: "初始投资总金额", value: formatCurrency(initialInvestmentTotal), accent: "primary" },
             { label: "当前总价值", value: formatCurrency(totalCurrentValue), accent: (yieldPct >= 0 ? "success" : "danger") },
-            { label: "机构投入金额", value: formatCurrency(institutionInitialCapitalAttributed + institutionRescueAttributed), accent: "muted" },
+            { label: "WIN100 投入金额", value: formatCurrency(institutionInitialCapitalAttributed + institutionRescueAttributed), accent: "muted" },
             { label: "客户投入金额", value: formatCurrency(client.investmentAmount), accent: "muted" },
             { label: "收益率（整体）", value: `${yieldPct >= 0 ? "+" : ""}${yieldPct.toFixed(2)}%`, accent: (yieldPct >= 0 ? "success" : "danger") },
             { label: "客户签约分成", value: `${result.splitRatioClient}%`, accent: "muted" },
-            { label: "机构归属价值", value: formatCurrency(institutionAttributedValue), accent: "muted" },
+            { label: "WIN100 归属价值", value: formatCurrency(institutionAttributedValue), accent: "muted" },
             { label: "客户归属价值", value: formatCurrency(clientAttributedValue), accent: "primary" },
-            { label: "机构利润", value: `${institutionAttributedPnL >= 0 ? "+" : ""}${formatCurrency(institutionAttributedPnL)}`, accent: (institutionAttributedPnL >= 0 ? "success" : "danger") },
+            { label: "WIN100 利润", value: `${institutionAttributedPnL >= 0 ? "+" : ""}${formatCurrency(institutionAttributedPnL)}`, accent: (institutionAttributedPnL >= 0 ? "success" : "danger") },
             { label: "客户利润", value: `${clientAttributedPnL >= 0 ? "+" : ""}${formatCurrency(clientAttributedPnL)}`, accent: (clientAttributedPnL >= 0 ? "success" : "warning") },
+            // ------- Phase 3: 提前退出费明细 -------
+            { label: "退出类型", value: isEarlyExit ? "提前退出（2 年内）" : "到期退出", accent: isEarlyExit ? "warning" : "muted" },
+            { label: "提前退出费（本金 × 1%）", value: formatCurrency(earlyExitFee), accent: isEarlyExit ? "danger" : "muted" },
+            { label: "手续费接收方", value: "中阳证券", accent: "muted" },
+            { label: "客户实收（扣除手续费后）", value: formatCurrency(clientReceivesAfterFee), accent: "primary" },
             // ------- 原有 4 项（下方保持兼容） -------
             { label: "客户原始本金", value: formatCurrency(client.investmentAmount) },
             { label: "客户实收", value: formatCurrency(result.clientReceives) },
-            { label: "机构实收（含补仓）", value: formatCurrency(result.institutionReceives) },
+            { label: "WIN100 实收（含补仓）", value: formatCurrency(result.institutionReceives) },
             { label: "客户签约分成（原）", value: `${result.splitRatioClient}%` },
           ];
         })()}

@@ -86,7 +86,7 @@ function generateInstitutionRiskByMonth(seed = 20260917) {
   return months.map((m, i) => ({
     month: m,
     风险敞口: Math.round(500000 + rnd() * 1800000 - i * 30000),
-    机构补仓: i < 3 ? 0 : Math.round(rnd() * 500000 * (i / 8)),
+    "WIN100 补仓": i < 3 ? 0 : Math.round(rnd() * 500000 * (i / 8)),
   }));
 }
 
@@ -353,7 +353,7 @@ export default function MarketPage() {
     const total = Math.max(1, clientCapital + subInitial + margin);
     return [
       { key: "客户本金", value: clientCapital, pct: (clientCapital / total) * 100, color: "hsl(217 91% 60%)" },
-      { key: "劣后本金", value: subInitial, pct: (subInitial / total) * 100, color: "hsl(265 89% 70%)" },
+      { key: "WIN100 担保本金", value: subInitial, pct: (subInitial / total) * 100, color: "hsl(265 89% 70%)" },
       { key: "累计补仓", value: margin, pct: (margin / total) * 100, color: "hsl(38 92% 50%)" },
     ];
   }, [totalInitial, summary]);
@@ -366,7 +366,7 @@ export default function MarketPage() {
     const outstanding = institutionMetrics.outstanding;
     const max = Math.max(1, subInitial + injected);
     return [
-      { key: "劣后原始", value: subInitial, pct: (subInitial / max) * 100, color: "hsl(265 89% 70%)" },
+      { key: "WIN100 担保原始", value: subInitial, pct: (subInitial / max) * 100, color: "hsl(265 89% 70%)" },
       { key: "补仓累计注入", value: injected, pct: (injected / max) * 100, color: "hsl(38 92% 50%)" },
       { key: "已回收", value: recovered, pct: (recovered / max) * 100, color: "hsl(142 76% 45%)" },
       { key: "未回收敞口", value: outstanding, pct: (outstanding / max) * 100, color: "hsl(0 72% 51%)" },
@@ -641,7 +641,7 @@ export default function MarketPage() {
                 AUM 资金构成（100% 堆叠）
               </CardTitle>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                总规模 {formatCompactNumber(totalInitial)} · 优先 / 劣后 / 补仓三层拆分
+                总规模 {formatCompactNumber(totalInitial)} · 客户 / WIN100 担保 / 补仓三层拆分
               </p>
             </CardHeader>
             <CardContent className="pt-0">
@@ -656,7 +656,7 @@ export default function MarketPage() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <Recycle className="h-4 w-4 text-warning" />
-                补仓回收漏斗（对比劣后规模）
+                补仓回收漏斗（对比 WIN100 担保规模）
               </CardTitle>
               <p className="text-[11px] text-muted-foreground mt-0.5">
                 回收率 {formatPercent(summary.totalMarginCalls > 0 ? (institutionMetrics.totalRecovered / summary.totalMarginCalls) * 100 : 100, 1)} · 单笔最高敞口 {formatCompactNumber(institutionMetrics.worstExposure)}
@@ -856,17 +856,17 @@ export default function MarketPage() {
         </Reveal>
       </div>
 
-      {/* ===== Section 3: 月度补仓 & 劣后净值（保留原） + PnL 构成 ===== */}
+      {/* ===== Section 3: 月度补仓 & WIN100 担保净值（保留原） + PnL 构成 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
         <Reveal offsetY={16} delayMs={200} className="lg:col-span-2">
         <Card className="border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <Building2 className="h-4 w-4 text-primary" />
-              机构月度补仓注入 &amp; 劣后净值贡献
+              WIN100 月度补仓注入 &amp; 担保净值贡献
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              柱体：月度劣后 PnL 净值贡献（蓝渐变）· 月度机构补仓注入额（橙柱）· 过去 12 个月
+              柱体：月度 WIN100 担保 PnL 净值贡献（蓝渐变）· 月度 WIN100 补仓注入额（橙柱）· 过去 12 个月
             </p>
           </CardHeader>
           <CardContent className="pt-0">
@@ -905,7 +905,7 @@ export default function MarketPage() {
                     isAnimationActive={animActive}
                     animationDuration={1100}
                     dataKey="风险敞口"
-                    name="当月劣后 PnL 贡献"
+                    name="当月 WIN100 担保 PnL 贡献"
                     stackId="a"
                     radius={[0, 0, 0, 0]}
                   >
@@ -919,8 +919,8 @@ export default function MarketPage() {
                   <Bar
                     isAnimationActive={animActive}
                     animationDuration={1100}
-                    dataKey="机构补仓"
-                    name="机构当月补仓注入"
+                    dataKey="WIN100 补仓"
+                    name="WIN100 当月补仓注入"
                     stackId="a"
                     fill="hsl(30 100% 55%)"
                     radius={[4, 4, 0, 0]}
@@ -937,7 +937,7 @@ export default function MarketPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <Coins className="h-4 w-4 text-warning" />
-              总 PnL 构成：机构 vs 客户
+              总 PnL 构成：WIN100 vs 客户
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
               按绝对盈亏拆分 · 合计 {formatCompactNumber(summary.institutionPnL + summary.allClientsPnL)}
@@ -959,7 +959,7 @@ export default function MarketPage() {
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="inline-flex items-center gap-1.5 font-semibold">
                           <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-                          机构 PnL
+                          WIN100 PnL
                         </span>
                         <span className={cn("font-mono font-bold", instPnL >= 0 ? "text-success" : "text-danger")}>
                           {instPnL >= 0 ? "+" : ""}{formatCompactNumber(instPnL)}

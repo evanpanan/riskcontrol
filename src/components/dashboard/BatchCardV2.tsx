@@ -474,7 +474,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3 min-h-[130px] flex items-stretch">
         <div className="grid grid-cols-2 gap-2.5 w-full">
           <PnLChip
-            label="机构盈利"
+            label="WIN100 盈利"
             pnl={split.institutionTotalPnL}
             pnlPercent={split.institutionTotalPnLPercent}
             realized={split.realizedInstitutionPnL}
@@ -612,7 +612,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
         description={
           hasSingleTopups
             ? "部分客户已单独补仓完成。本次「批次一键补仓」将按剩余缺口从大到小分配到每位客户，补齐未到账部分；已单独补仓客户不会重复分配。"
-            : "按本轮锁定缺口记录机构出资及成交份额。机构补仓本金和收益全部归机构，不改变客户原始本金或股票价格。"
+            : "按本轮锁定缺口记录 WIN100 担保出资及成交份额。WIN100 补仓本金和收益全部归 WIN100，不改变客户原始本金或股票价格。"
         }
         summary={[
           { label: "批次号", value: batch.batchNumber, accent: "primary" },

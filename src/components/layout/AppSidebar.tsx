@@ -16,6 +16,8 @@ import {
   Settings,
   Building2,
   Shield,
+  FlaskConical,
+  Landmark,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/branding/Logo";
@@ -67,6 +69,20 @@ const NAV_ITEMS: NavItem[] = [
     icon: LineChart,
     href: "/market",
     description: "机构 & 风控多维图表",
+    scope: "institution",
+  },
+  {
+    title: "压力测试",
+    icon: FlaskConical,
+    href: "/stress-test",
+    description: "情景模拟 & 补仓测算",
+    scope: "institution",
+  },
+  {
+    title: "WIN100 台账",
+    icon: Landmark,
+    href: "/win100-ledger",
+    description: "担保品 · 收益 · 履约台账",
     scope: "institution",
   },
 ];
@@ -229,11 +245,11 @@ export function AppSidebar() {
           <div className="rounded-xl p-4 gradient-card border border-border/60">
             <div className="flex items-center gap-2 mb-3">
               <Building2 className="h-4 w-4 text-primary" />
-              <span className="text-xs font-semibold">机构资金池</span>
+              <span className="text-xs font-semibold">WIN100 担保资金池</span>
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">机构累计补仓</span>
+                <span className="text-[11px] text-muted-foreground">WIN100 累计补仓</span>
                 <span className="text-xs font-bold text-warning tabular-nums">{summary ? formatCurrency(summary.totalMarginCalls) : "--"}</span>
               </div>
               <div className="flex items-center justify-between">

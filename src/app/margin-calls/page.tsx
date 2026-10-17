@@ -18,6 +18,7 @@ import {
   FileText,
   Building2,
   AlertCircle,
+  AlertTriangle,
   Filter,
   Zap,
   Sparkles,
@@ -184,6 +185,13 @@ export default function MarginCallsPage() {
           Icon: XCircle,
           color: "text-muted-foreground",
         };
+      case "OVERDUE":
+        return {
+          variant: "danger" as const,
+          label: "T+2 逾期",
+          Icon: AlertTriangle,
+          color: "text-danger",
+        };
       default:
         return {
           variant: "secondary" as const,
@@ -204,7 +212,7 @@ export default function MarginCallsPage() {
           <span>/</span>
           <span>补仓历史</span>
         </div>
-        <h1 className="text-2xl font-bold tracking-tight">机构补仓历史记录</h1>
+        <h1 className="text-2xl font-bold tracking-tight">WIN100 补仓历史记录</h1>
         <p className="text-sm text-muted-foreground">
           跟踪所有批次的补仓触发、执行与到账情况
         </p>
@@ -352,6 +360,19 @@ export default function MarginCallsPage() {
                       </div>
                       <div className="col-span-1 text-center font-mono text-xs">
                         {formatDate(mc.triggerDate)}
+                        {mc.dueDate && (
+                          <p className={cn(
+                            "text-[9px] mt-0.5",
+                            mc.status === "OVERDUE" ? "text-danger" : "text-muted-foreground"
+                          )}>
+                            T+2 {formatDate(mc.dueDate)}
+                          </p>
+                        )}
+                        {mc.collateralType && (
+                          <p className="text-[9px] text-muted-foreground mt-0.5">
+                            {mc.collateralType === "cash" ? "现金" : "股票"}
+                          </p>
+                        )}
                       </div>
                       <div className="col-span-1 text-right font-mono text-sm">
                         {formatCurrency(mc.triggerMarketValue)}
@@ -476,7 +497,7 @@ export default function MarginCallsPage() {
         description={
           fulfillTarget && fulfillTarget.singleTopupCount > 0
             ? `本批次已有 ${fulfillTarget.singleTopupCount} 位客户完成单独补仓，本次仅对剩余缺口进行批次级一键分配（按缺口从大到小依次覆盖）。已单独补仓客户不会被重复分配，资金池实际划付金额 = 剩余缺口。`
-            : "按本轮剩余缺口记录机构补仓金额、成交价格与份额。补仓本金及收益全部归机构，不增加客户原始本金，也不修改股票价格。"
+            : "按本轮剩余缺口记录 WIN100 补仓金额、成交价格与份额。补仓本金及收益全部归 WIN100，不增加客户原始本金，也不修改股票价格。"
         }
         summary={
           fulfillTarget

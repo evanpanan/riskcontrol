@@ -129,7 +129,7 @@ export function calculateTradingWindows(signDate: Date | string): TradingWindowI
 }
 
 export function formatSplitRatio(client: number, institution: number): string {
-  return `客户${client}% / 机构${institution}%`;
+  return `客户${client}% / WIN100${institution}%`;
 }
 
 export const AVATAR_GRADIENTS: readonly string[] = [

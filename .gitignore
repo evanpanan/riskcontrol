@@ -49,6 +49,9 @@ next-env.d.ts
 .git_commit_msg
 .tmp_*
 
+# generated PDF deliverables (reproducible via scripts/convert-*.mjs)
+/*.pdf
+
 # IDE work spec (local scratch planning, internal only)
 /.trae/specs/
 /.trae/

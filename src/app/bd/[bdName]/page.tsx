@@ -274,7 +274,7 @@ export default function BDManagerProfilePage() {
                 <Landmark className="h-3 w-3" /> 客户在仓市值
               </p>
               <p className="text-xl font-bold mt-1 font-mono">{formatCurrency(totalStats.totalRealtime)}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">不含机构资金及已结算仓位</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">不含 WIN100 担保资金及已结算仓位</p>
             </div>
             <div className="rounded-xl bg-secondary/40 p-3 border border-border/40">
               <p className="text-[11px] text-muted-foreground flex items-center gap-1">
@@ -294,7 +294,7 @@ export default function BDManagerProfilePage() {
                 <ShieldCheck className="h-3 w-3" /> 客户本金安全
               </p>
               <p className="text-xl font-bold mt-1 text-success">100%</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">机构劣后 100% 保本</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">WIN100 担保 100% 保本</p>
             </div>
           </div>
         </CardContent>
@@ -451,7 +451,7 @@ function ClientBatchCard({ batch, clients }: { batch: any; clients: any[] }) {
                     <TableCell className="text-right font-mono font-semibold">{formatCurrency(c.investmentAmount)}</TableCell>
                     <TableCell className="text-center text-xs">
                       <p className="font-mono font-semibold">客户 {Number((split.client * 100).toFixed(2))}%</p>
-                      <p className="text-[10px] text-muted-foreground">/ 机构 {Number((split.institution * 100).toFixed(2))}%</p>
+                      <p className="text-[10px] text-muted-foreground">/ WIN100 {Number((split.institution * 100).toFixed(2))}%</p>
                     </TableCell>
                     <TableCell className="text-right font-mono">{unverified(c) ? <span className="text-warning">待核对</span> : formatCurrency(clientMV)}</TableCell>
                     <TableCell className="text-right">

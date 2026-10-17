@@ -235,7 +235,7 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
             </div>
             <div className="space-y-1 text-right">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1 justify-end">
-                <History className="h-3 w-3" /> 机构补仓
+                <History className="h-3 w-3" /> WIN100 补仓
               </p>
               <p className={cn(
                 "text-sm font-bold font-mono",
@@ -273,7 +273,7 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
                 )}>
                   <div className="flex items-center gap-1 w-full">
                     <Landmark className="h-3 w-3 shrink-0" />
-                    <span className="text-[10px] font-medium text-muted-foreground shrink-0">机构盈利</span>
+                    <span className="text-[10px] font-medium text-muted-foreground shrink-0">WIN100 盈利</span>
                   </div>
                   <span className="text-[11px] font-bold font-mono tabular-nums break-all leading-tight">
                     {split.institutionTotalPnL >= 0 ? "+" : ""}
@@ -286,7 +286,7 @@ export function BatchGridCard({ batch }: BatchGridCardProps) {
                 </div>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                <p className="font-semibold mb-0.5">机构盈利拆分</p>
+                <p className="font-semibold mb-0.5">WIN100 盈利拆分</p>
                 <p className="text-[11px] text-muted-foreground">
                   收益率 {split.institutionTotalPnLPercent >= 0 ? "+" : ""}{split.institutionTotalPnLPercent.toFixed(2)}%
                 </p>

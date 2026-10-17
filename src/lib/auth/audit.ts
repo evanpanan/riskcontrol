@@ -18,6 +18,8 @@ export type AuditAction =
   | 'client_delete'
   | 'margin_topup'
   | 'client_settle'
+  | 'client_exit_request'
+  | 'client_exit_cancel'
   | 'batch_notify'
   | 'auth_denied';
 

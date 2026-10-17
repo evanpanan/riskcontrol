@@ -189,7 +189,7 @@ export function RiskAlertDialog({
                     </div>
                     <div>
                       <p className="text-muted-foreground">
-                        {a.riskLevel === RiskLevel.CRITICAL ? "机构需补仓" : "客户数"}
+                        {a.riskLevel === RiskLevel.CRITICAL ? "WIN100 需补仓" : "客户数"}
                       </p>
                       <p className={cn(
                         "font-mono font-bold",
@@ -227,7 +227,7 @@ export function RiskAlertDialog({
 
         <div className="flex items-center justify-between gap-2 pt-4 mt-1 border-t border-border/50">
           <p className="text-[10.5px] text-muted-foreground font-mono">
-            总资产含机构补仓仓位；跌至资金基准的 80% 及以下触发补仓。部分退出后基准同比缩减。
+            总资产含 WIN100 补仓仓位；跌至资金基准的 80% 及以下触发补仓。部分退出后基准同比缩减。
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onDismissAll}>

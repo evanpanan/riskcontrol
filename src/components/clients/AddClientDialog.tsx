@@ -34,6 +34,7 @@ import {
   calculateProfitSplitRatio,
   addClientPosition,
   HIGH_INVESTMENT_THRESHOLD,
+  MIN_INVESTMENT_AMOUNT,
 } from "@/lib/riskEngine";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getMockData, commitBatchFinance, nextClientNo } from "@/lib/mockData";
@@ -112,6 +113,9 @@ export function AddClientDialog({
     if (!name.trim()) e.name = "请输入客户姓名";
     if (name.trim().length < 2) e.name = "客户姓名至少 2 个字符";
     if (!numAmount || numAmount <= 0) e.investmentAmount = "请输入有效的投资金额";
+    if (numAmount > 0 && numAmount < MIN_INVESTMENT_AMOUNT) {
+      e.investmentAmount = `最低投资额为 ${formatCurrency(MIN_INVESTMENT_AMOUNT)}`;
+    }
     if (numAmount > batchPriorityAmount * 0.5) {
       e.investmentAmount = `单笔投资不可超过优先池 50%（${formatCurrency(batchPriorityAmount * 0.5)}）`;
     }
@@ -327,7 +331,7 @@ export function AddClientDialog({
                 </div>
                 <div className="rounded-lg bg-background/50 p-3 border border-border/60">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-                    机构分成
+                    WIN100 分成
                   </p>
                   <p className="text-2xl font-bold font-mono text-primary">
                     {Number((split.institution * 100).toFixed(2))}%
@@ -340,7 +344,7 @@ export function AddClientDialog({
                 <div className="space-y-0.5">
                   <p>
                     <span className="text-success font-semibold">✓ 亏损保底：</span>
-                    客户本金 100% 由机构劣后资金全额承担
+                    客户本金 100% 由 WIN100 担保资金全额承担
                   </p>
                   <p>
                     <span className="text-primary font-semibold">✓ 盈利分成：</span>

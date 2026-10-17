@@ -38,6 +38,7 @@ import {
   Zap,
   History,
   DollarSign,
+  X,
 } from "lucide-react";
 import {
   Table,
@@ -57,6 +58,7 @@ import {
   getLockedBatchRequiredMargin,
   calculateClientSettlement,
   getAccountMarketValue,
+  getExitEligibility,
   type BatchLike,
   type ClientMarginState,
 } from "@/lib/riskEngine";
@@ -104,6 +106,8 @@ interface ClientTableProps {
   viewerUser?: AppSessionUser | null;
   batchRequiredMarginCall?: number;
   onClientStatusChange?: (clientId: string, newStatus: ClientStatus) => void;
+  onRequestExit?: (clientId: string) => void;
+  onCancelExit?: (clientId: string) => void;
   batch?: BatchLike;
   onBatchMutated?: (payload: {
     type: "client_single_margin";
@@ -122,6 +126,8 @@ export function ClientTable({
   viewerUser,
   batchRequiredMarginCall = 0,
   onClientStatusChange,
+  onRequestExit,
+  onCancelExit,
   batch,
   onBatchMutated,
   onLedgerRecovery,
@@ -330,7 +336,7 @@ export function ClientTable({
             <TableHead className="text-right">
               <div className="flex items-center gap-1 justify-end">
                 <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
-                机构盈利
+                WIN100 盈利
               </div>
             </TableHead>
             <TableHead className="text-right">
@@ -364,7 +370,7 @@ export function ClientTable({
                     </TooltipTrigger>
                     <TooltipContent>
                       <p className="text-xs w-[260px]">
-                        仅当 <span className="font-semibold">当前股价超过买入价</span> 时客户才有客户PnL，否则保本不显示任何盈利数字；机构补仓不改变客户盈亏，本金独立核算归机构</p>
+                        仅当 <span className="font-semibold">当前股价超过买入价</span> 时客户才有客户PnL，否则保本不显示任何盈利数字；WIN100 补仓不改变客户盈亏，本金独立核算归 WIN100</p>
                     </TooltipContent>
                   </Tooltip>
                 </TableHead>
@@ -376,12 +382,12 @@ export function ClientTable({
                   <TooltipTrigger asChild>
                     <div className="flex items-center gap-1 justify-end cursor-help">
                       <Archive className="h-3.5 w-3.5 text-warning" />
-                      <span className="whitespace-nowrap text-warning font-semibold">机构补仓分摊</span>
+                      <span className="whitespace-nowrap text-warning font-semibold">WIN100 补仓分摊</span>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent>
                     <p className="text-xs w-[220px]">
-                      机构补仓救援金（独立核算：本金及盈利全归机构，客户不参与。本列仅显示该客户按出资比例对应的名义救援分摊金额
+                      WIN100 补仓救援金（独立核算：本金及盈利全归 WIN100，客户不参与。本列仅显示该客户按出资比例对应的名义救援分摊金额
                     </p>
                   </TooltipContent>
                 </Tooltip>
@@ -503,6 +509,11 @@ export function ClientTable({
                               {String((client as any).clientNo)}
                             </span>
                           ) : null}
+                          {(client as any).subAccountNo ? (
+                            <span className="font-mono text-[10px] px-1.5 py-0 rounded border border-secondary-foreground/30 bg-secondary/50 text-secondary-foreground h-[18px] leading-[18px] inline-flex items-center" title="中阳证券子账号">
+                              {String((client as any).subAccountNo)}
+                            </span>
+                          ) : null}
                           {isVipClient(client) && (
                             <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">
                               VIP
@@ -556,7 +567,7 @@ export function ClientTable({
                             客户 {Number((split.client * 100).toFixed(2))}%
                           </p>
                           <p className="text-[10px] text-muted-foreground">
-                            / 机构 {Number((split.institution * 100).toFixed(2))}%
+                            / WIN100 {Number((split.institution * 100).toFixed(2))}%
                           </p>
                         </div>
                       </TooltipTrigger>
@@ -568,10 +579,10 @@ export function ClientTable({
                           </p>
                           <p className="text-muted-foreground">
                             签约比例：客户 {Number((split.client * 100).toFixed(2))}% /
-                            机构 {Number((split.institution * 100).toFixed(2))}%
+                            WIN100 {Number((split.institution * 100).toFixed(2))}%
                           </p>
                           <p className="pt-1 text-[10px] text-primary">
-                            * 客户亏损全额由机构劣后资金承担
+                            * 客户亏损全额由 WIN100 担保资金承担
                           </p>
                         </div>
                       </TooltipContent>
@@ -613,7 +624,7 @@ export function ClientTable({
                       </TooltipTrigger>
                       <TooltipContent side="top" align="end">
                         <p className="text-xs w-[200px]">
-                          按客户本金占优先池权重 × 机构劣后本金及补仓分摊对应的机构侧净利润（扣除劣后本金与补仓本金回退）
+                          按客户本金占优先池权重 × WIN100 担保本金及补仓分摊对应的 WIN100 侧净利润（扣除担保本金与补仓本金回退）
                         </p>
                       </TooltipContent>
                     </Tooltip>
@@ -957,10 +968,10 @@ export function ClientTable({
                                 {((client as any).rescueAllocation ?? 0) > 0.01 && (
                                   <div className="mt-1.5 pt-1.5 border-t border-border/50 space-y-1">
                                     <p className="font-semibold text-warning flex items-center gap-1">
-                                      <Archive className="h-3 w-3" />机构补仓救援（名义分摊）
+                                      <Archive className="h-3 w-3" />WIN100 补仓救援（名义分摊）
                                     </p>
                                     <p className="text-muted-foreground text-[11px]">
-                                      机构已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底。
+                                      WIN100 已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归 WIN100，客户不参与分成，本金 100% 保底。
                                     </p>
                                   </div>
                                 )}
@@ -1072,27 +1083,84 @@ export function ClientTable({
                           </TooltipContent>
                         </Tooltip>
                       )}
-                      {client.status !== ClientStatus.SETTLED && institutionRole && (
+                      {/* Phase 3: 退出全流程按钮 */}
+                      {client.status === ClientStatus.ACTIVE && institutionRole && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
-                              variant="secondary"
+                              variant="outline"
                               size="sm"
-                              className="h-7 gap-1.5 px-2.5 text-[11px]"
-                              disabled={!onClientStatusChange}
+                              className="h-7 gap-1.5 px-2.5 text-[11px] text-warning hover:text-warning hover:border-warning"
+                              disabled={!onRequestExit}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onClientStatusChange?.(client.id, ClientStatus.SETTLED);
+                                onRequestExit?.(client.id);
                               }}
                             >
-                              <CheckSquare className="h-3.5 w-3.5" />
-                              标记结算
+                              <LogOut className="h-3.5 w-3.5" />
+                              申请退出
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p className="text-[11px]">确认资金已转出，标记客户已结算（视为退出）</p>
+                            <p className="text-[11px]">提交退出申请，15 天通知期后可结算</p>
                           </TooltipContent>
                         </Tooltip>
+                      )}
+                      {client.status === ClientStatus.EXIT_REQUESTED && institutionRole && (
+                        <>
+                          {(() => {
+                            const elig = batch ? getExitEligibility(batch, client as any) : null;
+                            const canSettle = elig?.canExit ?? false;
+                            return (
+                              <>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 gap-1.5 px-2.5 text-[11px] text-muted-foreground"
+                                      disabled={!onCancelExit}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onCancelExit?.(client.id);
+                                      }}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                      取消申请
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p className="text-[11px]">取消退出申请，恢复持仓状态</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="secondary"
+                                      size="sm"
+                                      className="h-7 gap-1.5 px-2.5 text-[11px]"
+                                      disabled={!canSettle || !onClientStatusChange}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onClientStatusChange?.(client.id, ClientStatus.SETTLED);
+                                      }}
+                                    >
+                                      <CheckSquare className="h-3.5 w-3.5" />
+                                      结算
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p className="text-[11px]">
+                                      {canSettle
+                                        ? (elig?.isEarlyExit ? "提前退出，收取 1% 手续费归中阳证券" : "到期退出，无手续费")
+                                        : (elig?.reason ?? "等待通知期结束")}
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </>
+                            );
+                          })()}
+                        </>
                       )}
                       {client.status === ClientStatus.SETTLED && (
                         <>
@@ -1217,7 +1285,7 @@ export function ClientTable({
           }}
           tone="warning"
           title={`为 ${marginDialogClient.name ?? "该客户"} 单独补仓`}
-          description="机构为该客户对应缺口单独出资，其他客户需补额不变，批次剩余缺口同步扣减。补仓本金及收益全部归机构，与客户原始本金分开记录。"
+          description="WIN100 为该客户对应缺口单独出资，其他客户需补额不变，批次剩余缺口同步扣减。补仓本金及收益全部归 WIN100，与客户原始本金分开记录。"
           summary={
             (() => {
               const mm = perClientStateMap.get(marginDialogClient.id);

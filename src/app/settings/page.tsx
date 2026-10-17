@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -71,6 +72,8 @@ import {
   Filter,
   RefreshCw,
   Copy,
+  Layers,
+  Zap,
 } from "lucide-react";
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
@@ -83,6 +86,24 @@ import {
   setRiskRecipients,
 } from "@/lib/riskRecipients";
 import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
+import {
+  getStoredRiskTiers,
+  saveRiskTiers,
+  resetRiskTiers,
+  validateRiskTiers,
+  DEFAULT_RISK_TIERS,
+  type RiskTier,
+  type NotifyChannel,
+  type NotifyTarget,
+  type TriggerAction,
+} from "@/lib/riskTiers";
+import {
+  getFlashCrashThresholds,
+  saveFlashCrashThresholds,
+  resetFlashCrashThresholds,
+  DEFAULT_FLASH_CRASH_THRESHOLDS,
+  type FlashCrashThreshold,
+} from "@/lib/flashCrash";
 import type { notificationReadiness } from "@/lib/server/notificationDelivery";
 import {
   LIVE_QUOTE_SETTINGS_KEY,
@@ -283,6 +304,14 @@ export default function SettingsPage() {
   const [confirmation, setConfirmation] = useState<{ title: string; run: () => void } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [form, setForm] = useState<SettingsFormState>(() => DEFAULT_FORM);
+  // Phase 5: 多档风控阈值配置
+  const [riskTiers, setRiskTiers] = useState<RiskTier[]>(() => {
+    try { return getStoredRiskTiers(); } catch { return [...DEFAULT_RISK_TIERS]; }
+  });
+  // Phase 6: 闪跌检测阈值配置
+  const [flashCrashThresholds, setFlashCrashThresholds] = useState<FlashCrashThreshold[]>(() => {
+    try { return getFlashCrashThresholds(); } catch { return [...DEFAULT_FLASH_CRASH_THRESHOLDS]; }
+  });
   const [quote, setQuote] = useState<LiveQuoteSettings>(() => ({ ...DEFAULT_LIVE_QUOTE }));
   const [quoteTick, setQuoteTick] = useState(0);
   const [quoteLive, setQuoteLive] = useState<BrowserQuote | null>(null);
@@ -956,6 +985,99 @@ export default function SettingsPage() {
     setTimeout(() => setSaved(null), 2200);
   };
 
+  // Phase 5: 多档风控阈值配置
+  const updateRiskTier = (id: string, patch: Partial<RiskTier>) => {
+    setRiskTiers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  };
+
+  const addRiskTier = () => {
+    const maxLevel = riskTiers.reduce((m, t) => Math.max(m, t.level), 0);
+    const maxDrop = riskTiers.reduce((m, t) => Math.max(m, t.dropPercent), 0);
+    const newTier: RiskTier = {
+      id: `tier_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: `新档位 ${maxLevel + 1}`,
+      level: maxLevel + 1,
+      dropPercent: Math.min(100, Math.ceil(maxDrop + 5)),
+      notifyChannels: ["email"],
+      notifyTargets: ["risk"],
+      action: "notify",
+      color: "warning",
+      enabled: true,
+    };
+    setRiskTiers((prev) => [...prev, newTier]);
+  };
+
+  const removeRiskTier = (id: string) => {
+    setRiskTiers((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const saveRiskTiersConfig = () => {
+    if (currentRole !== APP_ROLES.ADMIN && currentRole !== APP_ROLES.RISK_MANAGER) {
+      toast.error("仅系统管理员或风控总监可修改风控阈值。");
+      return;
+    }
+    const { valid, errors } = validateRiskTiers(riskTiers);
+    if (!valid) {
+      toast.error(errors[0] ?? "档位配置不合法");
+      return;
+    }
+    const sorted = [...riskTiers].sort((a, b) => a.dropPercent - b.dropPercent);
+    const ok = saveRiskTiers(sorted);
+    if (!ok) {
+      toast.error("保存失败，请检查浏览器存储权限。");
+      return;
+    }
+    setRiskTiers(sorted);
+    logAudit({
+      action: "threshold_update",
+      actorId: currentUser?.id,
+      actorEmail: currentUser?.email,
+      role: currentRole,
+      resource: "settings:risk_tiers",
+      detail: {
+        tiers: sorted.map((t) => ({ name: t.name, dropPercent: t.dropPercent, action: t.action, enabled: t.enabled })),
+      },
+    });
+    toast.success(`多档风控阈值已保存（${sorted.filter((t) => t.enabled).length} 档生效）`);
+    setSaved("riskTiers");
+    setTimeout(() => setSaved(null), 2200);
+  };
+
+  const resetRiskTiersConfig = () => {
+    const reset = resetRiskTiers();
+    setRiskTiers(reset);
+    toast.success("已重置为默认 4 档风控阈值");
+  };
+
+  // Phase 6: 闪跌阈值配置函数
+  const updateFlashCrashThreshold = (index: number, patch: Partial<FlashCrashThreshold>) => {
+    setFlashCrashThresholds((prev) => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)));
+  };
+  const addFlashCrashThreshold = () => {
+    setFlashCrashThresholds((prev) => [...prev, { windowMinutes: 30, dropPercent: 20, enabled: true }]);
+  };
+  const removeFlashCrashThreshold = (index: number) => {
+    setFlashCrashThresholds((prev) => prev.filter((_, i) => i !== index));
+  };
+  const saveFlashCrashConfig = () => {
+    saveFlashCrashThresholds(flashCrashThresholds);
+    logAudit({
+      action: "threshold_update",
+      actorId: currentUser?.id,
+      actorEmail: currentUser?.email,
+      role: currentRole,
+      resource: "settings:flash_crash",
+      detail: { thresholds: flashCrashThresholds },
+    });
+    setSaved("flashCrash");
+    toast.success("闪跌检测阈值已保存");
+  };
+  const resetFlashCrashConfig = () => {
+    const reset = resetFlashCrashThresholds();
+    setFlashCrashThresholds(reset);
+    toast.success("已重置为默认闪跌阈值");
+  };
+
   const openAdd = () => {
     setEditingId(null);
     setRForm(emptyForm());
@@ -1171,7 +1293,7 @@ export default function SettingsPage() {
           <div className="space-y-1.5 opacity-75">
             <Label className="text-xs flex items-center gap-1.5">
               <Building2 className="h-3 w-3" />
-              劣后出资比例
+              WIN100 担保出资比例
               <span className="ml-1 inline-flex h-4 items-center px-1.5 rounded-full border border-dashed border-warning/40 text-[9px] tracking-wide text-warning/90 bg-warning/5">
                 暂未接入引擎
               </span>
@@ -1183,10 +1305,252 @@ export default function SettingsPage() {
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              机构劣后出资占比（默认 30%），当前版本固定 70/30，后续版本开放
+              WIN100 担保出资占比（默认 30%），按协议 3:7 比例买入标的股票作为履约担保
             </p>
           </div>
         </div>
+
+        {/* Phase 5: 多档风控阈值配置 */}
+        <div className="pt-4 border-t border-border/40 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-primary" />
+              <p className="text-sm font-bold">多档风控阈值</p>
+              <Badge variant="info" className="text-[10px]">Phase 5</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-1 h-8" onClick={addRiskTier}>
+                <Plus className="h-3.5 w-3.5" />
+                新增档位
+              </Button>
+              <Button variant="ghost" size="sm" className="gap-1 h-8" onClick={resetRiskTiersConfig}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                重置默认
+              </Button>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            每档独立设置跌幅阈值、通知渠道、通知对象和触发动作。系统按跌幅自动匹配最高档位。
+          </p>
+          <div className="space-y-2">
+            {riskTiers.map((tier) => {
+              const colorDot: Record<string, string> = {
+                info: "bg-info",
+                warning: "bg-warning",
+                danger: "bg-danger",
+                destructive: "bg-destructive",
+              };
+              return (
+                <div
+                  key={tier.id}
+                  className={cn(
+                    "rounded-lg border p-3 space-y-2 transition-colors",
+                    tier.enabled ? "border-border/60 bg-secondary/20" : "border-dashed border-border/40 bg-secondary/10 opacity-70"
+                  )}
+                >
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn("h-3 w-3 rounded-full shrink-0", colorDot[tier.color] ?? "bg-secondary")} />
+                    <Input
+                      value={tier.name}
+                      onChange={(e) => updateRiskTier(tier.id, { name: e.target.value })}
+                      className="h-8 w-28 text-xs font-semibold"
+                      placeholder="档位名称"
+                    />
+                    <div className="relative w-20">
+                      <Input
+                        type="number"
+                        value={tier.dropPercent}
+                        onChange={(e) => updateRiskTier(tier.id, { dropPercent: Number(e.target.value) })}
+                        className="h-8 pr-8 font-mono text-xs"
+                        min={0}
+                        max={100}
+                        step={0.5}
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">%</span>
+                    </div>
+                    <Select
+                      value={tier.action}
+                      onValueChange={(v) => updateRiskTier(tier.id, { action: v as TriggerAction })}
+                    >
+                      <SelectTrigger className="h-8 w-28 text-xs">
+                        <SelectValue placeholder="触发动作" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="notify">仅通知</SelectItem>
+                        <SelectItem value="margin_call">生成补仓指令</SelectItem>
+                        <SelectItem value="liquidation">触发强平预案</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      value={tier.color}
+                      onValueChange={(v) => updateRiskTier(tier.id, { color: v })}
+                    >
+                      <SelectTrigger className="h-8 w-20 text-xs">
+                        <SelectValue placeholder="颜色" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="info">蓝色</SelectItem>
+                        <SelectItem value="warning">黄色</SelectItem>
+                        <SelectItem value="danger">红色</SelectItem>
+                        <SelectItem value="destructive">深红</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="flex items-center gap-3 ml-auto">
+                      <label className="flex items-center gap-1 text-xs cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={tier.enabled}
+                          onChange={(e) => updateRiskTier(tier.id, { enabled: e.target.checked })}
+                          className="rounded border-border accent-primary"
+                        />
+                        启用
+                      </label>
+                      {riskTiers.length > 1 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-danger hover:bg-danger/10"
+                          onClick={() => removeRiskTier(tier.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap pl-5">
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="font-medium">通知:</span>
+                      {(["email", "whatsapp", "sms"] as NotifyChannel[]).map((ch) => (
+                        <label key={ch} className="flex items-center gap-1 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={tier.notifyChannels.includes(ch)}
+                            onChange={(e) => {
+                              const channels = e.target.checked
+                                ? [...tier.notifyChannels, ch]
+                                : tier.notifyChannels.filter((c) => c !== ch);
+                              updateRiskTier(tier.id, { notifyChannels: channels });
+                            }}
+                            className="rounded border-border accent-primary"
+                          />
+                          {ch === "email" ? "邮件" : ch === "whatsapp" ? "WhatsApp" : "短信"}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="font-medium">对象:</span>
+                      {(["risk", "bd", "all"] as NotifyTarget[]).map((tg) => (
+                        <label key={tg} className="flex items-center gap-1 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={tier.notifyTargets.includes(tg)}
+                            onChange={(e) => {
+                              const targets = e.target.checked
+                                ? [...tier.notifyTargets, tg]
+                                : tier.notifyTargets.filter((c) => c !== tg);
+                              updateRiskTier(tier.id, { notifyTargets: targets });
+                            }}
+                            className="rounded border-border accent-primary"
+                          />
+                          {tg === "risk" ? "风控" : tg === "bd" ? "BD" : "全员"}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {(() => {
+            const { valid, errors } = validateRiskTiers(riskTiers);
+            if (valid) return null;
+            return (
+              <div className="flex items-start gap-1.5 text-[11px] text-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <div>
+                  {errors.slice(0, 3).map((err, i) => (
+                    <p key={i}>{err}</p>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+          <div className="flex items-center gap-3">
+            <Button className="gap-1.5" onClick={saveRiskTiersConfig}>
+              <Save className="h-4 w-4" />
+              保存多档阈值
+            </Button>
+            {saved === "riskTiers" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
+          </div>
+        </div>
+
+        {/* Phase 6: 闪跌检测阈值配置 */}
+        <div className="pt-4 border-t border-border/40 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-warning" />
+              <h4 className="text-sm font-bold">闪跌检测阈值</h4>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={addFlashCrashThreshold}>新增阈值</Button>
+              <Button variant="outline" size="sm" onClick={resetFlashCrashConfig}>重置默认</Button>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            检测「N 分钟内跌幅超 X%」，即使未到击穿线也触发临时预警。默认：5 分钟 −10% / 15 分钟 −15%。
+          </p>
+          <div className="space-y-2">
+            {flashCrashThresholds.map((t, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2 rounded-lg border border-border/40 p-2">
+                <Input
+                  type="number"
+                  className="w-24"
+                  min={1}
+                  value={t.windowMinutes}
+                  onChange={(e) => updateFlashCrashThreshold(i, { windowMinutes: Number(e.target.value) })}
+                  placeholder="窗口(分)"
+                />
+                <span className="text-xs text-muted-foreground">分钟内跌幅 ≥</span>
+                <Input
+                  type="number"
+                  className="w-20"
+                  min={0.1}
+                  max={100}
+                  step={0.5}
+                  value={t.dropPercent}
+                  onChange={(e) => updateFlashCrashThreshold(i, { dropPercent: Number(e.target.value) })}
+                  placeholder="跌幅%"
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                <label className="flex items-center gap-1 text-xs ml-2">
+                  <Checkbox
+                    checked={t.enabled}
+                    onCheckedChange={(v) => updateFlashCrashThreshold(i, { enabled: !!v })}
+                  />
+                  启用
+                </label>
+                {flashCrashThresholds.length > 1 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto text-destructive hover:text-destructive"
+                    onClick={() => removeFlashCrashThreshold(i)}
+                  >
+                    删除
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <Button className="gap-1.5" onClick={saveFlashCrashConfig}>
+              <Save className="h-4 w-4" />
+              保存闪跌阈值
+            </Button>
+            {saved === "flashCrash" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
+          </div>
+        </div>
+
         <div className="pt-3 border-t border-border/40 flex items-center gap-3">
           <Button className="gap-1.5" onClick={() => save("risk")}>
             <Save className="h-4 w-4" />
@@ -1402,7 +1766,7 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div>
-                <p className="text-[10px] text-muted-foreground mb-1">机构</p>
+                <p className="text-[10px] text-muted-foreground mb-1">WIN100 担保</p>
                 <div className="relative">
                   <Input
                     type="number"

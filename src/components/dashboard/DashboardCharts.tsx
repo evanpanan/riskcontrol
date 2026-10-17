@@ -265,13 +265,13 @@ const CHART_COLORS = {
 
 const VALUE_LEGEND_MAP: Record<string, { label: string; color: string }> = {
   total: { label: "总仓位价值", color: CHART_COLORS.total },
-  institution: { label: "机构资产价值", color: CHART_COLORS.institution },
+  institution: { label: "WIN100 担保资产价值", color: CHART_COLORS.institution },
   client: { label: "客户资产价值", color: CHART_COLORS.client },
 };
 
 const YIELD_LEGEND_MAP: Record<string, { label: string; color: string }> = {
   total: { label: "资产总收益率", color: CHART_COLORS.yieldTotal },
-  institution: { label: "机构总收益率", color: CHART_COLORS.yieldInst },
+  institution: { label: "WIN100 担保收益率", color: CHART_COLORS.yieldInst },
   client: { label: "客户总收益率", color: CHART_COLORS.yieldClient },
 };
 
@@ -347,7 +347,7 @@ function ValueChart({
   return (
     <ChartShell
       title="资产价值曲线"
-      subtitle="按时间维度观察总仓位 / 机构 / 客户资产价值"
+      subtitle="按时间维度观察总仓位 / WIN100 担保 / 客户资产价值"
       icon={Layers}
       iconVariant="primary"
       leftHeader={
@@ -457,7 +457,7 @@ function ValueChart({
           trendAmount={totalDelta}
         />
         <MiniStat
-          label="机构资产价值"
+          label="WIN100 担保资产价值"
           value={institutionValue}
           formatter="currency"
           color={CHART_COLORS.institution}
@@ -504,7 +504,7 @@ function YieldChart({
   return (
     <ChartShell
       title="收益率曲线"
-      subtitle="总收益率 / 机构收益率 / 客户收益率 三段对比"
+      subtitle="总收益率 / WIN100 担保收益率 / 客户收益率 三段对比"
       icon={Activity}
       iconVariant="success"
       leftHeader={
@@ -615,7 +615,7 @@ function YieldChart({
           trendAmount={totalPnL}
         />
         <MiniStat
-          label="机构收益率"
+          label="WIN100 担保收益率"
           value={institutionPnLPercent}
           formatter="percent"
           digits={2}

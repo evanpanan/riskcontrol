@@ -151,7 +151,7 @@ export function RiskOverviewPanel({ batches }: RiskOverviewPanelProps) {
             <div className="flex items-center gap-2">
               <div className="h-2 w-12 rounded bg-danger" />
               <span className="text-[11px] text-muted-foreground">
-                补仓线 20% 跌幅 · 触发机构补仓
+                补仓线 20% 跌幅 · 触发 WIN100 补仓
               </span>
             </div>
           </div>

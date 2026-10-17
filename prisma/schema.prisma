@@ -32,6 +32,7 @@ enum MarginCallStatus {
   FULLFILLED
   EXPIRED
   CANCELLED
+  OVERDUE
 }
 
 enum AppRole {
@@ -93,6 +94,15 @@ model Batch {
   status            BatchStatus     @default(LOCKED)
   riskLevel         RiskLevel       @default(NORMAL)
   nextTradingWindow DateTime?
+  // --- 协议要素表 V2 新增字段 ---
+  custodianBroker   String          @default("中阳证券有限公司")
+  lockUpEndDate     DateTime?       // 封闭期满日（签约后 6 个月）
+  exitWindowMonths  Int             @default(3)  // 开放退出窗口周期（每 3 个月）
+  noticePeriodDays  Int             @default(15) // 退出提前通知天数
+  finalMaturityDate DateTime?       // 最终到期日（签约后 2 年）
+  win100CollateralValue Float       @default(0)  // WIN100 履约担保品市值
+  win100CollateralShares Float      @default(0)  // WIN100 担保持股数
+  // --- end ---
   clients           Client[]
   marginCalls       MarginCall[]
   createdAt         DateTime        @default(now())
@@ -120,6 +130,18 @@ model Client {
   status          ClientStatus @default(ACTIVE)
   settledAt       DateTime?
   settlementNote  String?
+  // --- 协议要素表 V2 新增字段 ---
+  sharesHeld      Float        @default(0)  // 客户持股数（自己中阳账户）
+  avgCostPrice    Float        @default(0)  // 平均成本价
+  brokerAccount   String?                   // 中阳证券账号
+  // --- Phase 3: 客户退出全流程 ---
+  exitRequestedAt DateTime?                 // 退出申请时间
+  exitEligibleAt  DateTime?                 // 退出资格时间（申请 + 通知期）
+  earlyExitFee    Float?                    // 提前退出手续费金额（本金 × 1%）
+  exitAmount      Float?                    // 退出金额（扣除手续费后客户实收）
+  // --- Phase 4: 客户多批次子账户 ---
+  subAccountNo    String?   @unique         // 中阳证券子账号编号（客户×批次唯一）
+  // --- end ---
   batch           Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
@@ -142,6 +164,8 @@ model MarginCall {
   fulfilledDate   DateTime?
   status          MarginCallStatus @default(PENDING)
   note            String?
+  dueDate         DateTime?
+  collateralType  String?
   notifiedEmails  String?
   notifiedWhatsApps String?
   batch           Batch           @relation(fields: [batchId], references: [id], onDelete: Cascade)

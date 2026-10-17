@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -267,38 +267,72 @@ function LoginPageInner() {
         // flips back → user sees "闪烁一下" and stays on /login.
         // Using window.location bypasses AppShell entirely: the next load
         // is a fresh document request with the new HttpOnly cookie.
+        //
+        // **HARD RULE (v3.1 — 用户需求 #2)**: 登录动画必须播放完毕才允许跳转后台。
+        // WelcomeTransitionOverlay 内部 rc-spin-slow(1.2s) + rc-progress-fill(720ms)
+        // + 各 stagger 总计 ≥1650ms 才能完整播放；onAnimationComplete 回调将在
+        // WelcomeTransitionOverlay 组件内部 useEffect 1650ms 到期时调用一次。
         // ============================================================
         let effectiveDestination: string = "/";
         if (nextPath) {
           try { effectiveDestination = decodeURIComponent(nextPath) || "/"; } catch { effectiveDestination = "/"; }
         }
         const finalDest = effectiveDestination.startsWith("/") ? effectiveDestination : "/";
+        // 用 ref + 闭包，WelcomeTransitionOverlay.onAnimationComplete / setTimeouts / 立即导航三者共享
+        const navStateRef = { canNavigateAt: 0, alreadyNavigated: false, animationFinishedAt: Number.POSITIVE_INFINITY, cookieIssuedAt: Number.POSITIVE_INFINITY,  };
         const navigateHard = () => {
           if (typeof window === "undefined") return;
+          if (navStateRef.alreadyNavigated) return;
+          // 动画播放完成标记（WelcomeTransitionOverlay 1650ms 后会把 animationFinishedAt 写入）
+          const now = Date.now();
+          if (now < navStateRef.animationFinishedAt) {
+            // 动画还没播完，不能跳 → 把导航延迟到刚好播完的那一刻（或 failsafeTimer 兜底）
+            const delay = navStateRef.animationFinishedAt - now;
+            if (delay > 0 && delay < 6000) {
+              window.setTimeout(navigateHard, delay + 10);
+              return;
+            }
+          }
+          navStateRef.alreadyNavigated = true;
           const abs = `${window.location.protocol}//${window.location.host}${finalDest}`;
           try { window.location.replace(abs); } catch { window.location.href = abs; }
         };
-        // Primary: navigate after the welcome animation (~ 780ms feels natural).
+        // 注册 navigation 状态初始化：动画必须播完才能导航
+        navStateRef.animationFinishedAt = Date.now() + 1700; // WelcomeTransitionOverlay useEffect 1650ms + 50ms 安全裕度
+        // Primary: navigate after the welcome animation + 动画播完 (1700ms total, 与 WelcomeTransitionOverlay 对齐)
         const primaryTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
           try { navigateHard(); } catch { /* ignore */ }
-        }, 780);
-        // Failsafe (HARD GUARANTEE): if pathname is still /login at 3.0s, force
+        }, 1750);
+        // Failsafe (HARD GUARANTEE): if pathname is still /login at 4.0s (v3.1 多给动画 1s 裕度), force
         // navigate.  This works even if the welcome overlay rendered with
         // errors, or Fast Refresh unmounted the component.  **This timer is
         // NEVER cleaned up by catch / failure branches** — it must always
-        // fire at 3.0s so we never stall on /login after submission.
+        // fire at 4.0s so we never stall on /login after submission.
         const failsafeTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
           try {
             if (typeof window !== "undefined" && window.location.pathname === "/login") {
+              // failsafe 不再等动画直接跳
+              navStateRef.animationFinishedAt = 0;
               navigateHard();
             }
           } catch { /* ignore */ }
-        }, 3000);
+        }, 4000);
         const cleanupPrimaryOnly = () => {
           try {
             if (typeof window !== "undefined" && primaryTimer !== null) clearTimeout(primaryTimer);
           } catch { /* ignore */ }
         };
+        // 把 WelcomeTransitionOverlay.onAnimationComplete 注入 welcomeState，setWelcomeState 时传进去
+        const pendingOnAnimComplete = () => {
+          try {
+            navStateRef.animationFinishedAt = Date.now();
+            // 如果 cookie 已签发，动画刚结束立即导航
+            if (navStateRef.cookieIssuedAt !== Number.POSITIVE_INFINITY && navStateRef.cookieIssuedAt <= Date.now()) {
+              navigateHard();
+            }
+          } catch { /* ignore */ }
+        };
+        (window as any).__RC_LOGIN_ANIM_COMPLETE__ = pendingOnAnimComplete;
 
         try {
           // Note: intentionally call setWelcomeState AFTER timer registration.
@@ -309,7 +343,8 @@ function LoginPageInner() {
               displayName: session.displayName,
               role: session.role,
               email: session.email,
-            });
+              __onAnimationComplete: pendingOnAnimComplete,
+            } as any);
           } catch {
             /* ignore: welcome state error must not stop navigation */
           }
@@ -375,11 +410,14 @@ function LoginPageInner() {
               }, 80);
             }
           } catch { /* ignore */ }
-          // If cookie was written, force an immediate hard navigate now
-          // (don't wait for primaryTimer's 780ms).  This guarantees the
-          // navigation happens as soon as the HttpOnly cookie is present.
+          // v3.1 用户需求 #2：登录动画必须播放完毕才能进入后台。
+          // 立即注册 cookieIssuedAt 时间戳，动画播放完毕（WelcomeTransitionOverlay
+          // onAnimationComplete 回调，约 1650ms）触发 pendingOnAnimComplete → 立即导航。
+          // 若 cookie 还在途中 1750ms primaryTimer + 4000ms failsafeTimer 仍会兜底。
           if (cookieIssued && typeof window !== "undefined") {
-            try { navigateHard(); } catch { /* ignore */ }
+            navStateRef.cookieIssuedAt = Date.now();
+            // 不再立刻 navigateHard（防止跳过动画）；交给 onAnimationComplete 触发
+            // 如果 onAnimationComplete 没触发（例如 WelcomeTransitionOverlay 没渲），primaryTimer(1750ms) 兜底。
           }
           return true;
         } catch (err) {
@@ -431,6 +469,7 @@ function LoginPageInner() {
           displayName={welcomeState.displayName}
           role={welcomeState.role}
           email={welcomeState.email}
+          onAnimationComplete={(welcomeState as any).__onAnimationComplete}
         />
       )}
 
@@ -627,7 +666,6 @@ function LoginPageInner() {
                       </>
                     ) : (
                       <>
-                        <LogIn className="h-4 w-4" />
                         登录进入工作台
                         <ArrowRight className="h-3.5 w-3.5 -mr-1 ml-0.5 opacity-80" />
                       </>
@@ -684,9 +722,24 @@ function WelcomeTransitionOverlay(props: {
   displayName: string;
   role: AppSessionUser["role"];
   email: string;
+  /** 整个动画播放完毕后才触发，保证登录动画完整展示 */
+  onAnimationComplete?: () => void;
 }) {
   const { displayName, role, email } = props;
   const initials = (displayName || "??").slice(0, 2).toUpperCase();
+  const onCompleteRef = useRef<() => void | undefined>();
+  onCompleteRef.current = props.onAnimationComplete;
+  const calledRef = useRef(false);
+  // 完整动画时长：rc-spin-slow 1.2s + rc-progress-fill 720ms + 各 stagger (~360+460ms) → 安全取 1650ms
+  // 用 requestAnimationFrame 挂原生 setTimeout 保证即使 React unmount 也不会被 effect 清掉
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (calledRef.current) return;
+      calledRef.current = true;
+      try { onCompleteRef.current?.(); } catch { /* ignore */ }
+    }, 1650);
+    return () => window.clearTimeout(t);
+  }, []);
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center"

@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
+import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
 import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
@@ -69,6 +69,8 @@ import {
   Crown,
   Info,
   RefreshCw,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
@@ -179,6 +181,8 @@ export default function ClientsPage() {
   const [lastAddedSummary, setLastAddedSummary] = useState<{ clientNo?: string; name: string; amount: number; batchNumber: string }[]>([]);
   const [moreFilterOpen, setMoreFilterOpen] = useState(false);
   const [bdRankingOpen, setBdRankingOpen] = useState(false);
+  // Phase 4: 自然人展开状态 — 记录已展开查看子账户列表的自然人 key
+  const [expandedPersons, setExpandedPersons] = useState<Set<string>>(new Set());
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
   const allowCreateBatch = canCreateBatch(role);
 
@@ -448,6 +452,67 @@ export default function ClientsPage() {
     return personBatchIndex.totalInvestMap.get(key) ?? Number(c?.investmentAmount ?? 0);
   };
 
+  // Phase 4: 按自然人聚合所有子账户（每个 Client 记录 = 一个子账户）
+  // 返回数组，每个元素代表一个自然人，包含其所有子账户及聚合统计
+  const personGroups = useMemo(() => {
+    const groups = new Map<string, {
+      key: string;
+      name: string;
+      bdManager: string;
+      clients: any[];
+      totalInvestment: number;
+      activeCount: number;
+      exitRequestedCount: number;
+      settledCount: number;
+      firstSignDate: Date | null;
+      latestClientNo: string | null;
+    }>();
+    for (const c of allClients as any[]) {
+      if (!c?.name || !c?.bdManager) continue;
+      const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
+      const inv = Number(c.investmentAmount ?? 0);
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, {
+          key,
+          name: String(c.name),
+          bdManager: String(c.bdManager),
+          clients: [c],
+          totalInvestment: inv,
+          activeCount: c.status === ClientStatus.ACTIVE ? 1 : 0,
+          exitRequestedCount: c.status === ClientStatus.EXIT_REQUESTED ? 1 : 0,
+          settledCount: c.status === ClientStatus.SETTLED ? 1 : 0,
+          firstSignDate: c.signDate ? new Date(c.signDate) : null,
+          latestClientNo: (c as any).clientNo ?? null,
+        });
+      } else {
+        existing.clients.push(c);
+        existing.totalInvestment += inv;
+        if (c.status === ClientStatus.ACTIVE) existing.activeCount++;
+        if (c.status === ClientStatus.EXIT_REQUESTED) existing.exitRequestedCount++;
+        if (c.status === ClientStatus.SETTLED) existing.settledCount++;
+        const sd = c.signDate ? new Date(c.signDate) : null;
+        if (sd && (!existing.firstSignDate || sd.getTime() < existing.firstSignDate.getTime())) {
+          existing.firstSignDate = sd;
+        }
+        // 用最新签约日期对应的 clientNo 作为展示编号
+        if (sd && existing.firstSignDate && sd.getTime() >= existing.firstSignDate.getTime()) {
+          existing.latestClientNo = (c as any).clientNo ?? existing.latestClientNo;
+        }
+      }
+    }
+    return Array.from(groups.values());
+  }, [allClients]);
+
+  const togglePersonExpand = (key: string) => {
+    setExpandedPersons((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const stats = useMemo(() => {
     let totalInvestment = 0;
     const bdStats: Record<string, { count: number; amount: number }> = {};
@@ -457,8 +522,14 @@ export default function ClientsPage() {
       bdStats[c.bdManager].count++;
       bdStats[c.bdManager].amount += c.investmentAmount || 0;
     });
+    // Phase 4: 自然人数量 = 去重后的「姓名+商务经理」组合数
+    const personKeys = new Set<string>();
+    for (const c of allClients as any[]) {
+      if (c?.name && c?.bdManager) personKeys.add(`${String(c.name)}\u0001${String(c.bdManager)}`);
+    }
     return {
-      totalClients: allClients.length,
+      totalClients: personKeys.size,           // 自然人数量（去重）
+      totalSubAccounts: allClients.length,     // 子账户数量（= Client 记录数）
       totalInvestment,
       bdCount: bdManagers.length,
       bdStats,
@@ -564,7 +635,7 @@ export default function ClientsPage() {
                     "单批次投资金额（USD）": Number(Number(c.investmentAmount ?? 0).toFixed(2)),
                     "签约日期": c.signDate ? formatDate(c.signDate) : "",
                     "本批次分成-客户%": Number(Number(c.profitSplitClient ?? 0).toFixed(2)),
-                    "本批次分成-机构%": Number(Number(c.profitSplitInstitution ?? 0).toFixed(2)),
+                    "本批次分成-WIN100%": Number(Number(c.profitSplitInstitution ?? 0).toFixed(2)),
                     "本批次签约状态":
                       c.status === ClientStatus.ACTIVE ? "持仓中" :
                       c.status === ClientStatus.EXIT_REQUESTED ? "申请退出中" :
@@ -648,19 +719,41 @@ export default function ClientsPage() {
       </div>
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        <Card className="border-border/50">
+        <Card className="border-border/50 cursor-pointer hover:border-primary/40 transition-colors" onClick={() => {
+          // 钻取：展开所有自然人子账户并滚动到表格
+          setExpandedPersons(new Set(personGroups.map((g) => g.key)));
+          setTimeout(() => document.getElementById("clients-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        }}>
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-muted-foreground">客户总数</p>
+              <p className="text-xs text-muted-foreground">自然人客户</p>
               <Users className="h-4 w-4 text-primary" />
             </div>
             <p className="text-2xl font-bold font-mono">{stats.totalClients}</p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              覆盖 {batches.length} 个批次
+              共 {stats.totalSubAccounts} 个子账户 · 覆盖 {batches.length} 个批次
             </p>
           </CardContent>
         </Card>
-        <Card className="border-border/50">
+        <Card className="border-border/50 cursor-pointer hover:border-primary/40 transition-colors" onClick={() => {
+          setExpandedPersons(new Set(personGroups.map((g) => g.key)));
+          setTimeout(() => document.getElementById("clients-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        }}>
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-muted-foreground">子账户总数</p>
+              <Layers className="h-4 w-4 text-primary" />
+            </div>
+            <p className="text-2xl font-bold font-mono text-primary">{stats.totalSubAccounts}</p>
+            <p className="text-[11px] text-muted-foreground mt-1">
+              平均每人 {stats.totalClients > 0 ? (stats.totalSubAccounts / stats.totalClients).toFixed(1) : 0} 个子账户
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-border/50 cursor-pointer hover:border-primary/40 transition-colors" onClick={() => {
+          setExpandedPersons(new Set(personGroups.map((g) => g.key)));
+          setTimeout(() => document.getElementById("clients-table")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+        }}>
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-muted-foreground">累计投资总额</p>
@@ -670,19 +763,7 @@ export default function ClientsPage() {
               {formatCurrency(stats.totalInvestment)}
             </p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              平均单笔 {formatCurrency(stats.totalClients > 0 ? stats.totalInvestment / stats.totalClients : 0)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-muted-foreground">商务经理数</p>
-              <Building2 className="h-4 w-4 text-secondary-foreground" />
-            </div>
-            <p className="text-2xl font-bold font-mono">{stats.bdCount}</p>
-            <p className="text-[11px] text-muted-foreground mt-1">
-              人均管理 {Math.round(stats.totalClients / Math.max(1, stats.bdCount))} 位客户
+              平均每子账户 {formatCurrency(stats.totalSubAccounts > 0 ? stats.totalInvestment / stats.totalSubAccounts : 0)}
             </p>
           </CardContent>
         </Card>
@@ -694,7 +775,7 @@ export default function ClientsPage() {
             </div>
             <p className="text-2xl font-bold font-mono text-success">100%</p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              所有客户本金全额保障
+              所有子账户本金全额保障
             </p>
           </CardContent>
         </Card>
@@ -785,12 +866,12 @@ export default function ClientsPage() {
       </Card>
 
       {/* Clients List */}
-      <Card className="border-border/50">
+      <Card className="border-border/50" id="clients-table">
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <Users className="h-4 w-4" />
-              客户总表 ({allClients.length})
+              客户总表（{stats.totalClients} 位自然人 · {stats.totalSubAccounts} 个子账户）
             </CardTitle>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -852,180 +933,254 @@ export default function ClientsPage() {
               <div className="col-span-2 text-right">操作</div>
             </div>
             <div className="divide-y divide-border/40 max-h-[550px] overflow-y-auto scrollbar-thin">
-              {allClients.length === 0 ? (
+              {personGroups.length === 0 ? (
                 <div className="text-center py-16 text-muted-foreground">
                   <Users className="h-10 w-10 mx-auto mb-3 opacity-40" />
                   <p>没有匹配的客户</p>
                 </div>
               ) : (
-                allClients.map((c) => {
-                  const isSettled = c.status === ClientStatus.SETTLED;
-                  const settledTs = isSettled && c.settledAt ? new Date(c.settledAt as any).getTime() : 0;
-                  const justSettled = !!newlySettledIds[c.id] &&
-                    settledTs >= (mountedAtRef.current - 1500);
+                personGroups.map((g) => {
+                  const isExpanded = expandedPersons.has(g.key);
+                  // 聚合状态：有申请退出 → warning；全已结算 → secondary；否则 success
+                  const aggStatus = g.exitRequestedCount > 0
+                    ? ClientStatus.EXIT_REQUESTED
+                    : g.activeCount > 0
+                    ? ClientStatus.ACTIVE
+                    : ClientStatus.SETTLED;
+                  const aggStatusLabel = aggStatus === ClientStatus.ACTIVE
+                    ? "持仓中"
+                    : aggStatus === ClientStatus.EXIT_REQUESTED
+                    ? "申请退出"
+                    : "已结算";
+                  const anySettled = g.settledCount > 0;
+                  const firstClient = g.clients[0];
                   return (
-                  <div
-                    id={`client-row-${c.id}`}
-                    key={`${c.id}-${isSettled ? `S${settledTs}` : 'A'}`}
-                    className={cn(
-                      "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group",
-                      isSettled && [
-                        justSettled ? "animate-settle-focus-pulse" : "settle-gray-static",
-                      ]
-                    )}
-                  >
-                    <div className="col-span-2">
-                      <div className="flex items-center gap-2.5">
-                        <ClientAvatar name={c.name} size="sm" rounded="lg" />
-                        <div className="min-w-0">
-                          <p className="font-semibold text-sm truncate">{c.name}</p>
-                          <p className="text-[10px] text-muted-foreground font-mono truncate" title={c.clientNo}>
-                            <span className="text-primary/90 font-semibold">{String(c.clientNo ?? "—")}</span>
-                            {" · "}
-                            {(() => {
-                              const d = getPersonFirstSignDate(c);
-                              return d ? formatDate(d) : "-";
-                            })()}
+                    <div key={g.key} className="bg-background">
+                      {/* 自然人聚合行 */}
+                      <div
+                        className={cn(
+                          "grid grid-cols-12 items-center px-5 py-3 hover:bg-secondary/30 transition-colors group cursor-pointer",
+                          anySettled && g.activeCount === 0 && g.exitRequestedCount === 0 && "settle-gray-static"
+                        )}
+                        onClick={() => togglePersonExpand(g.key)}
+                      >
+                        <div className="col-span-2">
+                          <div className="flex items-center gap-2">
+                            {isExpanded ? (
+                              <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                            ) : (
+                              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                            )}
+                            <ClientAvatar name={g.name} size="sm" rounded="lg" />
+                            <div className="min-w-0">
+                              <p className="font-semibold text-sm truncate">{g.name}</p>
+                              <p className="text-[10px] text-muted-foreground font-mono truncate">
+                                <span className="text-primary/90 font-semibold">{String(g.latestClientNo ?? "—")}</span>
+                                {" · "}
+                                {g.firstSignDate ? formatDate(g.firstSignDate) : "-"}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="col-span-2 min-w-0">
+                          <Link href={`/bd/${encodeURIComponent(g.bdManager)}`} className="text-xs hover:text-primary hover:underline inline-flex items-center text-left" onClick={(e) => e.stopPropagation()}>
+                            <span className="truncate">{g.bdManager}</span>
+                          </Link>
+                        </div>
+                        <div className="col-span-2 min-w-0" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-wrap gap-1 items-center">
+                            {getPersonBatches(firstClient).map((b) => (
+                              <Link
+                                key={b.batchId}
+                                href={`/batch/${b.batchId}`}
+                                className="group/batch inline-flex items-baseline rounded-md px-1.5 py-0.5 hover:bg-primary/10 transition-colors"
+                              >
+                                <span className="font-mono text-[11px] font-semibold tabular-nums text-primary/90 group-hover/batch:text-primary group-hover/batch:underline underline-offset-2 decoration-dashed decoration-primary/50">
+                                  {b.batchNumber}
+                                </span>
+                              </Link>
+                            ))}
+                            {g.clients.length > 1 && (
+                              <Badge variant="secondary" className="text-[9px] px-1.5 py-0">
+                                {g.clients.length} 个子账户
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="col-span-2 text-right">
+                          <p className="font-mono font-bold text-sm">
+                            {formatCurrency(g.totalInvestment)}
+                          </p>
+                          {g.clients.some((c: any) => isVipClient(c)) && (
+                            <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
+                              VIP
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="col-span-2 text-right">
+                          <Badge
+                            variant={
+                              aggStatus === ClientStatus.ACTIVE
+                                ? "success"
+                                : aggStatus === ClientStatus.EXIT_REQUESTED
+                                ? "warning"
+                                : "secondary"
+                            }
+                            className="text-[10px] mb-1"
+                          >
+                            {aggStatusLabel}
+                          </Badge>
+                          <p className="text-[10px] text-muted-foreground font-mono block">
+                            {g.firstSignDate ? formatDate(g.firstSignDate) : "-"}
                           </p>
                         </div>
-                      </div>
-                    </div>
-                    <div className="col-span-2 min-w-0">
-                      <Link href={`/bd/${encodeURIComponent(c.bdManager)}`} className="text-xs hover:text-primary hover:underline inline-flex items-center text-left">
-                        <span className="truncate">{c.bdManager}</span>
-                      </Link>
-                    </div>
-                    <div className="col-span-2 min-w-0">
-                      {(() => {
-                        const personBatches = getPersonBatches(c);
-                        const currentBatchId = String(c.batchId ?? c.batch?.id ?? "");
-                        if (personBatches.length <= 1) {
-                          const b = personBatches[0] ?? { batchId: currentBatchId, batchNumber: c.batchNumber };
-                          return (
-                            <Link
-                              href={`/batch/${b.batchId || currentBatchId}`}
-                              className="group/batch inline-flex items-baseline gap-1 rounded-md hover:bg-primary/10 px-1.5 py-0.5 -mx-1.5 text-left"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <p className="font-mono text-[11px] font-semibold tabular-nums text-primary/90 group-hover/batch:text-primary group-hover/batch:underline underline-offset-2 decoration-dashed decoration-primary/50">
-                                {b.batchNumber || c.batchNumber}
-                              </p>
-                            </Link>
-                          );
-                        }
-                        return (
-                          <div className="flex flex-col gap-1 items-start -my-0.5 py-0.5" onClick={(e) => e.stopPropagation()}>
-                            {personBatches.map((b) => {
-                              return (
-                                <Link
-                                  key={b.batchId}
-                                  href={`/batch/${b.batchId}`}
-                                  className={
-                                    "group/batch inline-flex items-baseline rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-primary/10 transition-colors "
-                                  }
-                                >
-                                  <span
-                                    className={
-                                      "font-mono text-[11px] font-semibold tabular-nums underline-offset-2 decoration-dashed text-primary/90 group-hover/batch:text-primary group-hover/batch:underline decoration-primary/60"
-                                    }
-                                  >
-                                    {b.batchNumber}
-                                  </span>
-                                </Link>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className="col-span-2 text-right">
-                      <p className="font-mono font-bold text-sm">
-                        {formatCurrency(getPersonLatestInvestment(c))}
-                      </p>
-                      {isVipClient(c) && (
-                        <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
-                          VIP
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="col-span-2 text-right">
-                      <Badge
-                        variant={
-                          c.status === ClientStatus.ACTIVE
-                            ? "success"
-                            : c.status === ClientStatus.EXIT_REQUESTED
-                            ? "warning"
-                            : "secondary"
-                        }
-                        className="text-[10px] mb-1"
-                      >
-                        {c.status === ClientStatus.ACTIVE
-                          ? "持仓中"
-                          : c.status === ClientStatus.EXIT_REQUESTED
-                          ? "申请退出"
-                          : "已结算"}
-                      </Badge>
-                      <p className="text-[10px] text-muted-foreground font-mono block">
-                        {formatDate(c.signDate)}
-                      </p>
-                    </div>
-                    <div className="col-span-2 flex justify-end gap-1">
-                      {canEdit(c) && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 gap-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditErrors({});
-                            setEditForm({
-                              name: String(c.name ?? ""),
-                              investment: Number(c.investmentAmount || 0).toFixed(2),
-                              bdManager: String(c.bdManager ?? bdManagerFullName ?? BD_OPTIONS_ADD[0]),
-                              signDate: (c.signDate ? new Date(c.signDate) : new Date()).toISOString().split("T")[0],
-                              status: (c.status as ClientStatus) || ClientStatus.ACTIVE,
-                            });
-                            setEditClientOpen({ id: c.id, batchId: c.batchId, clientNo: (c as any).clientNo });
-                          }}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          编辑
-                        </Button>
-                      )}
-                      <RoleGate
-                        allowed={[APP_ROLES.ADMIN]}
-                        auditResource={`client:delete:${c.id}`}
-                        auditAction="ui_component_denied"
-                      >
-                        {c.status !== ClientStatus.SETTLED && (
+                        <div className="col-span-2 flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 gap-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity hover:bg-danger/10 hover:text-danger"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteClientConfirm({ id: c.id, batchId: c.batchId, name: String(c.name ?? "") });
-                            }}
+                            className="h-8 gap-1 text-xs"
+                            onClick={() => togglePersonExpand(g.key)}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            删除
+                            {isExpanded ? (
+                              <><ChevronDown className="h-3.5 w-3.5" />收起</>
+                            ) : (
+                              <><ChevronRight className="h-3.5 w-3.5" />展开</>
+                            )}
                           </Button>
-                        )}
-                      </RoleGate>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 gap-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setClientDetail(c.id);
-                        }}
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                        详情
-                      </Button>
+                        </div>
+                      </div>
+                      {/* 展开的子账户列表 */}
+                      {isExpanded && (
+                        <div className="bg-secondary/20 border-t border-border/30">
+                          {g.clients.map((c: any) => {
+                            const isSettled = c.status === ClientStatus.SETTLED;
+                            const settledTs = isSettled && c.settledAt ? new Date(c.settledAt as any).getTime() : 0;
+                            const justSettled = !!newlySettledIds[c.id] &&
+                              settledTs >= (mountedAtRef.current - 1500);
+                            return (
+                              <div
+                                id={`client-row-${c.id}`}
+                                key={`${c.id}-${isSettled ? `S${settledTs}` : 'A'}`}
+                                className={cn(
+                                  "grid grid-cols-12 items-center pl-12 pr-5 py-2.5 hover:bg-secondary/40 transition-colors group border-b border-border/20 last:border-b-0",
+                                  isSettled && (justSettled ? "animate-settle-focus-pulse" : "settle-gray-static")
+                                )}
+                              >
+                                <div className="col-span-2 min-w-0">
+                                  <div className="flex flex-col">
+                                    <span className="text-[10px] text-muted-foreground font-mono">子账号</span>
+                                    <span className="font-mono text-[12px] font-semibold text-primary/90 truncate" title={(c as any).subAccountNo}>
+                                      {String((c as any).subAccountNo ?? "—")}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="col-span-2 min-w-0">
+                                  <span className="text-[10px] text-muted-foreground font-mono block">批次</span>
+                                  <Link
+                                    href={`/batch/${String(c.batchId ?? c.batch?.id ?? "")}`}
+                                    className="font-mono text-[11px] font-semibold text-primary/80 hover:text-primary hover:underline truncate inline-block"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {String(c.batchNumber ?? c.batch?.batchNumber ?? "—")}
+                                  </Link>
+                                </div>
+                                <div className="col-span-2 min-w-0">
+                                  <span className="text-[10px] text-muted-foreground font-mono block">客户编号</span>
+                                  <span className="font-mono text-[11px] truncate">{String((c as any).clientNo ?? "—")}</span>
+                                </div>
+                                <div className="col-span-2 text-right">
+                                  <p className="font-mono font-bold text-sm">
+                                    {formatCurrency(Number(c.investmentAmount ?? 0))}
+                                  </p>
+                                  {isVipClient(c) && (
+                                    <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
+                                      VIP
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="col-span-2 text-right">
+                                  <Badge
+                                    variant={
+                                      c.status === ClientStatus.ACTIVE
+                                        ? "success"
+                                        : c.status === ClientStatus.EXIT_REQUESTED
+                                        ? "warning"
+                                        : "secondary"
+                                    }
+                                    className="text-[10px] mb-1"
+                                  >
+                                    {c.status === ClientStatus.ACTIVE
+                                      ? "持仓中"
+                                      : c.status === ClientStatus.EXIT_REQUESTED
+                                      ? "申请退出"
+                                      : "已结算"}
+                                  </Badge>
+                                  <p className="text-[10px] text-muted-foreground font-mono block">
+                                    {formatDate(c.signDate)}
+                                  </p>
+                                </div>
+                                <div className="col-span-2 flex justify-end gap-1">
+                                  {canEdit(c) && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 gap-1 text-[11px] opacity-60 group-hover:opacity-100 transition-opacity"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditErrors({});
+                                        setEditForm({
+                                          name: String(c.name ?? ""),
+                                          investment: Number(c.investmentAmount || 0).toFixed(2),
+                                          bdManager: String(c.bdManager ?? bdManagerFullName ?? BD_OPTIONS_ADD[0]),
+                                          signDate: (c.signDate ? new Date(c.signDate) : new Date()).toISOString().split("T")[0],
+                                          status: (c.status as ClientStatus) || ClientStatus.ACTIVE,
+                                        });
+                                        setEditClientOpen({ id: c.id, batchId: c.batchId, clientNo: (c as any).clientNo });
+                                      }}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                      编辑
+                                    </Button>
+                                  )}
+                                  <RoleGate
+                                    allowed={[APP_ROLES.ADMIN]}
+                                    auditResource={`client:delete:${c.id}`}
+                                    auditAction="ui_component_denied"
+                                  >
+                                    {c.status !== ClientStatus.SETTLED && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 gap-1 text-[11px] opacity-60 group-hover:opacity-100 transition-opacity hover:bg-danger/10 hover:text-danger"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setDeleteClientConfirm({ id: c.id, batchId: c.batchId, name: String(c.name ?? "") });
+                                        }}
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                        删除
+                                      </Button>
+                                    )}
+                                  </RoleGate>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 gap-1 text-[11px] opacity-60 group-hover:opacity-100 transition-opacity"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setClientDetail(c.id);
+                                    }}
+                                  >
+                                    <Eye className="h-3 w-3" />
+                                    详情
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  </div>
                   );
                 })
               )}
@@ -1167,9 +1322,9 @@ export default function ClientsPage() {
                       <p className="font-mono font-semibold">{b ? formatCurrency(b.priorityAmount ?? 0) : "-"}</p>
                     </div>
                     <div>
-                      <p className="text-muted-foreground mb-0.5">分成比例（客户/机构）</p>
+                      <p className="text-muted-foreground mb-0.5">分成比例（客户/WIN100）</p>
                       <p className="font-mono font-semibold">
-                        {split ? `客户${Number((split.client * 100).toFixed(2))}% / 机构${Number((split.institution * 100).toFixed(2))}%` : "-"}
+                        {split ? `客户${Number((split.client * 100).toFixed(2))}% / WIN100${Number((split.institution * 100).toFixed(2))}%` : "-"}
                       </p>
                     </div>
                     <div>
@@ -1249,9 +1404,11 @@ export default function ClientsPage() {
                   if (!batch) return;
                   const split = calculateProfitSplitRatio(numAmt);
                   const signYear = new Date(addForm.signDate).getUTCFullYear();
+                  const newClientNo = nextClientNo(mock.batches, signYear);
                   const newClient: any = {
                     id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                    clientNo: nextClientNo(mock.batches, signYear),
+                    clientNo: newClientNo,
+                    subAccountNo: nextSubAccountNo(newClientNo),
                     name: addForm.name.trim(),
                     investmentAmount: numAmt,
                     initialInvestment: numAmt,
@@ -1801,6 +1958,11 @@ export default function ClientsPage() {
                                 </p>
                                 <ArrowRight className="h-3 w-3 text-primary/70" />
                               </Link>
+                              {d.client.subAccountNo && (
+                                <span className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-secondary-foreground/30 bg-secondary/50 text-secondary-foreground inline-flex items-center" title="中阳证券子账号">
+                                  {String(d.client.subAccountNo)}
+                                </span>
+                              )}
                               <Badge
                                 variant={
                                   d.metrics.riskLevel === "CRITICAL"
@@ -1857,7 +2019,7 @@ export default function ClientsPage() {
                             <div className="rounded-lg border border-border/50 bg-background/50 p-2.5 space-y-1">
                               <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">本批次分成协议</p>
                               <Badge variant="outline" className="text-[10px] font-mono h-5">
-                                客户 {Number((d.split.client * 100).toFixed(2))}% / 机构 {Number((d.split.institution * 100).toFixed(2))}%
+                                客户 {Number((d.split.client * 100).toFixed(2))}% / WIN100 {Number((d.split.institution * 100).toFixed(2))}%
                               </Badge>
                               <p className="text-[10px] text-muted-foreground pt-1">
                                 当前市值（含盈亏）：<span className="font-mono font-bold text-foreground ml-0.5">{formatCurrency(Number(d.client.investmentAmount || 0) + d.batchPnL)}</span>

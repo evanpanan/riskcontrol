@@ -22,11 +22,17 @@ import {
   syncBatchFinance,
   settleClientPosition,
   getClientPositionMetrics,
+  calculateContractDates,
+  getMarginRoundDueDate,
+  SUBORDINATE_RATIO,
+  PRIORITY_RATIO,
   type BatchLike,
 } from "./riskEngine";
 import { mergeClientStatusOnClient } from "./clientStatusStore";
 import { getNYSEInfo, LIVE_QUOTE_SETTINGS_KEY } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
+
+const money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 
 export class RevisionMismatchError extends Error {
   override name = "RevisionMismatchError";
@@ -167,6 +173,42 @@ export function nextClientNo(batches: Array<Batch & { clients?: Client[] }>, for
   return lastClientNoAllocator.next(forYear);
 }
 
+/**
+ * Phase 4: 生成中阳证券子账号编号。
+ * 规则：每个「客户 × 批次」= 一个独立子账户，子账号 = ZY + 客户编号（去掉 C 前缀）。
+ * 例如 clientNo = C2600001 → subAccountNo = ZY2600001。
+ * 由于 clientNo 已全局唯一，subAccountNo 天然唯一。
+ */
+export function formatSubAccountNo(clientNo: string | null | undefined): string {
+  if (!clientNo) return "";
+  const clean = String(clientNo).trim();
+  const withoutPrefix = clean.replace(/^C/i, "");
+  return `ZY${withoutPrefix}`;
+}
+
+/**
+ * Phase 4: 为缺失 subAccountNo 的客户回填中阳证券子账号编号。
+ * 必须在 ensureClientNosOnBatches 之后调用。
+ */
+export function ensureSubAccountNosOnBatches(
+  batches: Array<Batch & { clients?: Client[] }>,
+): void {
+  for (const b of batches) {
+    for (const c of b.clients ?? []) {
+      const existing = (c as any).subAccountNo as string | null | undefined;
+      if (existing) continue;
+      const no = (c as any).clientNo as string | null | undefined;
+      const sa = formatSubAccountNo(no);
+      if (sa) (c as any).subAccountNo = sa;
+    }
+  }
+}
+
+/** 新增客户时生成下一个子账号编号（与 clientNo 同步）。 */
+export function nextSubAccountNo(clientNo: string): string {
+  return formatSubAccountNo(clientNo);
+}
+
 /** 当缓存被刷新时同步重置编号分配器，避免序号复用冲突。 */
 function resetClientNoAllocator() { lastClientNoAllocator = null; }
 
@@ -245,6 +287,9 @@ export function generateMockData(): MockDataSet {
     const maturityDate = new Date(signDate);
     maturityDate.setUTCMonth(maturityDate.getUTCMonth() + 24);
 
+    // 入场价 = signDate 当日真实收盘价（历史行情回查）— 提前到客户循环前，用于算持股数
+    const stockPriceAtStart = Number(findClosestClose(signDateISO).toFixed(4));
+
     // 每批次客户数：20~30（按用户要求）
     const numClients = batchRng.int(20, 30);
 
@@ -290,6 +335,7 @@ export function generateMockData(): MockDataSet {
       clients.push({
         id: `client-${MOCK_BASE_SEED}-${i}-${c}`,
         clientNo: null,
+        subAccountNo: null,
         batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
         name: clientName,
         investmentAmount,
@@ -303,6 +349,13 @@ export function generateMockData(): MockDataSet {
         status: ClientStatus.ACTIVE,
         settledAt: null,
         settlementNote: null,
+        sharesHeld: stockPriceAtStart > 0 ? investmentAmount / stockPriceAtStart : 0,
+        avgCostPrice: stockPriceAtStart,
+        brokerAccount: `ZY-${clientRng.int(10000000, 99999999)}`,
+        exitRequestedAt: null,
+        exitEligibleAt: null,
+        earlyExitFee: null,
+        exitAmount: null,
         createdAt: clientSignDate,
         updatedAt: now,
       });
@@ -310,9 +363,6 @@ export function generateMockData(): MockDataSet {
 
     const initialTotalAmount = initialTotalAmountCents / 100;
     const split = calculateInvestmentSplit(initialTotalAmount);
-
-    // 入场价 = signDate 当日真实收盘价（历史行情回查）
-    const stockPriceAtStart = Number(findClosestClose(signDateISO).toFixed(4));
 
     const totalShares = calculateTotalShares(initialTotalAmount, stockPriceAtStart);
     const currentMarketValue = calculateCurrentMarketValue(
@@ -343,6 +393,8 @@ export function generateMockData(): MockDataSet {
         fulfilledAmount: m === cumulativeMarginCalls - 1 ? 0 : Number(prelimMetrics.requiredMarginCall.toFixed(2)),
         fulfilledDate: m === cumulativeMarginCalls - 1 ? null : callDate,
         status: m === cumulativeMarginCalls - 1 ? "PENDING" : "FULLFILLED",
+        dueDate: new Date(getMarginRoundDueDate(callDate)),
+        collateralType: "stock",
         note: null,
         notifiedEmails: null,
         notifiedWhatsApps: null,
@@ -368,6 +420,12 @@ export function generateMockData(): MockDataSet {
 
     const currentDayChangePercent = Number(((currentStockPrice / stockPriceAtStart - 1) * 100).toFixed(2));
 
+    // 协议要素表 V2：期限节点
+    const contractDates = calculateContractDates(signDate);
+    // WIN100 担保品：按 3:7 比例买入 XMAX，市值 = 客户股票市值 × 3/7
+    const win100CollateralValue = money(split.priorityAmount * SUBORDINATE_RATIO / PRIORITY_RATIO);
+    const win100CollateralShares = stockPriceAtStart > 0 ? win100CollateralValue / stockPriceAtStart : 0;
+
     batches.push({
       id: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
       batchNumber: `BATCH-${2026}-${String(i + 1).padStart(3, "0")}`,
@@ -389,6 +447,13 @@ export function generateMockData(): MockDataSet {
       status,
       riskLevel: finalMetrics.riskLevel,
       nextTradingWindow: tradingInfo.nextTradingDate,
+      custodianBroker: "中阳证券有限公司",
+      lockUpEndDate: contractDates.lockUpEndDate,
+      exitWindowMonths: contractDates.exitWindowMonths,
+      noticePeriodDays: contractDates.noticePeriodDays,
+      finalMaturityDate: contractDates.finalMaturityDate,
+      win100CollateralValue,
+      win100CollateralShares,
       clients,
       marginCalls,
       createdAt: signDate,
@@ -461,9 +526,11 @@ export function generateMockData(): MockDataSet {
       );
       const profitSplit = calculateProfitSplitRatio(part.investmentAmount, true);
       const nextIdx = target.clients.length;
+      const entryPrice = target.stockPriceAtStart;
       const clone: Client = {
         id: `client-mb-${MOCK_BASE_SEED}-${person.name}-${part.batchIndex}-${p}`,
         clientNo: null,
+        subAccountNo: null,
         batchId: target.id,
         name: person.name,
         investmentAmount: part.investmentAmount,
@@ -477,6 +544,13 @@ export function generateMockData(): MockDataSet {
         status: ClientStatus.ACTIVE,
         settledAt: null,
         settlementNote: null,
+        sharesHeld: entryPrice > 0 ? part.investmentAmount / entryPrice : 0,
+        avgCostPrice: entryPrice,
+        brokerAccount: `ZY-${bRng.int(10000000, 99999999)}`,
+        exitRequestedAt: null,
+        exitEligibleAt: null,
+        earlyExitFee: null,
+        exitAmount: null,
         createdAt: clientSignDate,
         updatedAt: now,
       };
@@ -492,6 +566,9 @@ export function generateMockData(): MockDataSet {
         Number(target.currentStockPrice),
         target.totalShares
       );
+      // 重新计算 WIN100 担保品（按 3:7）
+      target.win100CollateralValue = money(target.priorityAmount * SUBORDINATE_RATIO / PRIORITY_RATIO);
+      target.win100CollateralShares = target.stockPriceAtStart > 0 ? target.win100CollateralValue / target.stockPriceAtStart : 0;
       const reMetrics = calculateBatchRiskMetrics(
         target.initialTotalAmount,
         target.currentMarketValue,
@@ -872,7 +949,7 @@ function readFinanceStore(): FinanceStore {
 }
 
 function reviveBatch(batch: BatchLike): BatchLike {
-  for (const key of ["signDate", "maturityDate", "createdAt", "updatedAt", "nextTradingWindow"] as const) {
+  for (const key of ["signDate", "maturityDate", "createdAt", "updatedAt", "nextTradingWindow", "lockUpEndDate", "finalMaturityDate"] as const) {
     if (batch[key]) (batch as any)[key] = new Date(batch[key]!);
   }
   for (const c of batch.clients ?? []) {
@@ -1029,11 +1106,13 @@ export function getMockData(): MockDataSet {
     }
     resetClientNoAllocator();
     lastClientNoAllocator = ensureClientNosOnBatches(loaded.batches);
+    ensureSubAccountNosOnBatches(loaded.batches);
     cachedMockData = loaded;
   } else {
     if (!lastClientNoAllocator) {
       // 缓存中已加载但此前未经过 ensureClientNos（例如跨 tab 事件），补齐编号。
       lastClientNoAllocator = ensureClientNosOnBatches(cachedMockData.batches);
+      ensureSubAccountNosOnBatches(cachedMockData.batches);
     }
   }
   return cachedMockData;

@@ -2,6 +2,7 @@ import { Client, Batch, MarginCall, RiskLevel, BatchStatus, ClientStatus } from 
 import { calculateTradingWindows } from "./utils";
 import { getProfitSettings, DEFAULT_PROFIT_SETTINGS } from "./profitSettings";
 import { getStoredThresholds } from "./thresholds";
+import { getActiveRiskTier, getTriggeredTiers, getNextTierGap, type RiskTier } from "./riskTiers";
 
 export const PRIORITY_RATIO = 0.7;
 export const SUBORDINATE_RATIO = 0.3;
@@ -10,8 +11,46 @@ export const CRITICAL_DROP_THRESHOLD = 0.20;
 export const HIGH_INVESTMENT_THRESHOLD = 100000;
 export const HIGH_INVESTMENT_CLIENT_SPLIT = 0.4;
 export const LOW_INVESTMENT_CLIENT_SPLIT = 0.3;
+
+// --- 协议要素表 V2 业务常量 ---
+export const MIN_INVESTMENT_AMOUNT = 30000;            // 投资者门槛：3 万美金起
+export const COLLATERAL_RATIO_WIN100 = 3;              // WIN100 担保品比例分子
+export const COLLATERAL_RATIO_CLIENT = 7;              // 客户股票比例分母（3:7）
+export const EARLY_EXIT_FEE_RATE = 0.01;               // 提前退出费率：退出本金的 1%
+export const EARLY_EXIT_FEE_RECIPIENT = "中阳证券";      // 提前退出费用归属
+export const DEFAULT_CUSTODIAN_BROKER = "中阳证券有限公司";
+export const LOCKUP_MONTHS = 6;                        // 封闭期 6 个月
+export const EXIT_WINDOW_MONTHS = 3;                   // 开放窗口每 3 个月
+export const NOTICE_PERIOD_DAYS = 15;                  // 提前 15 天通知
+export const FINAL_MATURITY_YEARS = 2;                 // 最终到期 2 年
+export const MARGIN_CALL_T2_DAYS = 2;                 // WIN100 补仓 T+2 履约期限
+// --- end ---
 const money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 const uid = () => `fin_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+/** 跳过周末（周六、周日）累加自然日，返回新日期。简化版不处理节假日。 */
+export function addBusinessDays(date: Date | string, days: number): Date {
+  const d = new Date(typeof date === "string" ? date : date);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) added++;
+  }
+  return d;
+}
+
+/** 计算补仓轮次的 T+2 到期日（触发日 + 2 个交易日）。 */
+export function getMarginRoundDueDate(triggerDate: Date | string): string {
+  return addBusinessDays(triggerDate, MARGIN_CALL_T2_DAYS).toISOString();
+}
+
+/** 检查补仓轮次是否逾期：当前时间超过 dueDate 且未足额履约。 */
+export function checkMarginRoundOverdue(round: MarginRound): boolean {
+  if (round.status !== "PENDING") return false;
+  const due = new Date(round.dueDate);
+  return new Date() > due;
+}
 
 export interface ClientMarginCallEntry {
   id: string;
@@ -52,6 +91,11 @@ export interface SettlementSnapshot extends SettlementResult {
   institutionRescuePnL: number;
   operatorName?: string;
   settleReason?: string;
+  // Phase 3: 退出全流程
+  earlyExitFee?: number;           // 提前退出手续费（本金 × 1%）
+  earlyExitFeeRecipient?: string;  // 手续费接收方（中阳证券）
+  isEarlyExit?: boolean;           // 是否提前退出（最终到期日前）
+  exitRequestedAt?: string;        // 退出申请时间
 }
 export interface InstitutionTrade {
   id: string;
@@ -65,6 +109,7 @@ export interface InstitutionTrade {
   source: "batch_one_click" | "client_single" | "legacy";
   operatorName?: string;
   needsReconciliation?: boolean;
+  collateralType?: "cash" | "stock";
 }
 export interface MarginRound {
   id: string;
@@ -73,9 +118,12 @@ export interface MarginRound {
   fulfilledAmount: number;
   triggerMarketValue: number;
   triggerDate: string;
+  dueDate: string;
   dropPercent: number;
-  status: "PENDING" | "FULLFILLED" | "EXPIRED" | "CANCELLED";
+  status: "PENDING" | "FULLFILLED" | "EXPIRED" | "CANCELLED" | "OVERDUE";
   allocations: Record<string, ClientMarginState>;
+  collateralType?: "cash" | "stock";
+  win100Decision?: string;
 }
 export interface BatchFinance {
   version: 2;
@@ -172,6 +220,213 @@ export interface RescueStats {
 
 export function calculateInvestmentSplit(totalAmount: number) {
   return { priorityAmount: totalAmount * PRIORITY_RATIO, subordinateAmount: totalAmount * SUBORDINATE_RATIO };
+}
+
+/**
+ * 校验 WIN100 担保品比例：WIN100 担保市值 / 客户股票市值 >= 3/7
+ * 返回 { ok, requiredWin100Collateral, currentRatio }
+ */
+export function checkCollateralRatio(clientStockValue: number, win100CollateralValue: number) {
+  const required = (clientStockValue * COLLATERAL_RATIO_WIN100) / COLLATERAL_RATIO_CLIENT;
+  const currentRatio = clientStockValue > 0 ? win100CollateralValue / clientStockValue : 0;
+  const minRatio = COLLATERAL_RATIO_WIN100 / COLLATERAL_RATIO_CLIENT;
+  return {
+    ok: win100CollateralValue >= required - 0.01,
+    requiredWin100Collateral: money(required),
+    currentRatio,
+    minRatio,
+    shortfall: money(Math.max(0, required - win100CollateralValue)),
+  };
+}
+
+/**
+ * 计算提前退出费用：退出本金 × 1%，归中阳证券
+ */
+export function calculateEarlyExitFee(exitPrincipal: number) {
+  const fee = money(exitPrincipal * EARLY_EXIT_FEE_RATE);
+  return {
+    fee,
+    recipient: EARLY_EXIT_FEE_RECIPIENT,
+    rate: EARLY_EXIT_FEE_RATE,
+    netToClient: money(exitPrincipal - fee),
+  };
+}
+
+/**
+ * 根据签约日计算合约期限节点
+ */
+export function calculateContractDates(signDate: Date | string) {
+  const sign = typeof signDate === "string" ? new Date(signDate) : signDate;
+  const lockUpEnd = new Date(sign);
+  lockUpEnd.setMonth(lockUpEnd.getMonth() + LOCKUP_MONTHS);
+  const finalMaturity = new Date(sign);
+  finalMaturity.setFullYear(finalMaturity.getFullYear() + FINAL_MATURITY_YEARS);
+  return {
+    lockUpEndDate: lockUpEnd,
+    exitWindowMonths: EXIT_WINDOW_MONTHS,
+    noticePeriodDays: NOTICE_PERIOD_DAYS,
+    finalMaturityDate: finalMaturity,
+  };
+}
+
+/**
+ * Phase 3: 获取客户退出资格信息
+ * 检查通知期是否已过、是否在开放期内、是否已过最终到期日
+ */
+export function getExitEligibility(batch: BatchLike, client: ClientLike): {
+  canExit: boolean;
+  reason: string;
+  exitEligibleAt: Date | null;
+  noticePeriodDays: number;
+  isEarlyExit: boolean;
+  daysUntilEligible: number;
+  lockUpEndDate: Date;
+  finalMaturityDate: Date;
+} {
+  const signDate = client.signDate ?? batch.signDate;
+  const contract = calculateContractDates(signDate);
+  const now = new Date();
+  const noticeDays = contract.noticePeriodDays;
+
+  // 锁仓期内不可退出
+  if (now < contract.lockUpEndDate) {
+    const daysUntilLockupEnd = Math.ceil((contract.lockUpEndDate.getTime() - now.getTime()) / 86400000);
+    return {
+      canExit: false,
+      reason: `锁仓期内，${daysUntilLockupEnd} 天后开放首次退出窗口`,
+      exitEligibleAt: null,
+      noticePeriodDays: noticeDays,
+      isEarlyExit: true,
+      daysUntilEligible: daysUntilLockupEnd + noticeDays,
+      lockUpEndDate: contract.lockUpEndDate,
+      finalMaturityDate: contract.finalMaturityDate,
+    };
+  }
+
+  // 是否已提交退出申请
+  const requestedAt = client.exitRequestedAt ? new Date(client.exitRequestedAt) : null;
+  if (!requestedAt) {
+    return {
+      canExit: false,
+      reason: `需提交退出申请，等待 ${noticeDays} 天通知期后可结算`,
+      exitEligibleAt: null,
+      noticePeriodDays: noticeDays,
+      isEarlyExit: now < contract.finalMaturityDate,
+      daysUntilEligible: noticeDays,
+      lockUpEndDate: contract.lockUpEndDate,
+      finalMaturityDate: contract.finalMaturityDate,
+    };
+  }
+
+  const eligibleAt = new Date(requestedAt.getTime() + noticeDays * 86400000);
+  const isEarlyExit = now < contract.finalMaturityDate;
+
+  if (now < eligibleAt) {
+    const daysUntil = Math.ceil((eligibleAt.getTime() - now.getTime()) / 86400000);
+    return {
+      canExit: false,
+      reason: `通知期内，${daysUntil} 天后可结算`,
+      exitEligibleAt: eligibleAt,
+      noticePeriodDays: noticeDays,
+      isEarlyExit,
+      daysUntilEligible: daysUntil,
+      lockUpEndDate: contract.lockUpEndDate,
+      finalMaturityDate: contract.finalMaturityDate,
+    };
+  }
+
+  return {
+    canExit: true,
+    reason: isEarlyExit ? "可结算（提前退出，收取 1% 手续费）" : "可结算（到期退出，无手续费）",
+    exitEligibleAt: eligibleAt,
+    noticePeriodDays: noticeDays,
+    isEarlyExit,
+    daysUntilEligible: 0,
+    lockUpEndDate: contract.lockUpEndDate,
+    finalMaturityDate: contract.finalMaturityDate,
+  };
+}
+
+/**
+ * Phase 3: 客户提交退出申请
+ * 状态变为 EXIT_REQUESTED，记录申请时间和资格时间
+ */
+export function requestClientExit(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string } = {}): void {
+  initializeBatchFinance(batch);
+  const client = batch.clients?.find((c) => c.id === clientId);
+  if (!client) throw new Error("未找到该客户。");
+  if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可申请退出。");
+  if (client.status === ClientStatus.EXIT_REQUESTED) throw new Error("客户已提交退出申请。");
+
+  const eligibility = getExitEligibility(batch, client);
+  if (eligibility.lockUpEndDate > new Date()) {
+    throw new Error("锁仓期内不可申请退出。");
+  }
+
+  const now = new Date();
+  const eligibleAt = new Date(now.getTime() + eligibility.noticePeriodDays * 86400000);
+
+  client.status = ClientStatus.EXIT_REQUESTED;
+  client.exitRequestedAt = now;
+  client.exitEligibleAt = eligibleAt;
+  client.settlementNote = opts.reason ?? "客户申请退出";
+
+  batch.finance!.revision++;
+  syncBatchFinance(batch);
+
+  try {
+    const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+    logAudit({
+      action: "client_exit_request",
+      resource: `batch:client_exit:${batch.id}:${clientId}`,
+      detail: {
+        batchId: batch.id,
+        batchNumber: (batch as any).batchNumber ?? null,
+        clientId,
+        clientName: client.name ?? null,
+        exitRequestedAt: now.toISOString(),
+        exitEligibleAt: eligibleAt.toISOString(),
+        operatorName: opts.operatorName ?? null,
+        reason: opts.reason ?? null,
+      },
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Phase 3: 取消退出申请
+ */
+export function cancelClientExit(batch: BatchLike, clientId: string, opts: { operatorName?: string } = {}): void {
+  initializeBatchFinance(batch);
+  const client = batch.clients?.find((c) => c.id === clientId);
+  if (!client) throw new Error("未找到该客户。");
+  if (client.status !== ClientStatus.EXIT_REQUESTED) throw new Error("客户未提交退出申请。");
+
+  client.status = ClientStatus.ACTIVE;
+  client.exitRequestedAt = null;
+  client.exitEligibleAt = null;
+  client.settlementNote = null;
+
+  batch.finance!.revision++;
+  syncBatchFinance(batch);
+
+  try {
+    const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
+    logAudit({
+      action: "client_exit_cancel",
+      resource: `batch:client_exit:${batch.id}:${clientId}`,
+      detail: {
+        batchId: batch.id,
+        clientId,
+        clientName: client.name ?? null,
+        operatorName: opts.operatorName ?? null,
+      },
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 // Used only at signing. Existing clients always use their stored contract rates.
@@ -294,6 +549,81 @@ export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
   };
 }
 
+// ============================================================================
+// Phase 5: 多档风控阈值 + 担保比例警戒线
+// 仅新增函数，不修改核心计算（结算、PnL、补仓分摊）
+// ============================================================================
+
+/**
+ * Phase 5: 获取批次当前触发的最高风控档位。
+ * 基于 getBatchMetrics 的 dropPercent，结合多档阈值配置判断。
+ * @returns 触发的档位，若无则返回 null（NORMAL 状态）
+ */
+export function getBatchRiskTier(batch: BatchLike): RiskTier | null {
+  try {
+    const metrics = getBatchMetrics(batch);
+    return getActiveRiskTier(metrics.dropPercent);
+  } catch {
+    return null;
+  }
+}
+
+/** Phase 5: 获取批次当前触发的所有风控档位（按 level 升序） */
+export function getBatchTriggeredTiers(batch: BatchLike): RiskTier[] {
+  try {
+    const metrics = getBatchMetrics(batch);
+    return getTriggeredTiers(metrics.dropPercent);
+  } catch {
+    return [];
+  }
+}
+
+/** Phase 5: 获取距离下一档位的剩余跌幅 */
+export function getBatchNextTierGap(batch: BatchLike): { tier: RiskTier; gap: number } | null {
+  try {
+    const metrics = getBatchMetrics(batch);
+    return getNextTierGap(metrics.dropPercent);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Phase 5.3: 计算 WIN100 担保比例。
+ * 担保比例 = WIN100 担保品市值 / 客户股票市值
+ * 协议约定 3:7，即担保品市值 / 客户股票市值 >= 3/7 ≈ 0.4286
+ */
+export function getCollateralRatio(batch: BatchLike): {
+  collateralValue: number;
+  clientMarketValue: number;
+  ratio: number;
+  breached: boolean;
+  threshold: number;
+} {
+  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  // WIN100 担保品市值 = 担保持股数 × 当前股价 + 已补仓市值
+  const collateralShares = Number((batch as any).win100CollateralShares ?? 0);
+  const collateralBaseValue = Number((batch as any).win100CollateralValue ?? 0);
+  const rescue = calculateRescueStats(batch, price);
+  const collateralValue = collateralShares > 0 && price > 0
+    ? collateralShares * price
+    : collateralBaseValue;
+  // 客户股票市值 = 账户当前市值
+  const clientMarketValue = getAccountMarketValue(batch, price);
+  // 协议担保比例阈值 3:7 = 3/7
+  const threshold = COLLATERAL_RATIO_WIN100 / COLLATERAL_RATIO_CLIENT;
+  const ratio = clientMarketValue > 0 ? collateralValue / clientMarketValue : 0;
+  return {
+    collateralValue,
+    clientMarketValue,
+    ratio,
+    breached: ratio + Number.EPSILON < threshold - 1e-8,
+    threshold,
+  };
+}
+
+// --- end Phase 5 ---
+
 function allocateRound(batch: BatchLike, amount: number, roundId: string): Record<string, ClientMarginState> {
   const active = (batch.clients ?? []).filter((c) => c.status !== ClientStatus.SETTLED);
   const pool = active.reduce((s, c) => s + c.investmentAmount, 0);
@@ -376,6 +706,7 @@ export function initializeBatchFinance(batch: BatchLike): void {
     finance.rounds.push({
       id: mc.id, number: finance.rounds.length + 1, requiredAmount: amount, fulfilledAmount: amount,
       triggerMarketValue: mc.triggerMarketValue ?? 0, triggerDate: new Date(mc.triggerDate ?? batch.signDate).toISOString(),
+      dueDate: getMarginRoundDueDate(new Date(mc.triggerDate ?? batch.signDate)),
       dropPercent: mc.dropPercent ?? 0, status: "FULLFILLED", allocations: {},
     });
   }
@@ -406,9 +737,11 @@ export function initializeBatchFinance(batch: BatchLike): void {
     const requiredAmount = entries.length
       ? money(entries.reduce((sum, [, s]) => sum + s.required, 0))
       : pending.requiredAmount;
+    const triggerDateStr = new Date(pending.triggerDate ?? batch.signDate).toISOString();
     finance.rounds.push({ id: roundId, number: finance.rounds.length + 1, requiredAmount,
       fulfilledAmount: allocated,
-      triggerMarketValue: pending.triggerMarketValue ?? 0, triggerDate: new Date(pending.triggerDate ?? batch.signDate).toISOString(),
+      triggerMarketValue: pending.triggerMarketValue ?? 0, triggerDate: triggerDateStr,
+      dueDate: getMarginRoundDueDate(triggerDateStr),
       dropPercent: pending.dropPercent ?? 0.2, status: "PENDING", allocations });
     const imported = finance.rounds[finance.rounds.length - 1];
     imported.requiredAmount = requiredAmount;
@@ -438,11 +771,17 @@ export function syncBatchFinance(batch: BatchLike): void {
   batch.riskLevel = metrics.riskLevel;
   batch.totalPnL = metrics.totalPnL;
   batch.totalPnLPercent = metrics.totalPnLPercent;
+  // 检查 PENDING 轮次是否逾期（T+2 未完成）
+  for (const r of f.rounds) {
+    if (checkMarginRoundOverdue(r)) r.status = "OVERDUE";
+  }
   if (!activeRound(batch) && metrics.requiredMarginCall > 0 && (batch.clients ?? []).some((c) => c.status !== ClientStatus.SETTLED)) {
     const id = uid();
+    const triggerDate = new Date().toISOString();
     f.rounds.push({ id, number: f.rounds.length + 1, requiredAmount: metrics.requiredMarginCall,
       fulfilledAmount: 0, triggerMarketValue: batch.currentMarketValue,
-      triggerDate: new Date().toISOString(), dropPercent: metrics.dropPercent / 100, status: "PENDING",
+      triggerDate, dueDate: getMarginRoundDueDate(triggerDate),
+      dropPercent: metrics.dropPercent / 100, status: "PENDING",
       allocations: allocateRound(batch, metrics.requiredMarginCall, id) });
   }
   const round = activeRound(batch) ?? f.rounds[f.rounds.length - 1];
@@ -455,7 +794,9 @@ export function syncBatchFinance(batch: BatchLike): void {
     triggerMarketValue: r.triggerMarketValue, dropPercent: r.dropPercent,
     requiredAmount: r.requiredAmount, fulfilledAmount: r.fulfilledAmount, status: r.status,
     fulfilledDate: r.status === "FULLFILLED" ? new Date(f.trades.filter((t) => t.roundId === r.id).at(-1)?.createdAt ?? r.triggerDate) : null,
-    note: `第 ${r.number} 轮 · 机构出资，补仓本金及收益全部归机构`,
+    dueDate: r.dueDate ? new Date(r.dueDate) : null,
+    collateralType: r.collateralType ?? null,
+    note: `第 ${r.number} 轮 · WIN100 担保出资，补仓本金及收益全部归 WIN100`,
   }));
 }
 
@@ -487,6 +828,7 @@ export function isTopupBlockedByLegacyLedger(batch: BatchLike): boolean {
 
 export function executeInstitutionTopup(batch: BatchLike, options: {
   amount: number; clientId?: string; operatorName?: string; expectedRoundId?: string;
+  collateralType?: "cash" | "stock";
 }): number {
   initializeBatchFinance(batch);
   const round = activeRound(batch);
@@ -495,8 +837,10 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   if (isTopupBlockedByLegacyLedger(batch)) {
     throw new Error("历史结算或补仓分配尚未核对，本次未记账。请进入批次详情，点击「重新检查账本」或「查看处理方法」。");
   }
-  if (!Number.isFinite(price) || price <= 0) throw new Error("当前成交价无效，无法记录机构补仓。");
+  const ct = options.collateralType ?? "stock";
+  if (ct === "stock" && (!Number.isFinite(price) || price <= 0)) throw new Error("当前成交价无效，无法记录股票补仓。");
   if (!Number.isFinite(options.amount) || options.amount <= 0) return 0;
+  round.collateralType = ct;
   const targets = Object.entries(round.allocations)
     .filter(([id]) => !options.clientId || id === options.clientId)
     .sort((a, b) => (b[1].required - b[1].fulfilled) - (a[1].required - a[1].fulfilled));
@@ -510,8 +854,11 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
     const id = uid();
     const source = options.clientId ? "client_single" : "batch_one_click";
     const createdAt = new Date().toISOString();
-    batch.finance!.trades.push({ id, roundId: round.id, clientId, amount: pay, entryPrice: price,
-      shares: pay / price, remainingFraction: 1, createdAt, source, operatorName: options.operatorName });
+    // cash 形式不买入股票，只记金额；stock 形式按当前价买入份额
+    const entryPrice = ct === "stock" ? price : null;
+    const shares = ct === "stock" ? pay / price : 0;
+    batch.finance!.trades.push({ id, roundId: round.id, clientId, amount: pay, entryPrice,
+      shares, remainingFraction: 1, createdAt, source, operatorName: options.operatorName, collateralType: ct });
     state.fulfilled = money(state.fulfilled + pay);
     state.history.push({ id, clientId, amount: pay, fulfilledAt: createdAt, source, roundId: round.id, operatorName: options.operatorName });
     remaining = money(remaining - pay);
@@ -577,6 +924,16 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   const client = batch.clients?.find((c) => c.id === clientId);
   if (!client || client.status === ClientStatus.SETTLED) throw new Error("客户已结算或历史结算信息待核对。");
   if (f.legacyWarnings.length) throw new Error(f.legacyWarnings.join(" "));
+
+  // Phase 3: 检查退出资格 — 必须已提交退出申请且通知期已过
+  const eligibility = getExitEligibility(batch, client);
+  if (client.status !== ClientStatus.EXIT_REQUESTED) {
+    throw new Error("请先提交退出申请，待通知期结束后再结算。");
+  }
+  if (!eligibility.canExit) {
+    throw new Error(eligibility.reason);
+  }
+
   const pendingRound = activeRound(batch);
   if (pendingRound) {
     pendingRound.status = "CANCELLED";
@@ -588,11 +945,22 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   if (!(weight > 0 && weight <= 1 + 1e-8)) throw new Error("客户本金与账户优先池不一致，请核对。");
   const result = calculateClientSettlement(client, batch, getAccountMarketValue(batch), price);
   if (result.institutionReceives < -0.005) throw new Error("账户资产不足以保本退出，请机构补足资金后再结算。");
+
+  // Phase 3: 提前退出费计算 — 最终到期日前退出收取 1% 手续费归中阳证券
+  const isEarlyExit = eligibility.isEarlyExit;
+  const earlyExitFeeInfo = isEarlyExit ? calculateEarlyExitFee(client.investmentAmount) : { fee: 0, recipient: EARLY_EXIT_FEE_RECIPIENT, rate: 0, netToClient: client.investmentAmount };
+  const earlyExitFee = earlyExitFeeInfo.fee;
+
+  // 客户实收 = 结算金额 - 提前退出手续费
+  const clientReceivesAfterFee = money(Math.max(0, result.clientReceives - earlyExitFee));
+
   const rescue = calculateRescueStats(batch, price);
   const entryPrice = client.entryStockPrice ?? batch.stockPriceAtStart;
   const initialPosPnl = client.investmentAmount * (price / entryPrice - 1);
   const snapshot: SettlementSnapshot = {
-    ...result, id: uid(), settledAt: new Date().toISOString(), stockPrice: price, principal: client.investmentAmount,
+    ...result,
+    clientReceives: clientReceivesAfterFee,
+    id: uid(), settledAt: new Date().toISOString(), stockPrice: price, principal: client.investmentAmount,
     originalAccountCapital: money(f.remainingCapital * weight),
     institutionInitialCapital: money(batch.subordinateAmount * weight),
     institutionRescueValue: money(rescue.rescueCurrentValue * weight),
@@ -601,6 +969,11 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     institutionRescuePnL: money(rescue.rescuePnL * weight),
     operatorName: opts.operatorName,
     settleReason: opts.reason,
+    // Phase 3: 退出全流程字段
+    earlyExitFee,
+    earlyExitFeeRecipient: isEarlyExit ? EARLY_EXIT_FEE_RECIPIENT : undefined,
+    isEarlyExit,
+    exitRequestedAt: client.exitRequestedAt ? new Date(client.exitRequestedAt).toISOString() : undefined,
   };
   f.settlements[clientId] = snapshot;
   f.remainingCapital = money(f.remainingCapital - snapshot.originalAccountCapital);
@@ -609,6 +982,9 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   client.status = ClientStatus.SETTLED;
   client.settledAt = new Date(snapshot.settledAt);
   client.settlement = snapshot;
+  // Phase 3: 记录退出费用和实收金额
+  client.earlyExitFee = earlyExitFee;
+  client.exitAmount = clientReceivesAfterFee;
   f.revision++;
   syncBatchFinance(batch);
   try {
@@ -623,6 +999,8 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
         clientName: client.name ?? null,
         principal: client.investmentAmount,
         clientReceives: snapshot.clientReceives,
+        earlyExitFee,
+        isEarlyExit,
         settlementSnapshotId: snapshot.id,
         operatorName: opts.operatorName ?? null,
         reason: opts.reason ?? null,
@@ -740,7 +1118,7 @@ export function getClientPositionMetrics(batch: BatchLike, clientId: string, ove
   try {
     const client = batch.clients?.find((c) => c.id === clientId) as Client | undefined;
     if (!client) return { realtimePnL: 0, estimatedExitAmount: 0, marketValueShare: 0, clientShares: 0, isPriceAboveStart: false };
-    return calculateRealtimeClientMetrics(client, batch, (batch as any).currentMarketValue ?? calculateCurrentMarketValue(batch));
+    return calculateRealtimeClientMetrics(client, batch, (batch as any).currentMarketValue ?? calculateCurrentMarketValue((batch as any).stockPriceAtStart ?? 0, (batch as any).currentStockPrice ?? 0, (batch as any).totalShares ?? 0));
   } finally {
     if (typeof overridePrice === "number") {
       (batch as any).currentStockPrice = save;
