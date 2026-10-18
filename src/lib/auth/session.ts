@@ -62,9 +62,26 @@ function base64UrlDecodeToString(encoded: string): string | null {
   return decoder.decode(bytes);
 }
 
+function getVercelPreviewSessionFallback(): string | null {
+  const vercelEnv = process.env.VERCEL_ENV?.trim();
+  if (vercelEnv !== 'preview') return null;
+  const previewHost =
+    process.env.VERCEL_BRANCH_URL?.trim() ||
+    process.env.VERCEL_URL?.trim() ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  const commitRef =
+    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
+    process.env.VERCEL_GIT_COMMIT_REF?.trim() ||
+    process.env.VERCEL_GIT_COMMIT_MESSAGE?.trim();
+  if (!previewHost || !commitRef) return null;
+  return `vercel-preview-session-secret-v1::${previewHost}::${commitRef}::risk-control`;
+}
+
 function getAuthSecret(override?: string): Uint8Array {
   const raw = (override ?? process.env.NEXT_RC_AUTH_SECRET) as string | undefined;
-  const fallback: string = (process.env.NODE_ENV === 'production' ? '' : `dev-session-secret-v1::${process.env.NODE_ENV ?? 'local'}::do-not-use-in-prod`);
+  const fallback: string = process.env.NODE_ENV === 'production'
+    ? (getVercelPreviewSessionFallback() ?? '')
+    : `dev-session-secret-v1::${process.env.NODE_ENV ?? 'local'}::do-not-use-in-prod`;
   const chosen = (raw && raw.trim()) ? raw.trim() : fallback;
   if (!chosen) {
     throw new Error('[rc-session] NEXT_RC_AUTH_SECRET is required in production.');
