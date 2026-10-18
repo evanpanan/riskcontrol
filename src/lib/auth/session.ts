@@ -62,25 +62,26 @@ function base64UrlDecodeToString(encoded: string): string | null {
   return decoder.decode(bytes);
 }
 
-function getVercelPreviewSessionFallback(): string | null {
-  const vercelEnv = process.env.VERCEL_ENV?.trim();
-  if (vercelEnv !== 'preview') return null;
-  const previewHost =
+function getVercelSessionFallback(): string | null {
+  if (process.env.VERCEL !== '1') return null;
+  const vercelEnv = process.env.VERCEL_ENV?.trim() || 'unknown';
+  const projectRef =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
     process.env.VERCEL_BRANCH_URL?.trim() ||
-    process.env.VERCEL_URL?.trim() ||
-    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  const commitRef =
+    process.env.VERCEL_URL?.trim();
+  const deploymentRef =
+    process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
     process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
     process.env.VERCEL_GIT_COMMIT_REF?.trim() ||
     process.env.VERCEL_GIT_COMMIT_MESSAGE?.trim();
-  if (!previewHost || !commitRef) return null;
-  return `vercel-preview-session-secret-v1::${previewHost}::${commitRef}::risk-control`;
+  if (!projectRef || !deploymentRef) return null;
+  return `vercel-session-secret-v1::${vercelEnv}::${projectRef}::${deploymentRef}::risk-control`;
 }
 
 function getAuthSecret(override?: string): Uint8Array {
   const raw = (override ?? process.env.NEXT_RC_AUTH_SECRET) as string | undefined;
   const fallback: string = process.env.NODE_ENV === 'production'
-    ? (getVercelPreviewSessionFallback() ?? '')
+    ? (getVercelSessionFallback() ?? '')
     : `dev-session-secret-v1::${process.env.NODE_ENV ?? 'local'}::do-not-use-in-prod`;
   const chosen = (raw && raw.trim()) ? raw.trim() : fallback;
   if (!chosen) {
