@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
 import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
-import { hashPassword, generateSalt } from "@/lib/auth/password";
+import { hashPassword } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
 
@@ -117,10 +116,16 @@ function jsonError(error: string, code = 400) {
   return NextResponse.json({ ok: false, error }, { status: code, headers: { "Cache-Control": "no-store" } });
 }
 
+async function getPrisma() {
+  const mod = await import("@/lib/prisma");
+  return mod.prisma;
+}
+
 export async function GET(req: NextRequest) {
   const guard = await requireAdminSession(req);
   if (!guard.ok) return guard.res!;
   try {
+    const prisma = await getPrisma();
     const all = await prisma.appUser.findMany({
       select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, bdManagerFullName: true },
       orderBy: { id: "desc" },
@@ -186,6 +191,7 @@ export async function POST(req: NextRequest) {
 
   let newId: string | null = null;
   try {
+    const prisma = await getPrisma();
     const created = await prisma.appUser.create({
       data: {
         email,

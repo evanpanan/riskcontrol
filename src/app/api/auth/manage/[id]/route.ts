@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
 import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
-import { hashPassword, generateSalt } from "@/lib/auth/password";
+import { hashPassword } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
 
@@ -117,6 +116,11 @@ function jsonError(error: string, code = 400) {
   return NextResponse.json({ ok: false, error }, { status: code, headers: { "Cache-Control": "no-store" } });
 }
 
+async function getPrisma() {
+  const mod = await import("@/lib/prisma");
+  return mod.prisma;
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const guard = await requireAdminSession(req);
   if (!guard.ok) return guard.res!;
@@ -173,6 +177,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       targetEmailForSalt = patch.email;
     } else {
       try {
+        const prisma = await getPrisma();
         const existing = await prisma.appUser.findUnique({ where: { id }, select: { email: true } });
         if (existing?.email) targetEmailForSalt = String(existing.email);
       } catch {}
@@ -192,6 +197,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   if (Object.keys(patch).length === 0) return jsonError("没有要更新的字段", 400);
   try {
+    const prisma = await getPrisma();
     const updated = await prisma.appUser.update({
       where: { id },
       data: patch,
@@ -224,6 +230,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (!id) return jsonError("缺少用户 ID", 400);
   if (guard.actor && id === guard.actor.id) return jsonError("不能删除当前登录账号", 400);
   try {
+    const prisma = await getPrisma();
     const removed = await prisma.appUser.delete({ where: { id }, select: { id: true, email: true, displayName: true } });
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", removed },
