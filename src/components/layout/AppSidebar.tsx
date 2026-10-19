@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   AlertTriangle,
+  ScrollText,
   History,
   Users,
   LineChart,
@@ -83,6 +84,13 @@ const NAV_ITEMS: NavItem[] = [
     icon: Landmark,
     href: "/win100-ledger",
     description: "担保品 · 收益 · 履约台账",
+    scope: "institution",
+  },
+  {
+    title: "操作记录",
+    icon: ScrollText,
+    href: "/operation-records",
+    description: "全员操作留痕",
     scope: "institution",
   },
 ];

@@ -70,7 +70,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
       <div className="max-w-4xl mx-auto text-center py-20 px-4 space-y-6">
       <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">
         <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-        <h2 className="text-xl font-bold mb-2">{loadError ? "账本暂时无法读取" : "批次未找到"}</h2>
+        <h2 className="text-xl font-bold mb-2">{loadError ? "账本读取失败" : "批次未找到"}</h2>
         <p role={loadError ? "alert" : undefined} className="text-muted-foreground whitespace-pre-wrap mb-6">{loadError || `ID: ${params.id}`}</p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {loadError && devMode && (
@@ -95,12 +95,8 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
           </Link>
         </div>
         {loadError && (
-          <div className="mt-4 rounded-lg bg-background/60 p-3 text-left text-[11.5px] text-muted-foreground space-y-1">
-            <div>· 操作会经过「真实账目校验」：存在真实结算 / 已履约补仓 / 非 legacy 手动交易的账本会被拒绝执行。</div>
-            <div>· 执行前会先备份到 localStorage <code className="font-mono">risk_control_test_backup_*</code>，可在「历史账目恢复入口」还原。</div>
-            {!devMode && (
-            <div>· 当前为生产/预览环境，浏览器端账本重建入口已禁用。请通过部署环境的账本修复流程或联系开发管理员处理。</div>
-            )}
+          <div className="mt-4 rounded-lg bg-background/60 p-3 text-left text-[11.5px] text-muted-foreground">
+            <p>该批次包含真实结算或已履约的补仓记录，系统已暂停自动修复。请联系系统管理员核对原始凭证后再处理。</p>
           </div>
         )}
       </div>

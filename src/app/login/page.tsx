@@ -371,7 +371,7 @@ function LoginPageInner() {
               // MUST live to 3s to guarantee UI doesn't freeze.
               cleanupPrimaryOnly();
               try { setWelcomeState(null); } catch { /* ignore */ }
-              setErrors({ form: "服务端凭据校验失败，请稍后重试。" });
+              setErrors({ form: "账号或密码校验失败，请稍后重试。" });
               setIsSubmitting(false);
               logAuthDeny({
                 action: 'login_denied',
@@ -380,7 +380,7 @@ function LoginPageInner() {
                 userId: session.id,
                 role: session.role,
               });
-              try { toast.error("凭据校验未通过", { description: "服务器拒绝签发会话，请检查账号密码。" }); } catch { /* ignore */ }
+              try { toast.error("登录失败", { description: "账号或密码不正确，请重新输入。" }); } catch { /* ignore */ }
               return false;
             }
           } else {

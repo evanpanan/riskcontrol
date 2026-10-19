@@ -125,7 +125,7 @@ export default function Win100LedgerPage() {
             WIN100 履约台账
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            担保品台账 · 收益台账 · 履约台账 — 全量数据聚合视图
+            担保品 · 收益 · 履约三类台账汇总视图
           </p>
         </div>
         <div className="flex gap-2 print:hidden">

@@ -549,10 +549,9 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
                 )}
               </DialogTitle>
               <DialogDescription className="mt-1 text-[12px]">
-                数据源按优先级依次尝试 Yahoo Finance → Nasdaq Unofficial → Stooq 多源补齐（串行优先命中即返回，不等待其余源）。
                 {isSynthetic
-                  ? "当前周期（5分/15分/1时/4时）3 免费源中国大陆网络均抓不到 intraday，已基于最近真实日线 OHLC 合成模拟分时，数据源 Badge 为「模拟」。"
-                  : "真实历史 K 线为真实抓取数据。"}
+                  ? "该周期暂无实时分时行情，当前展示基于最近日线合成的分时走势，已标记为「模拟」。"
+                  : "历史 K 线为真实行情数据。"}
               </DialogDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -632,11 +631,6 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
               ) : (
                 <span>
                   <span className="font-semibold">数据说明：</span>{fallbackNote}
-                  {fallbackNote && !fallbackNote.includes("FINNHUB") && (
-                    <span className="ml-1.5 text-primary">
-                      （如需更稳定 intraday 真实数据，可在环境变量配置 FINNHUB_API_KEY 免费注册后接入）
-                    </span>
-                  )}
                 </span>
               )}
             </div>

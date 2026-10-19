@@ -108,6 +108,7 @@ export default function ClientsPage() {
   const [batchPickerQuery, setBatchPickerQuery] = useState("");
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
   const [managementTab, setManagementTab] = useState<"batches" | "clients">("batches");
+  const [batchSort, setBatchSort] = useState<"created_desc" | "created_asc" | "amount_desc" | "amount_asc">("created_desc");
   const [editBatchOpen, setEditBatchOpen] = useState<string | null>(null);
   const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
   const [clientDetail, setClientDetail] = useState<string | null>(null);
@@ -348,20 +349,46 @@ export default function ClientsPage() {
         if (!isBdManager || !bdManagerFullName) return true;
         return (b.clients || []).some((c) => (c as any).bdManager === bdManagerFullName);
       })
-      .sort((a, b) => (a.batchNumber ?? "").localeCompare(b.batchNumber ?? ""))
-      .map((b) => ({
-        batchId: b.id,
-        batchNumber: b.batchNumber,
-        symbol: b.stockSymbol,
-        stockName: b.stockName,
-        clientCount: (b.clients || []).filter((c) =>
+      .map((b) => {
+        const visibleClients = (b.clients || []).filter((c) =>
           isBdManager && bdManagerFullName
             ? (c as any).bdManager === bdManagerFullName
             : true
-        ).length,
-        riskLevel: b.riskLevel,
-      }));
-  }, [batches, isBdManager, bdManagerFullName]);
+        );
+        const settledClientCount = visibleClients.filter((c) => c.status === ClientStatus.SETTLED).length;
+        const createdAtTs = new Date((b as any).createdAt ?? b.signDate ?? 0).getTime();
+        const totalAmount = Number(b.initialTotalAmount ?? 0);
+        return {
+          batchId: b.id,
+          batchNumber: b.batchNumber,
+          symbol: b.stockSymbol,
+          stockName: b.stockName,
+          clientCount: visibleClients.length,
+          settledClientCount,
+          riskLevel: b.riskLevel,
+          signDate: b.signDate,
+          createdAtTs,
+          totalAmount,
+          currentPrice: Number(b.currentStockPrice ?? 0),
+          startPrice: Number(b.stockPriceAtStart ?? 0),
+          isFullyExited: visibleClients.length > 0 && settledClientCount === visibleClients.length,
+          tradingInfo: calculateTradingWindows(b.signDate),
+        };
+      })
+      .sort((a, b) => {
+        switch (batchSort) {
+          case "created_asc":
+            return a.createdAtTs - b.createdAtTs;
+          case "amount_desc":
+            return b.totalAmount - a.totalAmount || b.createdAtTs - a.createdAtTs;
+          case "amount_asc":
+            return a.totalAmount - b.totalAmount || b.createdAtTs - a.createdAtTs;
+          case "created_desc":
+          default:
+            return b.createdAtTs - a.createdAtTs;
+        }
+      });
+  }, [batches, batchSort, isBdManager, bdManagerFullName]);
 
   const selectedAddBatch = useMemo(
     () => batches.find((b) => b.id === addForm.batchId) ?? null,
@@ -989,175 +1016,361 @@ export default function ClientsPage() {
 
         <TabsContent value="batches" className="space-y-6">
           <Card className="border-border/50">
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-sm font-bold flex items-center gap-2">
-                <FolderKanban className="h-4 w-4 text-primary" />
-                批次管理
-              </CardTitle>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                先选批次，再管客户。可以快速查看每个批次的价格、客户数和风险状态，并一键切换客户列表筛选。
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant={batchFilter === "ALL" ? "secondary" : "outline"}
-                size="sm"
-                className="text-[11px] text-white hover:text-white"
-                onClick={() => setBatchFilter("ALL")}
-              >
-                查看全部批次
-              </Button>
-              {allowCreateBatch && (
-                <Button
-                  size="sm"
-                  className="gap-1.5 text-[11px] text-white hover:text-white"
-                  onClick={() => {
-                    const nextNum = String(batches.length + 1).padStart(3, "0");
-                    const defaultYear = new Date().getUTCFullYear();
-                    const today = new Date();
-                    const signStr = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())).toISOString().split("T")[0];
-                    const maturityBase = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-                    maturityBase.setUTCFullYear(maturityBase.getUTCFullYear() + 2);
-                    maturityBase.setUTCDate(maturityBase.getUTCDate() - 1);
-                    const matStr = maturityBase.toISOString().split("T")[0];
-                    const initialSymbol = (() => {
-                      const remembered = readLastBatchSymbol();
-                      if (remembered) return remembered;
-                      return (typeof window !== "undefined" && getLiveQuoteSettings()?.symbol?.trim().toUpperCase()) || "";
-                    })();
-                    setCreateBatchForm({
-                      signDate: signStr,
-                      maturityDate: matStr,
-                      batchNumber: `BATCH-${defaultYear}-${nextNum}`,
-                      stockSymbol: initialSymbol,
-                      currentStockPrice: "",
-                    });
-                    setCreateBatchErrors({});
-                    setCreateBatchOpen(true);
-                    setCreateBatchFetchingQuote(false);
-                  }}
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  新建批次
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {batchTabs.map((tab) => {
-              const batch = batches.find((b) => b.id === tab.batchId);
-              if (!batch) return null;
-              const active = batchFilter === tab.batchId;
-              return (
-                <div
-                  key={tab.batchId}
-                  className={cn(
-                    "rounded-xl border p-4 transition-colors hover:border-primary/40 hover:bg-secondary/30",
-                    active ? "border-primary/50 bg-primary/5" : "border-border/50 bg-card"
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="font-mono text-[11px] text-muted-foreground truncate">{batch.batchNumber}</p>
-                      <p className="text-sm font-semibold truncate">{batch.stockSymbol} {batch.stockName || ""}</p>
-                    </div>
-                    <Badge variant={active ? "primary" : "outline"} className="font-mono text-[10px]">
-                      {tab.clientCount} 位
-                    </Badge>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-[11px]">
-                    <div>
-                      <p className="text-muted-foreground mb-1">批次建仓价</p>
-                      <p className="font-mono font-semibold">{formatCurrency(batch.stockPriceAtStart ?? 0)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground mb-1">当前价格</p>
-                      <p className="font-mono font-semibold">{formatCurrency(batch.currentStockPrice ?? 0)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground mb-1">签约日期</p>
-                      <p className="font-mono font-semibold">{formatDate(batch.signDate)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground mb-1">优先池</p>
-                      <p className="font-mono font-semibold">{formatCurrency(batch.priorityAmount ?? 0)}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant={active ? "secondary" : "outline"}
-                        size="sm"
-                        className="text-[11px] text-white hover:text-white"
-                        onClick={() => {
-                          setBatchFilter(active ? "ALL" : tab.batchId);
-                          setManagementTab("clients");
-                        }}
-                      >
-                        {active ? "查看全部客户" : "查看该批次客户"}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-[11px] text-white hover:text-white"
-                        onClick={() => {
-                          setAddForm({
-                            name: "",
-                            investment: "",
-                            bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
-                            batchId: batch.id,
-                            signDate: new Date().toISOString().split("T")[0],
-                            entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
-                              ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
-                              : "",
-                          });
-                          setAddErrors({});
-                          setAddClientOpen(true);
-                        }}
-                      >
-                        <Plus className="h-3.5 w-3.5 mr-1" />
-                        新增客户
-                      </Button>
-                    </div>
-                    {allowCreateBatch && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-[11px] text-white hover:text-white"
-                        onClick={() => setEditBatchOpen(batch.id)}
-                      >
-                        <Pencil className="h-3.5 w-3.5 mr-1" />
-                        编辑基础信息
-                      </Button>
-                    )}
-                  </div>
+            <CardHeader className="pb-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <FolderKanban className="h-4 w-4 text-primary" />
+                    批次管理
+                  </CardTitle>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    查看每个批次的总金额、价格、客户数与风险状态，并可按批次筛选客户列表。
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-        </CardContent>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Badge variant="outline" className="h-9 px-3 text-[11px]">
+                    共 {batchTabs.length} 个批次
+                  </Badge>
+                  <Select value={batchSort} onValueChange={(value) => setBatchSort(value as typeof batchSort)}>
+                    <SelectTrigger className="h-9 w-[220px] text-xs">
+                      <SelectValue placeholder="选择排序方式" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="created_desc" className="text-xs">按时间排序：最新在前</SelectItem>
+                      <SelectItem value="created_asc" className="text-xs">按时间排序：最早在前</SelectItem>
+                      <SelectItem value="amount_desc" className="text-xs">按总金额排序：从高到低</SelectItem>
+                      <SelectItem value="amount_asc" className="text-xs">按总金额排序：从低到高</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="overflow-hidden rounded-xl border border-border/60">
+                <div className="hidden lg:block">
+                  <table className="w-full table-fixed border-collapse">
+                      <colgroup>
+                        <col className="w-[34%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[20%]" />
+                    </colgroup>
+                    <thead>
+                      <tr className="bg-secondary/30 text-[10.5px] font-medium text-muted-foreground">
+                        <th className="px-5 py-2.5 text-left">批次信息</th>
+                        <th className="px-4 py-2.5 text-left">总金额</th>
+                        <th className="px-4 py-2.5 text-left">建仓价</th>
+                        <th className="px-4 py-2.5 text-left">当前价</th>
+                        <th className="px-4 py-2.5 text-left">签约日期</th>
+                        <th className="px-4 py-2.5 text-left">已退出客户</th>
+                        <th className="px-5 py-2.5 text-right">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchTabs.map((tab, index) => {
+                        const batch = batches.find((b) => b.id === tab.batchId);
+                        if (!batch) return null;
+                        const active = batchFilter === tab.batchId;
+                        const riskTone =
+                          tab.riskLevel === "CRITICAL"
+                            ? "text-danger border-danger/40 bg-danger/10"
+                            : tab.riskLevel === "WARNING"
+                              ? "text-warning border-warning/40 bg-warning/10"
+                              : "text-success border-success/30 bg-success/10";
+                        const riskLabel =
+                          tab.riskLevel === "CRITICAL"
+                            ? "需补仓"
+                            : tab.riskLevel === "WARNING"
+                              ? "预警中"
+                              : "正常";
+                        return (
+                          <tr
+                            key={tab.batchId}
+                            className={cn(
+                              "border-t border-border/50 align-middle transition-colors first:border-t-0",
+                              active
+                                ? "bg-primary/10"
+                                : index % 2 === 0
+                                  ? "bg-card/95 hover:bg-secondary/18"
+                                  : "bg-secondary/10 hover:bg-secondary/20"
+                            )}
+                          >
+                            <td className="relative px-5 py-2.5 align-middle">
+                              <div
+                                className={cn(
+                                  "absolute inset-y-0 left-0 w-1",
+                                  tab.riskLevel === "CRITICAL"
+                                    ? "bg-danger"
+                                    : tab.riskLevel === "WARNING"
+                                      ? "bg-warning"
+                                      : "bg-primary/70"
+                                )}
+                              />
+                              <div className="flex items-center gap-2 min-w-0 whitespace-nowrap">
+                                <p className="font-mono text-[11px] text-muted-foreground shrink-0">{batch.batchNumber}</p>
+                                <p className="truncate text-[13.5px] font-semibold leading-5">{batch.stockSymbol} {batch.stockName || ""}</p>
+                                <div className="ml-2 flex items-center gap-1.5 shrink-0">
+                                  <Badge variant="outline" className={cn("h-5 px-2 text-[9px]", riskTone)}>
+                                    {riskLabel}
+                                  </Badge>
+                                  <Badge variant="outline" className="h-5 px-2 text-[9px]">
+                                    {tab.clientCount} 位
+                                  </Badge>
+                                  {tab.isFullyExited && (
+                                    <Badge variant="success" className="h-5 px-2 text-[9px]">
+                                      全部退出
+                                    </Badge>
+                                  )}
+                                  {active && (
+                                    <Badge variant="primary" className="h-5 px-2 text-[9px]">
+                                      当前查看中
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 text-left align-middle">
+                              <p className="font-mono text-[13.5px] font-semibold tabular-nums">{formatCurrency(tab.totalAmount)}</p>
+                            </td>
+                            <td className="px-4 py-2.5 text-left align-middle">
+                              <p className="font-mono text-[13.5px] tabular-nums">{formatCurrency(tab.startPrice)}</p>
+                            </td>
+                            <td className="px-4 py-2.5 text-left align-middle">
+                              <p className="font-mono text-[13.5px] tabular-nums">{formatCurrency(tab.currentPrice)}</p>
+                            </td>
+                            <td className="px-4 py-2.5 text-left align-middle">
+                              <p className="font-mono text-[13.5px] tabular-nums">{formatDate(tab.signDate)}</p>
+                            </td>
+                            <td className="px-4 py-2.5 text-left align-middle">
+                              <p className={cn(
+                                "font-mono text-[13.5px] tabular-nums",
+                                tab.isFullyExited && "text-success"
+                              )}>
+                                {tab.settledClientCount} / {tab.clientCount}
+                              </p>
+                            </td>
+                            <td className="px-5 py-2.5 text-right align-middle">
+                              <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                                <Button
+                                  variant={active ? "secondary" : "outline"}
+                                  size="sm"
+                                  className="h-7 px-2.5 text-[10px] text-white hover:text-white"
+                                  onClick={() => {
+                                    setBatchFilter(active ? "ALL" : tab.batchId);
+                                    setManagementTab("clients");
+                                  }}
+                                >
+                                  {active ? "查看全部客户" : "查看该批次客户"}
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 px-2.5 text-[10px] text-white hover:text-white"
+                                  onClick={() => {
+                                    setAddForm({
+                                      name: "",
+                                      investment: "",
+                                      bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                                      batchId: batch.id,
+                                      signDate: new Date().toISOString().split("T")[0],
+                                      entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
+                                        ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
+                                        : "",
+                                    });
+                                    setAddErrors({});
+                                    setAddClientOpen(true);
+                                  }}
+                                >
+                                  <Plus className="mr-1 h-3.5 w-3.5" />
+                                  新增客户
+                                </Button>
+                                {allowCreateBatch && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 px-2 text-[10px] text-white hover:text-white"
+                                    onClick={() => setEditBatchOpen(batch.id)}
+                                  >
+                                    <Pencil className="mr-1 h-3.5 w-3.5" />
+                                    编辑
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="lg:hidden">
+                  {batchTabs.map((tab, index) => {
+                    const batch = batches.find((b) => b.id === tab.batchId);
+                    if (!batch) return null;
+                    const active = batchFilter === tab.batchId;
+                    const riskTone =
+                      tab.riskLevel === "CRITICAL"
+                        ? "text-danger border-danger/40 bg-danger/10"
+                        : tab.riskLevel === "WARNING"
+                          ? "text-warning border-warning/40 bg-warning/10"
+                          : "text-success border-success/30 bg-success/10";
+                    const riskLabel =
+                      tab.riskLevel === "CRITICAL"
+                        ? "需补仓"
+                        : tab.riskLevel === "WARNING"
+                          ? "预警中"
+                          : "正常";
+                    return (
+                      <div
+                        key={tab.batchId}
+                        className={cn(
+                          "relative border-t border-border/50 px-4 py-3 first:border-t-0",
+                          active
+                            ? "bg-primary/10"
+                            : index % 2 === 0
+                              ? "bg-card/95"
+                              : "bg-secondary/10"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "absolute inset-y-0 left-0 w-1",
+                            tab.riskLevel === "CRITICAL"
+                              ? "bg-danger"
+                              : tab.riskLevel === "WARNING"
+                                ? "bg-warning"
+                                : "bg-primary/70"
+                          )}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-mono text-[11px] text-muted-foreground">{batch.batchNumber}</p>
+                            <Badge variant="outline" className={cn("text-[10px]", riskTone)}>
+                              {riskLabel}
+                            </Badge>
+                            <Badge variant="outline" className="text-[10px]">
+                              {tab.clientCount} 位客户
+                            </Badge>
+                            {tab.isFullyExited && (
+                              <Badge variant="success" className="text-[10px]">
+                                全部退出
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="mt-2 text-sm font-semibold">{batch.stockSymbol} {batch.stockName || ""}</p>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="rounded-lg border border-border/50 bg-background/20 px-3 py-2">
+                            <p className="text-muted-foreground">总金额</p>
+                            <p className="mt-1 font-mono font-semibold tabular-nums">{formatCurrency(tab.totalAmount)}</p>
+                          </div>
+                          <div className="rounded-lg border border-border/50 bg-background/20 px-3 py-2">
+                            <p className="text-muted-foreground">建仓价</p>
+                            <p className="mt-1 font-mono tabular-nums">{formatCurrency(tab.startPrice)}</p>
+                          </div>
+                          <div className="rounded-lg border border-border/50 bg-background/20 px-3 py-2">
+                            <p className="text-muted-foreground">当前价</p>
+                            <p className="mt-1 font-mono tabular-nums">{formatCurrency(tab.currentPrice)}</p>
+                          </div>
+                          <div className="rounded-lg border border-border/50 bg-background/20 px-3 py-2">
+                            <p className="text-muted-foreground">签约日期</p>
+                            <p className="mt-1 font-mono tabular-nums">{formatDate(tab.signDate)}</p>
+                          </div>
+                          <div className="rounded-lg border border-border/50 bg-background/20 px-3 py-2">
+                            <p className="text-muted-foreground">已退出客户</p>
+                            <p className="mt-1 font-mono tabular-nums">{tab.settledClientCount} / {tab.clientCount}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Button
+                            variant={active ? "secondary" : "outline"}
+                            size="sm"
+                            className="h-8 text-[11px] text-white hover:text-white"
+                            onClick={() => {
+                              setBatchFilter(active ? "ALL" : tab.batchId);
+                              setManagementTab("clients");
+                            }}
+                          >
+                            {active ? "查看全部客户" : "查看该批次客户"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-[11px] text-white hover:text-white"
+                            onClick={() => {
+                              setAddForm({
+                                name: "",
+                                investment: "",
+                                bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                                batchId: batch.id,
+                                signDate: new Date().toISOString().split("T")[0],
+                                entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
+                                  ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
+                                  : "",
+                              });
+                              setAddErrors({});
+                              setAddClientOpen(true);
+                            }}
+                          >
+                            <Plus className="mr-1 h-3.5 w-3.5" />
+                            新增客户
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="clients" className="space-y-6">
           {selectedFilteredBatch && (
-            <Card className="border-primary/30 bg-primary/5">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground">当前正在查看批次</p>
-                  <p className="font-semibold truncate">
-                    {selectedFilteredBatch.batchNumber} · {selectedFilteredBatch.stockSymbol} {selectedFilteredBatch.stockName || ""}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
+            <Card className="border-primary/50 bg-primary/12 shadow-[0_0_0_1px_rgba(59,130,246,0.15)]">
+              <CardContent className="p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="primary" className="h-6 px-2.5 text-[10px]">
+                        当前筛选批次
+                      </Badge>
+                      <Badge variant="outline" className="h-6 text-[10px]">
+                        仅显示该批次客户
+                      </Badge>
+                    </div>
+                    <p className="mt-3 text-xl font-bold leading-tight">
+                      {selectedFilteredBatch.batchNumber} · {selectedFilteredBatch.stockSymbol} {selectedFilteredBatch.stockName || ""}
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+                      <div className="rounded-lg border border-primary/30 bg-background/30 px-3 py-1.5">
+                        <span className="text-muted-foreground">建仓价 </span>
+                        <span className="font-mono font-semibold tabular-nums">
+                          {formatCurrency(selectedFilteredBatch.stockPriceAtStart ?? 0)}
+                        </span>
+                      </div>
+                      <div className="rounded-lg border border-primary/30 bg-background/30 px-3 py-1.5">
+                        <span className="text-muted-foreground">当前价 </span>
+                        <span className="font-mono font-semibold tabular-nums">
+                          {formatCurrency(selectedFilteredBatch.currentStockPrice ?? 0)}
+                        </span>
+                      </div>
+                      <div className="rounded-lg border border-primary/30 bg-background/30 px-3 py-1.5">
+                        <span className="text-muted-foreground">客户数 </span>
+                        <span className="font-mono font-semibold tabular-nums">
+                          {selectedFilteredBatch.clients?.length ?? 0} 位
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 text-[11px] text-white hover:text-white"
+                    className="h-9 text-[11px] text-white hover:text-white"
                     onClick={() => {
                       setBatchFilter("ALL");
                       setManagementTab("batches");
@@ -1169,7 +1382,7 @@ export default function ClientsPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 text-[11px] text-white hover:text-white"
+                    className="h-9 text-[11px] text-white hover:text-white"
                     onClick={() => {
                       setAddForm({
                         name: "",
@@ -1188,6 +1401,7 @@ export default function ClientsPage() {
                     <Plus className="mr-1 h-3.5 w-3.5" />
                     给该批次新增客户
                   </Button>
+                </div>
                 </div>
               </CardContent>
             </Card>
@@ -1813,14 +2027,14 @@ export default function ClientsPage() {
                     step="0.0001"
                     value={addForm.entryPrice}
                     onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value })}
-                    placeholder="默认带出批次建仓价，也可手动改成更早锁定给客户的认购价"
+                    placeholder="默认为批次建仓价，可修改为约定认购价"
                     className={cn(addErrors.entryPrice && "border-danger ring-danger/20", "font-mono tabular-nums")}
                   />
                   {addErrors.entryPrice ? (
                     <p className="text-[10px] text-danger font-mono">{addErrors.entryPrice}</p>
                   ) : (
                     <p className="text-[10px] text-muted-foreground">
-                      默认使用所选批次的历史建仓价 {selectedAddBatch ? formatCurrency(selectedAddBatch.stockPriceAtStart ?? 0) : "—"}，所以现在可以把客户归到价格更优的旧批次，不再强制按今天价格录入。
+                      默认为所选批次的历史建仓价 {selectedAddBatch ? formatCurrency(selectedAddBatch.stockPriceAtStart ?? 0) : "—"}，可修改为约定认购价。
                     </p>
                   )}
                 </div>
@@ -2413,7 +2627,7 @@ export default function ClientsPage() {
                         </Link>
                       </div>
                       <div className="pt-2 mt-1 border-t border-border/40 text-[10px] text-muted-foreground">
-                        注：分成协议按批次独立约定（因不同批次签约条款可能不同），具体分成请查阅下方批次详情。
+                        注：分成协议按批次单独约定，具体分成请查阅下方批次详情。
                       </div>
                     </div>
                   </div>
@@ -2749,7 +2963,7 @@ export default function ClientsPage() {
               创建批次
             </DialogTitle>
             <DialogDescription className="text-[11px] text-muted-foreground mt-1">
-              填写批次基础信息，保存后将立即写入资金账本并刷新所有批次列表；空批次无客户，可后续在「批量新增客户」中分配。
+              填写批次基础信息并保存。空批次可先创建，之后在「批量新增客户」中分配客户。
             </DialogDescription>
           </DialogHeader>
           <div className="overflow-y-auto scrollbar-thin p-5 space-y-4">

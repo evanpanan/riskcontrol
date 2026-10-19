@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { usePathname } from 'next/navigation';
 import {
   APP_ROLES,
   type AppRole,
@@ -91,10 +92,26 @@ function resolveInitial(): AppSessionUser | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [user, setUser] = useState<AppSessionUser | null>(() => resolveInitial());
   const [isLoading, setIsLoading] = useState(true);
   const refreshingRef = useRef(false);
   const firstHydrateDoneRef = useRef(false);
+  const userRef = useRef<AppSessionUser | null>(null);
+  const currentPathRef = useRef<string>('/');
+  const lastPageViewRef = useRef<string>('');
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      currentPathRef.current = pathname;
+      return;
+    }
+    currentPathRef.current = `${pathname}${window.location.search || ''}`;
+  }, [pathname]);
 
   const setSession = useCallback((next: AppSessionUser | null) => {
     setUser((prev) => {
@@ -419,6 +436,86 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [logoutToLogin, switchToMockRole, loginAsCustom, updateCurrentUser, refreshMe, serverLogin, serverLoginCredentials, serverLogout]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isLoading || !user?.id) return;
+    const fullPath = `${pathname}${window.location.search || ''}`;
+    if (!fullPath || lastPageViewRef.current === fullPath) return;
+    lastPageViewRef.current = fullPath;
+    logAudit({
+      action: 'page_view',
+      actorId: user.id,
+      actorEmail: user.email,
+      role: user.role,
+      resource: fullPath,
+      detail: { source: 'router', title: typeof document !== 'undefined' ? document.title : null },
+    });
+  }, [isLoading, pathname, user?.email, user?.id, user?.role]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      let parsedUrl: URL | null = null;
+      try {
+        parsedUrl = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
+      } catch {
+        parsedUrl = null;
+      }
+      const pathname = parsedUrl?.pathname ?? '';
+      const shouldTrackMutation =
+        !!userRef.current?.id &&
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        !!parsedUrl &&
+        parsedUrl.origin === window.location.origin &&
+        pathname.startsWith('/api/') &&
+        pathname !== '/api/audit' &&
+        pathname !== '/api/auth/login' &&
+        pathname !== '/api/auth/logout';
+      try {
+        const response = await originalFetch(input as any, init);
+        if (shouldTrackMutation) {
+          logAudit({
+            action: 'api_mutation',
+            actorId: userRef.current?.id ?? undefined,
+            actorEmail: userRef.current?.email ?? undefined,
+            role: userRef.current?.role ?? undefined,
+            resource: pathname,
+            detail: {
+              method,
+              status: response.status,
+              ok: response.ok,
+              fromPath: currentPathRef.current,
+            },
+          });
+        }
+        return response;
+      } catch (error) {
+        if (shouldTrackMutation) {
+          logAudit({
+            action: 'api_mutation',
+            actorId: userRef.current?.id ?? undefined,
+            actorEmail: userRef.current?.email ?? undefined,
+            role: userRef.current?.role ?? undefined,
+            resource: pathname || 'fetch:unknown',
+            detail: {
+              method,
+              status: 'network_error',
+              ok: false,
+              fromPath: currentPathRef.current,
+            },
+          });
+        }
+        throw error;
+      }
+    }) as typeof window.fetch;
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
@@ -431,4 +528,3 @@ export function useAuthContext(): AuthContextValue {
 }
 
 export { MOCK_USER_META, type MockUserKey };
-

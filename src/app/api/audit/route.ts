@@ -11,6 +11,8 @@ const AUDIT_ACTION_ALLOWLIST = new Set<string>([
   "login_success",
   "login_failed",
   "logout",
+  "page_view",
+  "api_mutation",
   "threshold_update",
   "account_create",
   "account_delete",
@@ -19,6 +21,8 @@ const AUDIT_ACTION_ALLOWLIST = new Set<string>([
   "client_delete",
   "margin_topup",
   "client_settle",
+  "client_exit_request",
+  "client_exit_cancel",
   "batch_notify",
   "auth_denied",
 ]);
@@ -99,12 +103,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
   const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
-  if (!session) {
-    return NextResponse.json(
-      { ok: false, error: "未登录" },
-      { status: 401, headers: { "Cache-Control": "no-store" } },
-    );
-  }
 
   let raw: Buffer;
   try { raw = await readLimited(req); }
@@ -136,12 +134,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!action || !AUDIT_ACTION_ALLOWLIST.has(action)) {
     return NextResponse.json({ ok: false, error: "invalid audit action" }, { status: 400 });
   }
+  if (!session && action !== "login_failed") {
+    return NextResponse.json(
+      { ok: false, error: "未登录" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
+  }
   const resource = truncate(payload.resource);
 
   // 强制采用服务端权威身份，绝不信任客户端声明的 actorId / actorEmail / role
-  const actorId = session.id ?? null;
-  const actorEmail = truncate(session.email);
-  const role = session.role ? truncate(session.role, 64) : null;
+  const actorId = session?.id ?? null;
+  const actorEmail = session ? truncate(session.email) : null;
+  const role = session?.role ? truncate(session.role, 64) : null;
 
   let detail: any | null = null;
   if (payload.detail !== null && payload.detail !== undefined) {
@@ -153,6 +157,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: "detail too large" }, { status: 413 });
     }
     detail = payload.detail;
+  }
+  if (!session && action === "login_failed") {
+    const attemptedEmail = truncate(payload.actorEmail);
+    if (attemptedEmail) {
+      detail = {
+        ...(detail ?? {}),
+        attemptedEmail,
+      };
+    }
   }
 
   // 可选 createdAt：如果客户端上报 30 分钟时差内的 ISO 用客户端，否则取服务端 now
@@ -204,4 +217,48 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     { status: stored === "db" ? 200 : 202, headers: baseHeaders },
   );
   return resp;
+}
+
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  if (!session) {
+    return NextResponse.json({ ok: false, error: "未登录" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+  }
+  if (session.role !== "ADMIN" && session.role !== "RISK_MANAGER") {
+    return NextResponse.json({ ok: false, error: "当前角色无权限查看操作记录" }, { status: 403, headers: { "Cache-Control": "no-store" } });
+  }
+  const limitRaw = req.nextUrl.searchParams.get("limit");
+  const limit = Math.max(1, Math.min(2000, Number(limitRaw) || 500));
+  try {
+    const rows = await prisma.auditLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        actorId: true,
+        actorEmail: true,
+        role: true,
+        action: true,
+        resource: true,
+        detail: true,
+        createdAt: true,
+      },
+    });
+    return NextResponse.json(
+      {
+        ok: true,
+        logs: rows.map((row) => ({
+          ...row,
+          createdAt: row.createdAt.toISOString(),
+        })),
+      },
+      { status: 200, headers: { "Cache-Control": "no-store" } },
+    );
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "操作记录暂时不可用" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 }

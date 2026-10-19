@@ -29,10 +29,17 @@ import {
 } from "@/components/ui/select";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { RoleGate } from "@/components/auth/RoleGate";
-import { APP_ROLES } from "@/types/auth";
+import { APP_ROLES, ROLE_LABELS as APP_ROLE_LABELS } from "@/types/auth";
 import { INSTITUTION_ROLES, useAuthContext } from "@/lib/auth";
 import { hashCustomUserPassword } from "@/lib/auth/password";
-import { logAudit, getAuditLogs, clearAuditLogs, type AuditLogEntry, type AuditAction } from "@/lib/auth/audit";
+import { logAudit, fetchAuditLogs, type AuditLogEntry, type AuditAction } from "@/lib/auth/audit";
+import {
+  AUDIT_ACTION_FILTER_OPTIONS,
+  describeAuditLog,
+  getAuditActionLabel,
+  getAuditDetailFields,
+  getAuditResourceLabel,
+} from "@/lib/auth/auditDisplay";
 import { toast } from "sonner";
 import { getProfitSettings, validProfitSettings } from "@/lib/profitSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -71,7 +78,6 @@ import {
   Search,
   Filter,
   RefreshCw,
-  Copy,
   Layers,
   Zap,
 } from "lucide-react";
@@ -356,11 +362,18 @@ export default function SettingsPage() {
   }, []);
   useEffect(() => {
     if (!hydrated) return;
-    try {
-      setAuditLogs(getAuditLogs());
-    } catch {
-      setAuditLogs([]);
-    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const logs = await fetchAuditLogs({ limit: 1000 });
+        if (!cancelled) setAuditLogs(logs);
+      } catch {
+        if (!cancelled) setAuditLogs([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [hydrated, auditTick]);
   useEffect(() => {
     const onAudit = () => setAuditTick((x) => x + 1);
@@ -436,7 +449,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!hydrated) return;
     try { setRiskRecipients(recipients); }
-    catch { toast.error("收件人保存失败，请检查浏览器存储。"); }
+    catch { toast.error("收件人保存失败，请稍后重试。"); }
   }, [recipients, hydrated]);
 
   // 品牌 Logo 管理（localStorage 持久化）
@@ -496,33 +509,33 @@ export default function SettingsPage() {
   const [helpOpen, setHelpOpen] = useState<HelpTopic>(null);
   const HELP_CONTENT: Record<Exclude<HelpTopic, null>, { title: string; icon: "mail" | "wa"; steps: { h: string; p: string }[]; tips: string[] }> = {
     "email-webhook": {
-      title: "Email 通知渠道配置指南",
+      title: "邮件通知配置指南",
       icon: "mail",
       steps: [
-        { h: "① 服务器端：在 Resend/SendGrid 配置发件域（DKIM + SPF）", p: "登录服务商控制台，添加已验证发件域名，完成 DNS TXT 记录部署，确保退信与 spam 评分在可控范围。服务端主配置使用真实 API Key，此 Key 仅存放于服务器 ENV。" },
-        { h: "② 服务端：写入 /api/notify/send 环境变量", p: "例如服务器 .env：RESEND_API_KEY=re_xxx、DEFAULT_FROM_EMAIL=风控通知 <noreply@institution.com>、FROM_DOMAIN=institution.com。完成后「检查服务配置」按钮会提示就绪。" },
-        { h: "③ 可选：填入本页 Email Webhook 做审计分流（不填走服务器默认）", p: "用于 Make / n8n / 自建转发器，自定义抄送、钉钉群同步、自动写 log。格式必须是完整 HTTPS URL，不允许直接第三方 API Key 链接。" },
-        { h: "④ 收件人侧：配置「默认风控收件人」+「风控收件人管理」+ 一键发送测试", p: "先填默认邮箱；在下方风控收件人里逐个增删改；点击「发送测试邮件」核对真实收件箱是否 3 分钟内收到。服务商控制台 Log 也可查投递状态。" },
+        { h: "① 完成发件域名验证", p: "由系统管理员在邮件服务商处完成发件域名与发件邮箱验证，确保风控通知能够正常投递。" },
+        { h: "② 启用系统邮件通道", p: "管理员完成邮件通道配置后，本页「检查服务配置」将显示为就绪状态。" },
+        { h: "③ 配置转发地址（可选）", p: "如需将通知同步到内部系统（如钉钉群、工单系统），可填写一个 HTTPS 转发地址；留空则使用系统默认通道。" },
+        { h: "④ 添加收件人并发送测试", p: "填写「默认风控收件人」，并在「风控收件人管理」中逐个维护；点击「发送测试邮件」，确认 3 分钟内可收到。" },
       ],
       tips: [
-        "投递失败 90% 情况是域名未验证/DKIM 未生效，请先在服务商查看 Log",
-        "免费额度超限时会降级为页面内通知，不会重复扣费",
-        "同一事件 30 分钟内去重：同批次 + 同风险等级不会重复发邮件",
+        "长时间未收到邮件，通常是发件域名验证尚未生效",
+        "免费额度超限时会自动降级为页面内通知，不会重复扣费",
+        "同一事件 30 分钟内去重：同批次、同风险等级只发送一次",
       ],
     },
     "whatsapp-webhook": {
-      title: "WhatsApp Business 通知渠道配置指南",
+      title: "WhatsApp 通知配置指南",
       icon: "wa",
       steps: [
-        { h: "① Meta 后台：开通 WhatsApp Business Platform，审核企业号码", p: "登录 Meta Business Manager，创建 WhatsApp 业务账户，完成企业号码验证（需能接收电话/短信验证码）。号码审核通过后方可对外发消息。" },
-        { h: "② 服务端：配置 Twilio / Meta Cloud API 凭据（ENV 写入）", p: "推荐 Twilio：TWILIO_ACCOUNT_SID、TWILIO_AUTH_TOKEN、TWILIO_WA_FROM=whatsapp:+852xxxxxxxxx。或 Meta Cloud API：WA_PHONE_NUMBER_ID、WA_ACCESS_TOKEN、WA_BUSINESS_ID。再次强调：凭据仅写服务器 ENV。" },
-        { h: "③ 可选：在本页填写 WhatsApp Webhook（Make / n8n 自定义）", p: "仅用于自行搭建审计转发，不能直接填 https://graph.facebook.com。不填则默认走服务器第 ② 步主配置。" },
-        { h: "④ 用户侧：「紧急联系人电话」填写带区号完整号码 + 发起模板对话", p: "号码格式 = 区号-本地号，例如 +852-91234567。若首次触发测试失败，通常因对方未同意消息模板（Meta 24 小时窗口政策），需要用户先主动发一条消息或先通过审核模板。" },
+        { h: "① 开通企业号码", p: "由系统管理员在 WhatsApp 商务平台完成企业号码验证，审核通过后方可对外发送消息。" },
+        { h: "② 启用系统消息通道", p: "管理员完成 WhatsApp 消息通道配置后即可使用；未配置时该渠道不生效。" },
+        { h: "③ 配置转发地址（可选）", p: "如需将通知同步到内部系统，可填写一个 HTTPS 转发地址；留空则使用系统默认通道。" },
+        { h: "④ 填写紧急联系人并发送测试", p: "为收件人填写带区号的完整号码（如 +852-91234567）并发送测试。首次可能因对方未同意消息模板而失败，需对方先回复一条消息。" },
       ],
       tips: [
-        "Meta Cloud API 24 小时窗口：用户不回复 → 不能主动发非模板消息，建议使用已审核模板",
-        "同一事件 30 分钟内去重，避免 WhatsApp 被举报封号",
-        "未填号码的风控收件人不会触发 WA 推送，仅会走 Email 渠道",
+        "WhatsApp 仅允许向 24 小时内回复过消息的联系人主动发送非模板消息，建议使用已审核模板",
+        "同一事件 30 分钟内去重，避免被判定为骚扰",
+        "未填写号码的收件人不会收到 WhatsApp 通知，仅走邮件渠道",
       ],
     },
   };
@@ -592,7 +605,7 @@ export default function SettingsPage() {
       try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(merged)); } catch {}
     } catch (err: any) {
       // 服务端失败：降级读 localStorage 历史
-      setUsersLoadError(err?.message ?? "服务端暂时无法读取系统账号");
+      setUsersLoadError(err?.message ?? "暂时无法读取系统账号");
       try {
         const raw = localStorage.getItem(USERS_LS_KEY);
         if (raw) {
@@ -779,7 +792,7 @@ export default function SettingsPage() {
 
     if (apiOk) {
       const msg = editingUserId ? "账号已更新" : "账号创建成功";
-      if (storedHint === "pending") toast.success(msg + "（已受理，稍后同步到数据库）");
+      if (storedHint === "pending") toast.success(msg + "（已受理，正在同步）");
       else toast.success(msg);
       setSaved("user");
       setUserDlgOpen(false);
@@ -793,7 +806,7 @@ export default function SettingsPage() {
       try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(usersBefore)); } catch {}
       toast.error(
         (editingUserId ? "更新失败：" : "创建失败：") +
-        (apiError ?? "服务端暂不可用") +
+        (apiError ?? "系统暂不可用") +
         "（账号未保存，请稍后重试）"
       );
     }
@@ -855,7 +868,7 @@ export default function SettingsPage() {
         });
         if (apiOk) {
           const baseMsg = target ? `已删除账号 ${target.email}` : "已删除账号";
-          if (storedHint === "pending") toast.success(baseMsg + "（已受理，稍后同步到数据库）");
+          if (storedHint === "pending") toast.success(baseMsg + "（已受理，正在同步）");
           else toast.success(baseMsg);
           setTimeout(async () => {
             try { await loadRemoteUsers(); } catch {}
@@ -865,7 +878,7 @@ export default function SettingsPage() {
           // 失败：回滚删除
           setUsers(usersBefore);
           try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(usersBefore)); } catch {}
-          toast.error("删除失败：" + (apiError ?? "服务端暂不可用") + "（账号未删除，请稍后重试）");
+          toast.error("删除失败：" + (apiError ?? "系统暂不可用") + "（账号未删除，请稍后重试）");
         }
         setUsersSaving(false);
       },
@@ -915,7 +928,7 @@ export default function SettingsPage() {
       if (storedHint === "db") {
         toast.success(enabled ? "已启用账号" : "已停用账号");
       } else if (storedHint === "pending") {
-        toast.success((enabled ? "已启用账号（" : "已停用账号（") + "已受理，稍后同步到数据库）");
+        toast.success((enabled ? "已启用账号（" : "已停用账号（") + "已受理，正在同步）");
       } else if (storedHint === "failed" || apiError) {
         // 失败回滚 enabled
         setUsers((list) =>
@@ -1006,7 +1019,7 @@ export default function SettingsPage() {
         toast.success(`风控阈值已更新：预警 ${afterWarn.toFixed(2)}% / 补仓 ${afterMargin.toFixed(2)}%`);
       }
     } catch {
-      toast.error("配置保存失败，请检查浏览器存储后重试。");
+      toast.error("配置保存失败，请稍后重试。");
       return;
     }
     if (label === "分成配置") toast.success("分成配置已保存，仅对新签约客户生效。");
@@ -1053,7 +1066,7 @@ export default function SettingsPage() {
     const sorted = [...riskTiers].sort((a, b) => a.dropPercent - b.dropPercent);
     const ok = saveRiskTiers(sorted);
     if (!ok) {
-      toast.error("保存失败，请检查浏览器存储权限。");
+      toast.error("保存失败，请稍后重试。");
       return;
     }
     setRiskTiers(sorted);
@@ -1260,7 +1273,7 @@ export default function SettingsPage() {
       <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
       <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
       <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
-      <TabsTrigger value="audit" className="h-9 gap-1.5"><ScrollText className="h-3.5 w-3.5" />审计日志</TabsTrigger>
+      <TabsTrigger value="audit" className="h-9 gap-1.5"><ScrollText className="h-3.5 w-3.5" />操作记录</TabsTrigger>
       <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
     </TabsList>
 
@@ -1353,7 +1366,7 @@ export default function SettingsPage() {
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              客户优先出资占比（默认 70%），当前版本固定 70/30，后续版本开放
+              客户优先出资占比（固定 70%，其余为 WIN100 担保资产）
             </p>
           </div>
           <div className="space-y-1.5 opacity-75">
@@ -1389,7 +1402,6 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2">
               <Layers className="h-4 w-4 text-primary" />
               <p className="text-sm font-bold">多档风控阈值</p>
-              <Badge variant="info" className="text-[10px]">Phase 5</Badge>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" className="gap-1 h-8" onClick={addRiskTier}>
@@ -1629,7 +1641,7 @@ export default function SettingsPage() {
             <Save className="h-4 w-4" />
             保存风控参数
           </Button>
-          {saved === "risk" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存到本地</Badge>}
+          {saved === "risk" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
         </div>
       </CardContent>
     </Card>
@@ -1652,7 +1664,7 @@ export default function SettingsPage() {
                 <p className="font-semibold text-sm">网页端风险弹窗</p>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                当批次进入预警或击穿状态时，自动弹出浏览器级弹窗提醒
+                当批次进入预警或击穿状态时，自动弹出页面提醒
               </p>
             </div>
             <button
@@ -1769,7 +1781,7 @@ export default function SettingsPage() {
                   s
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground">推荐 5-10 秒，避免 API 限流</p>
+              <p className="text-[11px] text-muted-foreground">推荐 5-10 秒</p>
             </div>
           </div>
         </div>
@@ -1879,16 +1891,16 @@ export default function SettingsPage() {
       <CardContent className="pt-0 space-y-5">
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3 text-xs">
           <p className="font-semibold">1. 配置服务商 → 2. 添加真实收件人 → 3. 点击测试并核对收件</p>
-          <p className="text-muted-foreground">邮件推荐 Resend：管理员配置 API Key 和已验证发件域名。WhatsApp 推荐 Twilio：配置企业号码、收件人授权及审核通过的消息模板。密钥只放服务器，不填入 Webhook 地址。</p>
-          <p className="text-muted-foreground">当前为按钮手动发送；网页风险弹窗不等于已发送外部通知。“已受理”不代表已送达，需查看收件箱或服务商回执。</p>
+          <p className="text-muted-foreground">邮件与 WhatsApp 通道由系统管理员完成服务商配置后启用。授权密钥等敏感信息由管理员统一保管，无需在此填写。</p>
+          <p className="text-muted-foreground">当前为手动发送；页面内的风险提示不等于已发出外部通知。「已受理」不代表已送达，请以收件箱或服务商回执为准。</p>
           <div className="flex flex-wrap gap-2 items-center">
             <Input type="password" aria-label="通知发送授权码" autoComplete="off" value={sendToken}
-              onChange={(e) => setSendToken(e.target.value)} placeholder="管理员提供的发送授权码，仅当前页面会话保留"
+              onChange={(e) => setSendToken(e.target.value)} placeholder="管理员提供的发送授权码，仅本次会话有效"
               className="max-w-md text-xs" />
             <Button variant="outline" size="sm" onClick={() => {
-              if (sendToken.trim().length < 32) { toast.error("授权码至少32位。"); return; }
+              if (sendToken.trim().length < 32) { toast.error("授权码至少 32 位。"); return; }
               setNotificationSendToken(sendToken); setSendToken(""); setTokenReady(true);
-              toast.success("发送授权码已暂存，本页刷新后需重新输入。");
+              toast.success("发送授权码已暂存，刷新页面后需重新输入。");
             }}>{tokenReady ? "更新发送授权码" : "启用本次发送授权"}</Button>
             <Button variant="outline" size="sm" onClick={checkChannels}>检查服务配置</Button>
           </div>
@@ -1935,7 +1947,7 @@ export default function SettingsPage() {
             name="emailWebhook"
             value={form.emailWebhook}
             onValueChange={handleSettingsFieldChange}
-            placeholder="可选：留空使用服务端配置；自定义地址须由管理员在服务端授权"
+            placeholder="可选：留空使用系统默认配置；自定义地址须由管理员授权"
             className="font-mono text-xs"
           />
         </div>
@@ -1975,7 +1987,7 @@ export default function SettingsPage() {
             name="whatsappWebhook"
             value={form.whatsappWebhook}
             onValueChange={handleSettingsFieldChange}
-            placeholder="可选：Make / n8n Webhook，不能直接填 Meta API 地址"
+            placeholder="可选：填入自建转发地址（HTTPS），留空则使用系统默认通道"
             className="font-mono text-xs"
           />
         </div>
@@ -2007,7 +2019,7 @@ export default function SettingsPage() {
               <Save className="h-4 w-4" />
               保存通知配置
             </Button>
-            {saved === "notify" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存到本地</Badge>}
+            {saved === "notify" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
             <div className="h-6 w-px bg-border/50 mx-1 hidden sm:block" />
             <Button
               variant="outline"
@@ -2155,7 +2167,7 @@ export default function SettingsPage() {
               setRiskRecipients(recipients);
               save("recipient");
             } catch {
-              toast.error("收件人保存失败，请检查浏览器存储后重试。");
+              toast.error("收件人保存失败，请稍后重试。");
             }
           }}>
             <Save className="h-4 w-4" />
@@ -2175,20 +2187,19 @@ export default function SettingsPage() {
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2">
           <LineChart className="h-4 w-4 text-primary" />
-          实时股票行情 · TopBar 显示
+          实时股票行情 · 顶部展示
         </CardTitle>
         <p className="text-[11px] text-muted-foreground mt-1">
-          设置后在网站顶部「实时连接」旁边展示股票代码、最新价格与当日涨跌幅。
-          系统自动从 3 个免费公开数据源按优先级抓取（Yahoo Finance → Nasdaq → Stooq），任一成功即返回；失败时自动降级为最近一次成功的缓存价格或兜底价格，不影响顶部展示。
+          设置后可在网站顶部展示股票代码、最新价格与当日涨跌幅；行情异常时自动沿用最近一次有效价格，不影响展示。
         </p>
       </CardHeader>
       <CardContent className="pt-0 space-y-5">
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
           <div className="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
             <div>
-              <p className="font-semibold text-sm">TopBar 实时预览</p>
+              <p className="font-semibold text-sm">顶部导航实时预览</p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                保存设置后，顶部导航「实时连接中」右侧会出现行情徽章（下方为当前配置的实时预览，每秒微调、每 {quote.refreshSec} 秒重新请求真实价格）。
+                保存后，顶部导航会展示行情徽章（下方为当前配置的实时预览，每 {quote.refreshSec} 秒刷新一次价格）。
               </p>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
                 {QUOTE_PROVIDERS.map((p) => (
@@ -2253,7 +2264,7 @@ export default function SettingsPage() {
 
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <Label className="text-xs">股票代码 Symbol（必填，将作为顶部唯一展示字段）</Label>
+            <Label className="text-xs">股票代码（必填，用于顶部行情展示）</Label>
             <Input
               className="mt-1.5 font-mono text-sm"
               placeholder="例：AAPL / NVDA / 0700.HK / 600519.SS"
@@ -2284,15 +2295,15 @@ export default function SettingsPage() {
                 checked={!!quote.showOnTopBar}
                 onChange={(e) => setQuote({ ...quote, showOnTopBar: !!e.target.checked })}
               />
-              <span>在顶部导航（TopBar）展示行情</span>
+              <span>在顶部导航展示行情</span>
             </label>
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground">涨跌配色：</span>
               <span className={cn("inline-flex items-center gap-1 rounded px-2 py-0.5 bg-success/10", quote.colorUp)}>
-                <TrendingUp className="h-3 w-3" /> 上涨 {quote.colorUp.replace("text-", "")}
+                <TrendingUp className="h-3 w-3" /> 上涨
               </span>
               <span className={cn("inline-flex items-center gap-1 rounded px-2 py-0.5 bg-danger/10", quote.colorDown)}>
-                <TrendingDown className="h-3 w-3" /> 下跌 {quote.colorDown.replace("text-", "")}
+                <TrendingDown className="h-3 w-3" /> 下跌
               </span>
             </div>
           </div>
@@ -2318,11 +2329,11 @@ export default function SettingsPage() {
                 setSaved("quote");
                 setTimeout(() => setSaved(null), 2200);
                 toast.success(
-                  `已保存：${next.symbol}（刷新 ${next.refreshSec}s，TopBar 展示 = ${next.showOnTopBar ? "开启" : "关闭"}）`
+                  `已保存：${next.symbol}（刷新间隔 ${next.refreshSec}s，顶部展示 ${next.showOnTopBar ? "开启" : "关闭"}）`
                 );
               } catch (e) {
                 console.error(e);
-                toast.error("保存行情设置失败，请检查浏览器存储。");
+                toast.error("保存行情设置失败，请稍后重试。");
               }
             }}
           >
@@ -2345,7 +2356,7 @@ export default function SettingsPage() {
           {saved === "quote" && (
             <Badge variant="success" className="gap-1 text-[10px]">
               <CheckCircle2 className="h-2.5 w-2.5" />
-              已保存 · TopBar 已同步
+              已保存 · 已同步
             </Badge>
           )}
         </div>
@@ -2415,7 +2426,7 @@ export default function SettingsPage() {
               <div>
                 <p className="font-semibold text-sm">Supabase / PostgreSQL</p>
                 <p className="text-[11px] text-muted-foreground">
-                  主数据库连接 · 批次、客户、补仓记录存储
+                 数据存储服务 · 批次、客户与补仓记录
                 </p>
               </div>
             </div>
@@ -2431,7 +2442,7 @@ export default function SettingsPage() {
             <Save className="h-4 w-4" />
             保存数据源配置
           </Button>
-          {saved === "data" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存到本地</Badge>}
+          {saved === "data" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
         </div>
       </CardContent>
     </Card>
@@ -2448,7 +2459,7 @@ export default function SettingsPage() {
           品牌外观 · Logo
         </CardTitle>
         <p className="text-[11px] text-muted-foreground mt-0.5">
-          仅风控总监可修改，保存后全局生效（本地持久化）
+          仅风控总监可修改，保存后全局生效
         </p>
       </CardHeader>
       <CardContent className="pt-0 space-y-4">
@@ -2642,7 +2653,7 @@ export default function SettingsPage() {
         fallback={
           <Card className="border-border/50">
             <CardContent className="pt-6 text-center py-10">
-              <p className="text-sm text-muted-foreground">当前角色无权限查看审计日志</p>
+              <p className="text-sm text-muted-foreground">当前角色无权限查看操作记录</p>
             </CardContent>
           </Card>
         }
@@ -2652,9 +2663,9 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2">
               <ScrollText className="h-4 w-4 text-primary" />
               <div>
-                <CardTitle className="text-sm font-bold">审计事件日志</CardTitle>
+                <CardTitle className="text-sm font-bold">全员操作记录</CardTitle>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  共记录前 {auditLogs.length} / MAX 2000 · 持久化于浏览器本地 · 按时间倒序
+                  共 {auditLogs.length} 条记录 · 不可修改或删除
                 </p>
               </div>
             </div>
@@ -2663,7 +2674,7 @@ export default function SettingsPage() {
               <Search className="h-3.5 w-3.5 text-muted-foreground ml-2" />
               <Input
                 className="h-7 w-44 border-0 bg-transparent shadow-none text-xs"
-                placeholder="搜邮箱/资源/详情关键字"
+                placeholder="搜索操作人、行为或模块"
                 value={auditSearchKw}
                 onChange={(e) => setAuditSearchKw(e.target.value)}
               />
@@ -2672,29 +2683,14 @@ export default function SettingsPage() {
                 <Filter className="h-3.5 w-3.5 text-muted-foreground" />
                 <Select
                   value={auditFilterAction}
-                  onValueChange={(v) => setAuditFilterAction(v as any)}
+                  onValueChange={(v) => setAuditFilterAction(v as "__ALL__" | AuditAction)}
                 >
                   <SelectTrigger className="h-8 w-36 text-xs">
-                    <SelectValue placeholder="过滤 Action" />
+                    <SelectValue placeholder="过滤行为" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__ALL__">全部动作</SelectItem>
-                    {[
-                      ["login_success","登录成功"],
-                      ["login_failed","登录失败"],
-                      ["logout","登出"],
-                      ["threshold_update","阈值变更"],
-                      ["account_create","创建账号"],
-                      ["account_update","更新账号"],
-                      ["account_delete","删除账号"],
-                      ["client_edit","编辑客户"],
-                      ["client_delete","删除客户"],
-                      ["margin_topup","风险金补仓"],
-                      ["client_settle","客户结算"],
-                      ["batch_notify","批次通知"],
-                      ["auth_denied","鉴权拒绝"],
-                    ].map(([v, label]) => (
-                      <SelectItem key={v} value={v} className="text-xs">{label}</SelectItem>
+                    {AUDIT_ACTION_FILTER_OPTIONS.map((item) => (
+                      <SelectItem key={item.value} value={item.value} className="text-xs">{item.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -2707,22 +2703,6 @@ export default function SettingsPage() {
               >
                 <RefreshCw className="h-3.5 w-3.5 mr-1.5" />刷新
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => setConfirmation({
-                  title: "确认清空全部审计日志？",
-                  run: () => {
-                    try { clearAuditLogs(); } catch {}
-                    setAuditLogs([]);
-                    toast.success("审计日志已清空");
-                    setAuditTick((x) => x + 1);
-                  },
-                })}
-              >
-                <Trash2 className="h-3.5 w-3.5 mr-1.5" />清空
-              </Button>
             </div>
           </CardHeader>
           <CardContent className="pt-0 space-y-3">
@@ -2732,10 +2712,10 @@ export default function SettingsPage() {
                   <thead>
                     <tr className="bg-muted/40 text-muted-foreground">
                       <th className="px-3 py-2 text-left font-medium whitespace-nowrap">时间</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">动作</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作行为</th>
                       <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作人</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">资源</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">详情</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">涉及模块</th>
+                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作详情</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2746,9 +2726,9 @@ export default function SettingsPage() {
                         if (!kw) return true;
                         const hay = [
                           l.actorEmail ?? "",
-                          l.resource ?? "",
-                          JSON.stringify(l.detail ?? ""),
-                          l.action,
+                          getAuditResourceLabel(l.resource),
+                          getAuditActionLabel(l.action),
+                          describeAuditLog(l),
                         ].join(" ").toLowerCase();
                         return hay.includes(kw);
                       });
@@ -2756,7 +2736,7 @@ export default function SettingsPage() {
                         return (
                           <tr>
                             <td colSpan={5} className="text-center py-10 text-muted-foreground">
-                              {hydrated ? "暂无审计事件" : "加载中…"}
+                              {hydrated ? "暂无操作记录" : "加载中…"}
                             </td>
                           </tr>
                         );
@@ -2772,52 +2752,37 @@ export default function SettingsPage() {
                               /failed|denied|delete/.test(l.action) && "border-danger/60 text-danger",
                               /success|_create|_update|_topup|_settle|_notify/.test(l.action) && "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
                             )}>
-                              {l.action}
+                              {getAuditActionLabel(l.action)}
                             </Badge>
-                            {l.role && <span className="ml-2 text-[10px] text-muted-foreground font-mono">{l.role}</span>}
+                            {l.role && <span className="ml-2 text-[10px] text-muted-foreground">{APP_ROLE_LABELS[l.role] ?? l.role}</span>}
                           </td>
                           <td className="px-3 py-2 whitespace-nowrap">
                             {l.actorEmail ? (
                               <div className="flex items-center gap-1.5">
                                 <ClientAvatar name={(l.actorEmail[0] ?? "?").toUpperCase()} size="xs" />
-                                <span className="font-mono">{l.actorEmail}</span>
+                                <span>{l.actorEmail}</span>
                               </div>
                             ) : (
                               <span className="text-muted-foreground italic">匿名/未登录</span>
                             )}
                           </td>
-                          <td className="px-3 py-2 whitespace-nowrap font-mono text-muted-foreground">
-                            {l.resource ?? "—"}
+                          <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                            {getAuditResourceLabel(l.resource)}
                           </td>
                           <td className="px-3 py-2">
-                            {l.detail ? (
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 text-[11px] font-mono text-muted-foreground max-w-[30ch] overflow-hidden text-ellipsis whitespace-nowrap">
-                                  {typeof l.detail === "string" ? l.detail : JSON.stringify(l.detail)}
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-6 text-[11px]"
-                                  onClick={() => setAuditOpenDetail(l)}
-                                >
-                                  <Eye className="h-3 w-3 mr-1" />展开
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-6 text-[11px]"
-                                  onClick={async () => {
-                                    const text = typeof l.detail === "string" ? l.detail : JSON.stringify(l.detail, null, 2);
-                                    try { await navigator.clipboard.writeText(text); toast.success("详情 JSON 已复制"); } catch { toast.error("复制失败"); }
-                                  }}
-                                >
-                                  <Copy className="h-3 w-3 mr-1" />复制
-                                </Button>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 text-[11px] text-muted-foreground max-w-[46ch] truncate">
+                                {describeAuditLog(l)}
                               </div>
-                            ) : (
-                                <span className="text-muted-foreground italic">—</span>
-                            )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 text-[11px]"
+                                onClick={() => setAuditOpenDetail(l)}
+                              >
+                                <Eye className="h-3 w-3 mr-1" />展开
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ));
@@ -2844,9 +2809,6 @@ export default function SettingsPage() {
         {[
           { k: "系统版本", v: "v2.0.1 Professional" },
           { k: "构建时间", v: "2026-09-19 15:42" },
-          { k: "Next.js", v: "14.2.8" },
-          { k: "Prisma ORM", v: "5.18.0" },
-          { k: "UI 框架", v: "Shadcn UI + Tailwind" },
         ].map((x) => (
           <div
             key={x.k}
@@ -3176,48 +3138,49 @@ export default function SettingsPage() {
     <DialogHeader>
       <DialogTitle className="flex items-center gap-2 text-sm font-bold">
         <ScrollText className="h-4 w-4 text-primary" />
-        审计详情
+        操作详情
       </DialogTitle>
     </DialogHeader>
     {auditOpenDetail && (
-      <div className="space-y-3 text-xs">
+      <div className="space-y-4 text-xs">
+        <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
+          <Badge variant="outline" className="text-[11px]">{getAuditActionLabel(auditOpenDetail.action)}</Badge>
+          <p className="mt-2 text-[12.5px] leading-6 text-foreground">{describeAuditLog(auditOpenDetail)}</p>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <p className="text-muted-foreground">时间</p>
-            <p className="font-mono">{formatDateTime(auditOpenDetail.createdAt)}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">Action</p>
-            <Badge variant="outline" className="font-mono">{auditOpenDetail.action}</Badge>
+            <p className="text-muted-foreground">操作时间</p>
+            <p>{formatDateTime(auditOpenDetail.createdAt)}</p>
           </div>
           <div>
             <p className="text-muted-foreground">操作人</p>
-            <p className="font-mono">{auditOpenDetail.actorEmail ?? "—"} {auditOpenDetail.role ? <span className="ml-1 text-muted-foreground">({auditOpenDetail.role})</span> : null}</p>
+            <p>
+              {auditOpenDetail.actorEmail ?? "匿名/未登录"}
+              {auditOpenDetail.role ? <span className="ml-1 text-muted-foreground">· {APP_ROLE_LABELS[auditOpenDetail.role] ?? auditOpenDetail.role}</span> : null}
+            </p>
           </div>
           <div>
-            <p className="text-muted-foreground">资源</p>
-            <p className="font-mono break-all">{auditOpenDetail.resource ?? "—"}</p>
+            <p className="text-muted-foreground">涉及模块</p>
+            <p>{getAuditResourceLabel(auditOpenDetail.resource)}</p>
           </div>
         </div>
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-muted-foreground">Detail（JSON）</p>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 text-[11px]"
-              onClick={async () => {
-                const text = typeof auditOpenDetail.detail === "string" ? auditOpenDetail.detail : JSON.stringify(auditOpenDetail.detail, null, 2);
-                try { await navigator.clipboard.writeText(text); toast.success("已复制到剪贴板"); } catch { toast.error("复制失败"); }
-              }}
-            >
-              <Copy className="h-3 w-3 mr-1" />复制
-            </Button>
-          </div>
-          <pre className="p-3 rounded-md bg-muted/40 text-[11px] font-mono whitespace-pre-wrap break-all max-h-[50vh] overflow-y-auto">
-            {typeof auditOpenDetail.detail === "string" ? auditOpenDetail.detail : JSON.stringify(auditOpenDetail.detail, null, 2)}
-          </pre>
-        </div>
+        {(() => {
+          const fields = getAuditDetailFields(auditOpenDetail);
+          if (!fields.length) return null;
+          return (
+            <div>
+              <p className="mb-2 text-muted-foreground">操作内容</p>
+              <div className="rounded-md border divide-y divide-border/50">
+                {fields.map((field, idx) => (
+                  <div key={`${field.label}-${idx}`} className="flex items-start justify-between gap-4 px-3 py-2">
+                    <span className="shrink-0 text-muted-foreground">{field.label}</span>
+                    <span className="text-right font-medium break-all">{field.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     )}
   </DialogContent>
@@ -3235,7 +3198,7 @@ export default function SettingsPage() {
         {helpOpen ? HELP_CONTENT[helpOpen].title : ""}
       </DialogTitle>
       <DialogDescription className="text-[11.5px]">
-        按顺序完成 4 步即可获得稳定的外部通知；API 凭据只写服务器环境变量，不填入本页任何输入框。
+        按顺序完成以下步骤即可启用外部通知。
       </DialogDescription>
     </DialogHeader>
     {helpOpen && (

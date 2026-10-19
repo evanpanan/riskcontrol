@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { ShieldAlert, Home, ArrowLeft } from 'lucide-react';
 import { useCurrentUser } from '@/lib/auth/useCurrentUser';
 import { logAuthDeny } from '@/lib/auth/audit';
-import type { AppRole, AppSessionUser } from '@/types/auth';
+import { ROLE_LABELS, type AppRole, type AppSessionUser } from '@/types/auth';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -42,7 +42,7 @@ export function AuthGuard({
         role,
       });
       if (showToast) {
-        toast.error(`当前账号无权限访问该页面，已限制显示（${route}）`);
+        toast.error('当前账号无权访问该页面');
       }
     }
   }, [allowed, isLoading, role, route, showToast, user?.id]);
@@ -74,16 +74,16 @@ export function AuthGuard({
         <div className="space-y-1.5">
           <h2 className="text-lg font-bold">权限受限 · 禁止访问</h2>
           <p className="text-sm text-muted-foreground">
-            您当前的登录账号角色为
+            您当前的账号角色为
             <Badge variant="outline" className="mx-1.5 align-middle">
-              {role}
+              {ROLE_LABELS[role] ?? role}
             </Badge>
-            ，不在页面 <code className="font-mono text-xs">{route}</code> 的允许列表中。
+            ，无权访问该页面。
           </p>
           <p className="text-[11px] text-muted-foreground/80">
             允许访问角色：
             {allowed.map((r, i) => (
-              <span key={r} className="mx-1 font-semibold">{r}{i < allowed.length - 1 ? '、' : ''}</span>
+              <span key={r} className="mx-1 font-semibold">{ROLE_LABELS[r] ?? r}{i < allowed.length - 1 ? '、' : ''}</span>
             ))}
           </p>
         </div>

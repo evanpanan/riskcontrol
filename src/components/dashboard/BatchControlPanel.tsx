@@ -188,13 +188,13 @@ export function BatchControlPanel({ batches }: BatchControlPanelProps) {
           {allowCreateBatch && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="sm" className="gap-1.5 h-10 shrink-0" onClick={() => toast.info("创建批次入口：请前往「批次管理」或点击右上角新建按钮。系统设置→批次规则可调整默认参数。")}>
+                <Button size="sm" className="gap-1.5 h-10 shrink-0" onClick={() => toast.info("请前往「批次管理」页新建批次。")}>
                   <Plus className="h-4 w-4" />
                   新建批次
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>创建新批次（仅 ADMIN / 风控总监 / 运营 可用）</p>
+                <p>创建新批次（仅系统管理员、风控总监、运营可用）</p>
               </TooltipContent>
             </Tooltip>
           )}

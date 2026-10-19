@@ -10,6 +10,8 @@ export type AuditAction =
   | 'login_success'
   | 'login_failed'
   | 'logout'
+  | 'page_view'
+  | 'api_mutation'
   | 'threshold_update'
   | 'account_create'
   | 'account_delete'
@@ -32,6 +34,10 @@ export interface AuditLogEntry {
   resource?: string | null;
   detail?: Record<string, unknown> | null;
   createdAt: string;
+}
+
+export interface FetchAuditLogsOptions {
+  limit?: number;
 }
 
 let lastPendingFlushAt = 0;
@@ -74,11 +80,28 @@ export function getAuditLogs(): AuditLogEntry[] {
 }
 
 export function clearAuditLogs(): void {
-  if (typeof window === 'undefined') return;
+  // 操作记录以服务端为准，前端不再提供清空能力。
+}
+
+export async function fetchAuditLogs(options?: FetchAuditLogsOptions): Promise<AuditLogEntry[]> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return [];
+  const limit = Math.max(1, Math.min(2000, Number(options?.limit) || 500));
   try {
-    window.localStorage.removeItem(AUDIT_LS_KEY);
+    const res = await fetch(`/api/audit?limit=${limit}`, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-store',
+        'Pragma': 'no-cache',
+      },
+    });
+    if (!res.ok) return getAuditLogs();
+    const data = await res.json() as { ok?: boolean; logs?: AuditLogEntry[] };
+    if (!data?.ok || !Array.isArray(data.logs)) return getAuditLogs();
+    return data.logs;
   } catch {
-    /* ignore */
+    return getAuditLogs();
   }
 }
 

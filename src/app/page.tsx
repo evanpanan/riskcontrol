@@ -309,7 +309,7 @@ export default function DashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="space-y-1">
               <h3 className="text-lg font-semibold text-destructive">
-                本地账本校验失败
+                账本数据校验未通过
               </h3>
               <p className="text-sm text-muted-foreground whitespace-pre-wrap">
                 {mockError.message}
@@ -322,10 +322,10 @@ export default function DashboardPage() {
                 onClick={() => {
                   try {
                     const r = resetMockTestData();
-                    toast.success(`已重建 ${r.batches} 个批次 / ${r.clients} 位客户的测试账本（备份 ${r.backupKey}）`);
+                    toast.success(`已重建 ${r.batches} 个批次 / ${r.clients} 位客户的测试账本`);
                     setTimeout(() => window.location.reload(), 150);
                   } catch (e: any) {
-                    toast.error(e?.message ?? "重置失败，请手动清理 localStorage 后刷新。");
+                    toast.error(e?.message ?? "重建失败，请刷新后重试。");
                   }
                 }}
               >
@@ -334,15 +334,8 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-          <div className="rounded-lg bg-background/60 p-3 text-[11.5px] text-muted-foreground space-y-1">
-            <div>· 操作会经过「真实账目校验」：存在真实结算 / 已履约补仓 / 非 legacy 手动交易的账本会被拒绝执行。</div>
-            <div>· 执行前会先备份到 localStorage <code className="font-mono">risk_control_test_backup_*</code>，可在「批次详情 → 历史账目恢复入口」中还原。</div>
-            {devMode && (
-            <div>· 开发环境下也可在 DevTools Console 执行：<code className="font-mono">window.__RISK_RESET_TEST_DATA__()</code>（裸删，不做 pristine 校验，仅用于调试紧急情况）</div>
-            )}
-            {!devMode && (
-            <div>· 当前为生产/预览环境，禁用了浏览器端的账本重建入口。请使用部署环境提供的账本修复流程或联系开发管理员。</div>
-            )}
+          <div className="rounded-lg bg-background/60 p-3 text-[11.5px] text-muted-foreground">
+            <p>该账本包含真实结算或已履约的补仓记录，系统已暂停自动修复。请联系系统管理员核对原始凭证后再处理。</p>
           </div>
         </div>
         );

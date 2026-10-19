@@ -576,7 +576,7 @@ export default function MarketPage() {
               数据分析 · {liveSymbol} 机构 &amp; 风控多维可视化
             </h1>
             <p className="text-sm text-muted-foreground">
-              纯图形驱动：资金构成堆叠 × 风险分层分布 × BD贡献矩阵 × 签约到期节奏 × 客户结构画像
+              资金构成、风险分层、BD 贡献、签约到期与客户结构的多维可视化
             </p>
           </div>
 

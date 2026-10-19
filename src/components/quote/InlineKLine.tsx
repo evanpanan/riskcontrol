@@ -120,7 +120,7 @@ export function InlineKLine({
 
   const isSynthetic = provider === "SYNTHETIC_INTRADAY";
   const providerLabel = isSynthetic
-    ? "模拟 · 合成分时（3 源均无 intraday）"
+    ? "模拟 · 合成分时"
     : provider && QUOTE_PROVIDERS.find((p) => p.id === provider)
       ? QUOTE_PROVIDERS.find((p) => p.id === provider)!.label
       : provider || "";

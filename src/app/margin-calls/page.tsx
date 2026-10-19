@@ -496,7 +496,7 @@ export default function MarginCallsPage() {
         }
         description={
           fulfillTarget && fulfillTarget.singleTopupCount > 0
-            ? `本批次已有 ${fulfillTarget.singleTopupCount} 位客户完成单独补仓，本次仅对剩余缺口进行批次级一键分配（按缺口从大到小依次覆盖）。已单独补仓客户不会被重复分配，资金池实际划付金额 = 剩余缺口。`
+            ? `本批次已有 ${fulfillTarget.singleTopupCount} 位客户完成单独补仓，本次仅对剩余缺口进行批次级一键分配（按缺口从大到小依次覆盖）。已单独补仓的客户不会被重复分配。`
             : "按本轮剩余缺口记录 WIN100 补仓金额、成交价格与份额。补仓本金及收益全部归 WIN100，不增加客户原始本金，也不修改股票价格。"
         }
         summary={
