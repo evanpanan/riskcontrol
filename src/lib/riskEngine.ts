@@ -637,7 +637,35 @@ function allocateRound(batch: BatchLike, amount: number, roundId: string): Recor
 
 // Initialization and mutations are called at data-load / price-update / action boundaries, never during rendering.
 export function initializeBatchFinance(batch: BatchLike): void {
-  if (batch.finance) return;
+  const isFreshEmptyBatch =
+    (batch.clients?.length ?? 0) === 0 &&
+    (batch.marginCalls?.length ?? 0) === 0 &&
+    (batch.cumulativeMarginCalls ?? 0) <= 0.005;
+
+  if (batch.finance) {
+    if (
+      isFreshEmptyBatch &&
+      (batch.finance.trades?.length ?? 0) === 0 &&
+      (batch.finance.rounds?.length ?? 0) === 0 &&
+      Object.keys(batch.finance.settlements ?? {}).length === 0
+    ) {
+      batch.finance.originalCapital = 0;
+      batch.finance.originalPriority = 0;
+      batch.finance.remainingCapital = 0;
+      batch.finance.originalShares = 0;
+      batch.finance.remainingShares = 0;
+      batch.finance.legacyWarnings = [];
+      batch.initialTotalAmount = 0;
+      batch.priorityAmount = 0;
+      batch.subordinateAmount = 0;
+      batch.totalShares = 0;
+      batch.currentMarketValue = 0;
+      batch.totalPnL = 0;
+      batch.totalPnLPercent = 0;
+      batch.riskLevel = RiskLevel.NORMAL;
+    }
+    return;
+  }
   const finance: BatchFinance = {
     version: 2, originalCapital: batch.initialTotalAmount, originalShares: batch.totalShares,
     originalPriority: batch.priorityAmount, remainingCapital: batch.initialTotalAmount,
@@ -645,6 +673,22 @@ export function initializeBatchFinance(batch: BatchLike): void {
     legacyAllocationVersion: 2,
   };
   batch.finance = finance;
+  if (isFreshEmptyBatch) {
+    finance.originalCapital = 0;
+    finance.originalPriority = 0;
+    finance.remainingCapital = 0;
+    finance.originalShares = 0;
+    finance.remainingShares = 0;
+    batch.initialTotalAmount = 0;
+    batch.priorityAmount = 0;
+    batch.subordinateAmount = 0;
+    batch.totalShares = 0;
+    batch.currentMarketValue = 0;
+    batch.totalPnL = 0;
+    batch.totalPnLPercent = 0;
+    batch.riskLevel = RiskLevel.NORMAL;
+    return;
+  }
   const recordedPrincipal = (batch.clients ?? []).reduce((sum, c) => sum + c.investmentAmount, 0);
   const matchPriority = Math.abs(recordedPrincipal - batch.priorityAmount) <= 0.02;
   const matchInitial = Math.abs(recordedPrincipal - finance.originalCapital) <= 0.02;

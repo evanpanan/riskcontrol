@@ -1253,7 +1253,7 @@ export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client
     d.setUTCDate(d.getUTCDate() - 1);
     return d;
   })();
-  const initialTotalAmount = Math.max(1, Number(input.initialTotalAmount) || 1);
+  const initialTotalAmount = Math.max(0, Number(input.initialTotalAmount) || 0);
   const split = calculateInvestmentSplit(initialTotalAmount);
   const stockBasePrice = (() => {
     if (Number(input.currentStockPrice) > 0) return Number(input.currentStockPrice);
@@ -1312,4 +1312,3 @@ export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client
   window.dispatchEvent(new CustomEvent("risk-control:finance-changed", { detail: { batchId: newBatch.id, op: "createBatch" } }));
   return fresh.batches.find((b) => b.id === newBatch.id) || newBatch;
 }
-

@@ -10,10 +10,10 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -88,7 +88,7 @@ export function AddClientDialog({
     new Date().toISOString().split("T")[0]
   );
   const [entryPrice, setEntryPrice] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const numAmount = useMemo(
@@ -114,7 +114,7 @@ export function AddClientDialog({
         setBdManager(lockedBdManager || "");
         setSignDate(new Date().toISOString().split("T")[0]);
         setEntryPrice("");
-        setConfirmed(false);
+        setConfirmOpen(false);
         setErrors({});
       }, 200);
     } else {
@@ -153,7 +153,6 @@ export function AddClientDialog({
     if (!Number.isFinite(parsedEntryPrice) || parsedEntryPrice <= 0) {
       e.entryPrice = "请填写有效的客户入场价";
     }
-    if (!confirmed) e.confirmed = "请先确认客户本金、机构应入金和入场价无误";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -211,6 +210,18 @@ export function AddClientDialog({
       detail: { batchId, client: newClient },
     }));
   };
+
+  const confirmSummary = useMemo(
+    () => [
+      { label: "客户姓名", value: name.trim() || "—" },
+      { label: "批次", value: batchId.slice(-6), accent: "primary" as const },
+      { label: "客户入金", value: numAmount > 0 ? formatCurrency(numAmount) : "—" },
+      { label: "机构应入金", value: institutionAmount > 0 ? formatCurrency(institutionAmount) : "—", accent: "primary" as const },
+      { label: "客户入场价", value: entryPrice || "—" },
+      { label: "签约日期", value: signDate || "—" },
+    ],
+    [batchId, entryPrice, institutionAmount, name, numAmount, signDate]
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -509,24 +520,11 @@ export function AddClientDialog({
           </div>
 
           <div className="rounded-lg border border-border/60 bg-secondary/20 p-3 space-y-2">
-            <label className="flex items-start gap-2 cursor-pointer">
-              <Checkbox
-                checked={confirmed}
-                onCheckedChange={(checked) => setConfirmed(checked === true)}
-                className="mt-0.5"
-              />
-              <span className="text-[11px] leading-5 text-foreground/85">
-                我已核对本次录入的
-                <span className="font-semibold">客户入金、机构应入金、客户入场价</span>
-                与所属批次，确认无误后再进入下一位客户。
-              </span>
-            </label>
-            {errors.confirmed && (
-              <p className="text-[11px] text-danger flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" />
-                {errors.confirmed}
-              </p>
-            )}
+            <p className="text-[11px] leading-5 text-foreground/85">
+              点击
+              <span className="font-semibold">确认录入客户</span>
+              后，系统会弹出二次确认卡片，再次核对客户入金、机构应入金、客户入场价和签约日期。
+            </p>
           </div>
         </div>
 
@@ -534,12 +532,31 @@ export function AddClientDialog({
           <Button variant="ghost" type="button" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button type="button" onClick={handleSubmit} className="gap-1.5">
+          <Button
+            type="button"
+            onClick={() => {
+              if (!validate()) return;
+              setConfirmOpen(true);
+            }}
+            className="gap-1.5"
+          >
             <CheckCircle2 className="h-4 w-4" />
             确认录入客户
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        tone="info"
+        title="确认保存该客户到当前批次？"
+        description="请再次核对本次客户录入信息。确认后系统会立即写入当前批次账本。"
+        summary={confirmSummary}
+        confirmText="确认保存客户"
+        cancelText="返回修改"
+        onConfirm={handleSubmit}
+      />
     </Dialog>
   );
 }

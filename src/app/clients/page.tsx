@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogClose,
@@ -104,6 +104,8 @@ export default function ClientsPage() {
   const [hydrated, setHydrated] = useState(false);
   const [tick, setTick] = useState(0);
   const [addClientOpen, setAddClientOpen] = useState(false);
+  const [batchPickerOpen, setBatchPickerOpen] = useState(false);
+  const [batchPickerQuery, setBatchPickerQuery] = useState("");
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
   const [managementTab, setManagementTab] = useState<"batches" | "clients">("batches");
   const [editBatchOpen, setEditBatchOpen] = useState<string | null>(null);
@@ -121,8 +123,8 @@ export default function ClientsPage() {
     batchId: "",
     signDate: new Date().toISOString().split("T")[0],
     entryPrice: "",
-    confirmedAccurate: false,
   });
+  const [pendingAddAction, setPendingAddAction] = useState<"close" | "continue" | null>(null);
   const [createBatchForm, setCreateBatchForm] = useState<{
     signDate: string;
     maturityDate: string;
@@ -365,6 +367,28 @@ export default function ClientsPage() {
     () => batches.find((b) => b.id === addForm.batchId) ?? null,
     [batches, addForm.batchId]
   );
+  const searchableBatches = useMemo(() => {
+    const query = batchPickerQuery.trim().toLowerCase();
+    return batches
+      .slice()
+      .sort((a, b) => {
+        const aTs = new Date((a as any).createdAt ?? a.signDate ?? 0).getTime();
+        const bTs = new Date((b as any).createdAt ?? b.signDate ?? 0).getTime();
+        return bTs - aTs;
+      })
+      .filter((b) => {
+        if (!query) return true;
+        return [
+          String(b.batchNumber ?? ""),
+          String(b.stockSymbol ?? ""),
+          String(b.stockName ?? ""),
+        ].some((v) => v.toLowerCase().includes(query));
+      });
+  }, [batches, batchPickerQuery]);
+  const selectedFilteredBatch = useMemo(
+    () => (batchFilter === "ALL" ? null : batches.find((b) => b.id === batchFilter) ?? null),
+    [batches, batchFilter]
+  );
 
   const addClientAmount = useMemo(
     () => Number(addForm.investment.replace(/[^0-9.]/g, "")) || 0,
@@ -380,11 +404,105 @@ export default function ClientsPage() {
     () => (addClientAmount > 0 ? addClientAmount / PRIORITY_RATIO : 0),
     [addClientAmount]
   );
+  const addClientConfirmSummary = useMemo(
+    () => [
+      { label: "客户姓名", value: addForm.name.trim() || "—" },
+      { label: "所属批次", value: selectedAddBatch?.batchNumber ?? "—", accent: "primary" as const },
+      { label: "客户入金", value: addClientAmount > 0 ? formatCurrency(addClientAmount) : "—" },
+      { label: "机构应入金", value: addClientInstitutionAmount > 0 ? formatCurrency(addClientInstitutionAmount) : "—", accent: "primary" as const },
+      { label: "客户入场价", value: addForm.entryPrice || "—" },
+      { label: "签约日期", value: addForm.signDate || "—" },
+    ],
+    [addClientAmount, addClientInstitutionAmount, addForm.entryPrice, addForm.name, addForm.signDate, selectedAddBatch?.batchNumber]
+  );
 
   const editingBatch = useMemo(
     () => (editBatchOpen ? batches.find((b) => b.id === editBatchOpen) ?? null : null),
     [batches, editBatchOpen]
   );
+
+  const validateAddClientForm = () => {
+    const errs: Record<string, string> = {};
+    if (!addForm.name.trim() || addForm.name.trim().length < 2) errs.name = "至少 2 个字符";
+    const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
+    if (!addForm.batchId) errs.batchId = "请选择所属批次";
+    if (!addForm.bdManager) errs.bdManager = "请选择 商务经理";
+    const entryPrice = Number(addForm.entryPrice.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) errs.entryPrice = "请填写有效的客户入场价";
+    setAddErrors(errs);
+    return { errs, numAmt, entryPrice };
+  };
+
+  const submitAddClient = async (mode: "close" | "continue") => {
+    const { errs, numAmt, entryPrice } = validateAddClientForm();
+    if (Object.keys(errs).length > 0) throw new Error("请先补全客户信息");
+    const mock = getMockData();
+    const batch = mock.batches.find((x) => x.id === addForm.batchId);
+    if (!batch) throw new Error("未找到所属批次");
+    const split = calculateProfitSplitRatio(numAmt);
+    const signYear = new Date(addForm.signDate).getUTCFullYear();
+    const newClientNo = nextClientNo(mock.batches, signYear);
+    const newClient: any = {
+      id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      clientNo: newClientNo,
+      subAccountNo: nextSubAccountNo(newClientNo),
+      name: addForm.name.trim(),
+      investmentAmount: numAmt,
+      initialInvestment: numAmt,
+      bdManager: addForm.bdManager,
+      signDate: new Date(addForm.signDate),
+      entryStockPrice: entryPrice,
+      status: ClientStatus.ACTIVE,
+      profitSplitClient: split.client * 100,
+      profitSplitInstitution: split.institution * 100,
+      signedVipThreshold: split.vipThreshold,
+      realtimePnL: 0,
+      estimatedExitAmount: numAmt,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      batchId: batch.id,
+      settledAt: null,
+    };
+    try {
+      commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+    } catch (err) {
+      if (err instanceof Error && err.name === "RevisionMismatchError") {
+        toast.error(err.message);
+      }
+      throw err instanceof Error ? err : new Error("新增客户失败");
+    }
+    try {
+      await triggerClientAddedAlert(batch as any, {
+        name: newClient.name,
+        investmentAmount: numAmt,
+        bdManager: addForm.bdManager,
+      });
+    } catch {}
+    setLastAddedSummary((xs) => [
+      ...xs,
+      { clientNo: newClient.clientNo, name: newClient.name, amount: numAmt, batchNumber: batch.batchNumber },
+    ]);
+    window.dispatchEvent(
+      new CustomEvent("risk-control:client-added", {
+        detail: { batchId: batch.id, client: newClient },
+      })
+    );
+    setTick((t) => t + 1);
+    if (mode === "close") {
+      setAddClientOpen(false);
+    } else {
+      setAddForm({
+        name: "",
+        investment: "",
+        bdManager: addForm.bdManager,
+        batchId: addForm.batchId,
+        signDate: addForm.signDate,
+        entryPrice: addForm.entryPrice,
+      });
+      setAddErrors({});
+    }
+  };
 
   useEffect(() => {
     if (!addClientOpen) return;
@@ -738,7 +856,6 @@ export default function ClientsPage() {
                     entryPrice: Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0) > 0
                       ? Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0).toFixed(4)
                       : "",
-                    confirmedAccurate: false,
                   });
                   setAddErrors({});
                   setLastAddedSummary([]);
@@ -854,11 +971,11 @@ export default function ClientsPage() {
       <Tabs value={managementTab} onValueChange={(value) => setManagementTab(value as "batches" | "clients")}>
         <div className="flex items-center justify-between gap-3">
           <TabsList className="grid w-full max-w-[360px] grid-cols-2">
-            <TabsTrigger value="batches" className="gap-1.5 text-xs">
+            <TabsTrigger value="batches" className="gap-1.5 text-xs text-white/80 data-[state=active]:text-white">
               <FolderKanban className="h-3.5 w-3.5" />
               批次管理
             </TabsTrigger>
-            <TabsTrigger value="clients" className="gap-1.5 text-xs">
+            <TabsTrigger value="clients" className="gap-1.5 text-xs text-white/80 data-[state=active]:text-white">
               <Users className="h-3.5 w-3.5" />
               客户管理
             </TabsTrigger>
@@ -887,7 +1004,7 @@ export default function ClientsPage() {
               <Button
                 variant={batchFilter === "ALL" ? "secondary" : "outline"}
                 size="sm"
-                className="text-[11px]"
+                className="text-[11px] text-white hover:text-white"
                 onClick={() => setBatchFilter("ALL")}
               >
                 查看全部批次
@@ -895,7 +1012,7 @@ export default function ClientsPage() {
               {allowCreateBatch && (
                 <Button
                   size="sm"
-                  className="gap-1.5 text-[11px]"
+                  className="gap-1.5 text-[11px] text-white hover:text-white"
                   onClick={() => {
                     const nextNum = String(batches.length + 1).padStart(3, "0");
                     const defaultYear = new Date().getUTCFullYear();
@@ -975,7 +1092,7 @@ export default function ClientsPage() {
                       <Button
                         variant={active ? "secondary" : "outline"}
                         size="sm"
-                        className="text-[11px]"
+                        className="text-[11px] text-white hover:text-white"
                         onClick={() => {
                           setBatchFilter(active ? "ALL" : tab.batchId);
                           setManagementTab("clients");
@@ -986,7 +1103,7 @@ export default function ClientsPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="text-[11px]"
+                        className="text-[11px] text-white hover:text-white"
                         onClick={() => {
                           setAddForm({
                             name: "",
@@ -997,7 +1114,6 @@ export default function ClientsPage() {
                             entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
                               ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
                               : "",
-                            confirmedAccurate: false,
                           });
                           setAddErrors({});
                           setAddClientOpen(true);
@@ -1011,7 +1127,7 @@ export default function ClientsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="text-[11px]"
+                        className="text-[11px] text-white hover:text-white"
                         onClick={() => setEditBatchOpen(batch.id)}
                       >
                         <Pencil className="h-3.5 w-3.5 mr-1" />
@@ -1028,6 +1144,54 @@ export default function ClientsPage() {
         </TabsContent>
 
         <TabsContent value="clients" className="space-y-6">
+          {selectedFilteredBatch && (
+            <Card className="border-primary/30 bg-primary/5">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground">当前正在查看批次</p>
+                  <p className="font-semibold truncate">
+                    {selectedFilteredBatch.batchNumber} · {selectedFilteredBatch.stockSymbol} {selectedFilteredBatch.stockName || ""}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-[11px] text-white hover:text-white"
+                    onClick={() => {
+                      setBatchFilter("ALL");
+                      setManagementTab("batches");
+                    }}
+                  >
+                    <ArrowRight className="mr-1 h-3.5 w-3.5 rotate-180" />
+                    返回批次管理
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-[11px] text-white hover:text-white"
+                    onClick={() => {
+                      setAddForm({
+                        name: "",
+                        investment: "",
+                        bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                        batchId: selectedFilteredBatch.id,
+                        signDate: new Date().toISOString().split("T")[0],
+                        entryPrice: Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0) > 0
+                          ? Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0).toFixed(4)
+                          : "",
+                      });
+                      setAddErrors({});
+                      setAddClientOpen(true);
+                    }}
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    给该批次新增客户
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           <Card className="border-border/50">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-2">
@@ -1035,7 +1199,7 @@ export default function ClientsPage() {
                   <Trophy className="h-4 w-4 text-warning" />
                   商务经理业绩排行榜
                 </CardTitle>
-                <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={() => setBdRankingOpen(true)}>
+                <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1 text-white hover:text-white" onClick={() => setBdRankingOpen(true)}>
                   <Users className="h-3 w-3" />
                   查看全部
                 </Button>
@@ -1117,7 +1281,7 @@ export default function ClientsPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 text-[11px]"
+                    className="h-8 text-[11px] text-white hover:text-white"
                     onClick={() => {
                       setBatchFilter("ALL");
                       setManagementTab("batches");
@@ -1454,6 +1618,8 @@ export default function ClientsPage() {
         onOpenChange={(o) => {
           if (!o) {
             setAddClientOpen(false);
+            setBatchPickerOpen(false);
+            setBatchPickerQuery("");
             setTick((t) => t + 1);
           } else {
             setAddClientOpen(true);
@@ -1487,7 +1653,7 @@ export default function ClientsPage() {
                   <Label className="text-[11px]">客户姓名 *</Label>
                   <Input
                     value={addForm.name}
-                    onChange={(e) => setAddForm({ ...addForm, name: e.target.value, confirmedAccurate: false })}
+                    onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
                     placeholder="例：张伟 / Jennifer Zhang"
                     className={cn(addErrors.name && "border-danger ring-danger/20")}
                   />
@@ -1503,12 +1669,12 @@ export default function ClientsPage() {
                         const v = e.target.value.replace(/[^0-9.]/g, "");
                         const parts = v.split(".");
                         const cleaned = parts[0] + (parts.length > 1 ? "." + parts.slice(1).join("") : "");
-                        setAddForm({ ...addForm, investment: cleaned, confirmedAccurate: false });
+                        setAddForm({ ...addForm, investment: cleaned });
                       }}
                       onBlur={() => {
                         const n = Number(addForm.investment.replace(/[^0-9.]/g, ""));
                         if (Number.isFinite(n)) {
-                          setAddForm({ ...addForm, investment: n.toFixed(2), confirmedAccurate: false });
+                          setAddForm({ ...addForm, investment: n.toFixed(2) });
                         }
                       }}
                       placeholder="500000.00"
@@ -1519,45 +1685,106 @@ export default function ClientsPage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px]">所属批次 *</Label>
-                  <Select
-                    value={addForm.batchId || ""}
-                    onValueChange={(v) => {
-                      const batch = batches.find((x) => x.id === v);
-                      setAddForm({
-                        ...addForm,
-                        batchId: v,
-                        entryPrice: Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0) > 0
-                          ? Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0).toFixed(4)
-                          : "",
-                        confirmedAccurate: false,
-                      });
-                    }}
-                  >
-                    <SelectTrigger className={cn(addErrors.batchId && "border-danger ring-danger/20")}>
-                      <SelectValue placeholder="选择要加入的批次" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {batches.map((b) => (
-                        <SelectItem key={b.id} value={b.id}>
-                          <span className="flex items-center gap-2">
-                            <span className="font-mono text-[10px] text-muted-foreground">{b.batchNumber}</span>
-                            <span className="font-semibold">{b.stockSymbol}</span>
-                            <span className="text-muted-foreground text-xs">{b.stockName}</span>
-                            <Badge variant="outline" className="ml-auto font-mono text-[9px]">
-                              {b.clients?.length ?? 0} 位
-                            </Badge>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex min-h-10 w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm ring-offset-background transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+                        addErrors.batchId && "border-danger ring-danger/20"
+                      )}
+                      onClick={() => setBatchPickerOpen((v) => !v)}
+                    >
+                      {selectedAddBatch ? (
+                        <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
+                          <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                            {selectedAddBatch.batchNumber}
                           </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                          <span className="shrink-0 font-semibold">{selectedAddBatch.stockSymbol}</span>
+                          <span className="min-w-0 truncate text-xs text-muted-foreground">
+                            {selectedAddBatch.stockName}
+                          </span>
+                          <Badge variant="outline" className="ml-auto shrink-0 font-mono text-[9px]">
+                            {selectedAddBatch.clients?.length ?? 0} 位
+                          </Badge>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">选择要加入的批次</span>
+                      )}
+                      <ChevronDown className={cn("ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform", batchPickerOpen && "rotate-180")} />
+                    </button>
+
+                    {batchPickerOpen && (
+                      <div className="absolute z-50 mt-2 w-full rounded-xl border border-border/70 bg-popover p-2 shadow-xl">
+                        <div className="relative mb-2">
+                          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={batchPickerQuery}
+                            onChange={(e) => setBatchPickerQuery(e.target.value)}
+                            placeholder="搜索批次号 / 股票代码 / 名称"
+                            className="h-9 pl-8 text-xs"
+                            autoFocus
+                          />
+                        </div>
+                        <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                          {searchableBatches.length === 0 ? (
+                            <div className="rounded-lg px-3 py-6 text-center text-xs text-muted-foreground">
+                              没有匹配的批次
+                            </div>
+                          ) : (
+                            searchableBatches.map((b) => (
+                              <button
+                                key={b.id}
+                                type="button"
+                                className={cn(
+                                  "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-accent",
+                                  addForm.batchId === b.id && "bg-primary/10 ring-1 ring-primary/30"
+                                )}
+                                onClick={() => {
+                                  setAddForm({
+                                    ...addForm,
+                                    batchId: b.id,
+                                    entryPrice: Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0) > 0
+                                      ? Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0).toFixed(4)
+                                      : "",
+                                  });
+                                  setBatchPickerOpen(false);
+                                  setBatchPickerQuery("");
+                                }}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                                      {b.batchNumber}
+                                    </span>
+                                    <span className="shrink-0 font-semibold text-sm">{b.stockSymbol}</span>
+                                  </div>
+                                  <p className="truncate text-[11px] text-muted-foreground">{b.stockName}</p>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {formatDate((b as any).createdAt ?? b.signDate)}
+                                  </span>
+                                  <Badge variant="outline" className="font-mono text-[9px]">
+                                    {b.clients?.length ?? 0} 位
+                                  </Badge>
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                        <p className="mt-2 px-1 text-[10px] text-muted-foreground">
+                          默认按创建时间倒序排列，最新创建的批次在最上面。
+                        </p>
+                      </div>
+                    )}
+                  </div>
                   {addErrors.batchId && <p className="text-[10px] text-danger font-mono">{addErrors.batchId}</p>}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px]">商务经理*</Label>
                   <Select
                     value={addForm.bdManager || ""}
-                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v, confirmedAccurate: false })}
+                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v })}
                     disabled={!!bdManagerFullName}
                   >
                     <SelectTrigger className={cn(addErrors.bdManager && "border-danger ring-danger/20")}>
@@ -1576,7 +1803,7 @@ export default function ClientsPage() {
                   <Input
                     type="date"
                     value={addForm.signDate}
-                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value, confirmedAccurate: false })}
+                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
                   />
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
@@ -1585,7 +1812,7 @@ export default function ClientsPage() {
                     type="number"
                     step="0.0001"
                     value={addForm.entryPrice}
-                    onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value, confirmedAccurate: false })}
+                    onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value })}
                     placeholder="默认带出批次建仓价，也可手动改成更早锁定给客户的认购价"
                     className={cn(addErrors.entryPrice && "border-danger ring-danger/20", "font-mono tabular-nums")}
                   />
@@ -1629,21 +1856,13 @@ export default function ClientsPage() {
               </div>
 
               <div className="rounded-md border border-border/60 bg-background/40 p-3 space-y-2">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <Checkbox
-                    checked={addForm.confirmedAccurate}
-                    onCheckedChange={(checked) => setAddForm({ ...addForm, confirmedAccurate: checked === true })}
-                    className="mt-0.5"
-                  />
-                  <span className="text-[11px] leading-5 text-foreground/85">
-                    我已核对该客户的
-                    <span className="font-semibold">所属批次、客户入金、机构应入金、客户入场价</span>
-                    ，确认无误后再保存并进入下一位客户。
-                  </span>
-                </label>
-                {addErrors.confirmedAccurate && (
-                  <p className="text-[10px] text-danger font-mono">{addErrors.confirmedAccurate}</p>
-                )}
+                <p className="text-[11px] leading-5 text-foreground/85">
+                  点击
+                  <span className="font-semibold">保存</span>
+                  或
+                  <span className="font-semibold">保存并继续下一位</span>
+                  后，系统会弹出二次确认卡片，再次核对所属批次、客户入金、机构应入金和客户入场价。
+                </p>
               </div>
             </div>
 
@@ -1691,101 +1910,48 @@ export default function ClientsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setAddClientOpen(false);
-                  setTick((t) => t + 1);
+                  const { errs } = validateAddClientForm();
+                  if (Object.keys(errs).length > 0) return;
+                  setPendingAddAction("close");
                 }}
                 className="text-[11px]"
               >
-                完成并关闭
+                保存
               </Button>
               <Button
                 size="sm"
                 className="gap-1.5 text-[11px]"
-                onClick={async () => {
-                  const errs: Record<string, string> = {};
-                  if (!addForm.name.trim() || addForm.name.trim().length < 2) errs.name = "至少 2 个字符";
-                  const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, ""));
-                  if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
-                  if (!addForm.batchId) errs.batchId = "请选择所属批次";
-                  if (!addForm.bdManager) errs.bdManager = "请选择 商务经理";
-                  const entryPrice = Number(addForm.entryPrice.replace(/[^0-9.]/g, ""));
-                  if (!Number.isFinite(entryPrice) || entryPrice <= 0) errs.entryPrice = "请填写有效的客户入场价";
-                  if (!addForm.confirmedAccurate) errs.confirmedAccurate = "请先确认本次录入数据无误";
-                  setAddErrors(errs);
+                onClick={() => {
+                  const { errs } = validateAddClientForm();
                   if (Object.keys(errs).length > 0) return;
-                  const mock = getMockData();
-                  const batch = mock.batches.find((x) => x.id === addForm.batchId);
-                  if (!batch) return;
-                  const split = calculateProfitSplitRatio(numAmt);
-                  const signYear = new Date(addForm.signDate).getUTCFullYear();
-                  const newClientNo = nextClientNo(mock.batches, signYear);
-                  const newClient: any = {
-                    id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                    clientNo: newClientNo,
-                    subAccountNo: nextSubAccountNo(newClientNo),
-                    name: addForm.name.trim(),
-                    investmentAmount: numAmt,
-                    initialInvestment: numAmt,
-                    bdManager: addForm.bdManager,
-                    signDate: new Date(addForm.signDate),
-                    entryStockPrice: entryPrice,
-                    status: ClientStatus.ACTIVE,
-                    profitSplitClient: split.client * 100,
-                    profitSplitInstitution: split.institution * 100,
-                    signedVipThreshold: split.vipThreshold,
-                    realtimePnL: 0,
-                    estimatedExitAmount: numAmt,
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                    batchId: batch.id,
-                    settledAt: null,
-                  };
-                  try {
-                    commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
-                  } catch (err) {
-                    if (err instanceof Error && err.name === "RevisionMismatchError") {
-                      toast.error(err.message);
-                    } else {
-                      setAddErrors({ investment: err instanceof Error ? err.message : "新增客户失败" });
-                    }
-                    return;
-                  }
-                  try {
-                    await triggerClientAddedAlert(batch as any, {
-                      name: newClient.name,
-                      investmentAmount: numAmt,
-                      bdManager: addForm.bdManager,
-                    });
-                  } catch {}
-                  setLastAddedSummary((xs) => [
-                    ...xs,
-                    { clientNo: newClient.clientNo, name: newClient.name, amount: numAmt, batchNumber: batch.batchNumber },
-                  ]);
-                  window.dispatchEvent(
-                    new CustomEvent("risk-control:client-added", {
-                      detail: { batchId: batch.id, client: newClient },
-                    })
-                  );
-                  setTick((t) => t + 1);
-                  setAddForm({
-                    name: "",
-                    investment: "",
-                    bdManager: addForm.bdManager,
-                    batchId: addForm.batchId,
-                    signDate: addForm.signDate,
-                    entryPrice: addForm.entryPrice,
-                    confirmedAccurate: false,
-                  });
-                  setAddErrors({});
+                  setPendingAddAction("continue");
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                确认无误并进入下一位
+                保存并继续下一位
               </Button>
             </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={pendingAddAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingAddAction(null);
+        }}
+        tone="info"
+        title={pendingAddAction === "close" ? "确认保存当前客户？" : "确认保存当前客户并继续录入下一位？"}
+        description="请再次核对本次客户录入信息。确认后系统会立即写入批次账本。"
+        summary={addClientConfirmSummary}
+        confirmText={pendingAddAction === "close" ? "确认保存" : "确认保存并继续"}
+        cancelText="返回修改"
+        onConfirm={async () => {
+          if (!pendingAddAction) return;
+          await submitAddClient(pendingAddAction);
+          setPendingAddAction(null);
+        }}
+      />
 
       {/* ===== 编辑客户 Dialog ===== */}
       <Dialog
