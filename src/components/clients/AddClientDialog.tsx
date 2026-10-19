@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -35,6 +36,8 @@ import {
   addClientPosition,
   HIGH_INVESTMENT_THRESHOLD,
   MIN_INVESTMENT_AMOUNT,
+  PRIORITY_RATIO,
+  SUBORDINATE_RATIO,
 } from "@/lib/riskEngine";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getMockData, commitBatchFinance, nextClientNo } from "@/lib/mockData";
@@ -50,6 +53,7 @@ import {
   Users,
   Sparkles,
   Shield,
+  TrendingUp,
 } from "lucide-react";
 
 interface AddClientDialogProps {
@@ -83,6 +87,8 @@ export function AddClientDialog({
   const [signDate, setSignDate] = useState(
     new Date().toISOString().split("T")[0]
   );
+  const [entryPrice, setEntryPrice] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const numAmount = useMemo(
@@ -91,6 +97,14 @@ export function AddClientDialog({
   );
 
   const split = useMemo(() => calculateProfitSplitRatio(numAmount), [numAmount]);
+  const institutionAmount = useMemo(
+    () => (numAmount > 0 ? (numAmount / PRIORITY_RATIO) * SUBORDINATE_RATIO : 0),
+    [numAmount]
+  );
+  const totalCapital = useMemo(
+    () => (numAmount > 0 ? numAmount / PRIORITY_RATIO : 0),
+    [numAmount]
+  );
 
   useEffect(() => {
     if (!open) {
@@ -99,6 +113,8 @@ export function AddClientDialog({
         setInvestmentAmount("");
         setBdManager(lockedBdManager || "");
         setSignDate(new Date().toISOString().split("T")[0]);
+        setEntryPrice("");
+        setConfirmed(false);
         setErrors({});
       }, 200);
     } else {
@@ -106,7 +122,19 @@ export function AddClientDialog({
         setBdManager(lockedBdManager);
       }
     }
-  }, [open, lockedBdManager]);
+  }, [open, lockedBdManager, bdManager]);
+
+  const defaultBatchEntryPrice = useMemo(() => {
+    const mock = getMockData();
+    const batch = mock.batches.find((b) => b.id === batchId);
+    return Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0);
+  }, [batchId]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!defaultBatchEntryPrice || defaultBatchEntryPrice <= 0) return;
+    setEntryPrice((prev) => prev || defaultBatchEntryPrice.toFixed(4));
+  }, [open, defaultBatchEntryPrice]);
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
@@ -121,6 +149,11 @@ export function AddClientDialog({
     }
     if (!bdManager) e.bdManager = "请选择负责的 商务经理（必填）";
     if (!signDate) e.signDate = "请选择签约日期";
+    const parsedEntryPrice = Number(entryPrice.replace(/[^\d.]/g, ""));
+    if (!Number.isFinite(parsedEntryPrice) || parsedEntryPrice <= 0) {
+      e.entryPrice = "请填写有效的客户入场价";
+    }
+    if (!confirmed) e.confirmed = "请先确认客户本金、机构应入金和入场价无误";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -138,6 +171,7 @@ export function AddClientDialog({
       investmentAmount: numAmount,
       bdManager,
       signDate: new Date(signDate),
+      entryStockPrice: Number(entryPrice.replace(/[^\d.]/g, "")),
       status: ClientStatus.ACTIVE,
       profitSplitClient: splitRatio.client * 100,
       profitSplitInstitution: splitRatio.institution * 100,
@@ -339,6 +373,33 @@ export function AddClientDialog({
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-lg bg-background/50 p-3 border border-border/60">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+                    客户入金
+                  </p>
+                  <p className="text-lg font-bold font-mono text-foreground">
+                    {formatCurrency(numAmount)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-background/50 p-3 border border-border/60">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+                    机构应入金
+                  </p>
+                  <p className="text-lg font-bold font-mono text-primary">
+                    {formatCurrency(institutionAmount)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-background/50 p-3 border border-border/60">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+                    合计建仓本金
+                  </p>
+                  <p className="text-lg font-bold font-mono text-success">
+                    {formatCurrency(totalCapital)}
+                  </p>
+                </div>
+              </div>
+
               <div className="flex items-start gap-2 pt-2 border-t border-border/40 text-[11px] text-muted-foreground">
                 <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <div className="space-y-0.5">
@@ -354,6 +415,31 @@ export function AddClientDialog({
               </div>
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="entry-price" className="text-xs flex items-center gap-1.5">
+              <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
+              客户入场价 <span className="text-danger">*</span>
+            </Label>
+            <Input
+              id="entry-price"
+              type="number"
+              step="0.0001"
+              value={entryPrice}
+              onChange={(e) => setEntryPrice(e.target.value)}
+              className={cn(errors.entryPrice && "border-destructive focus-visible:ring-destructive", "font-mono")}
+            />
+            {errors.entryPrice ? (
+              <p className="text-[11px] text-danger flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />
+                {errors.entryPrice}
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                默认取该批次建仓价 {defaultBatchEntryPrice > 0 ? formatCurrency(defaultBatchEntryPrice) : "—"}；你也可以手动改成更早锁定给客户的认购价。
+              </p>
+            )}
+          </div>
 
           {/* BD & DATE */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -420,6 +506,27 @@ export function AddClientDialog({
                 </p>
               )}
             </div>
+          </div>
+
+          <div className="rounded-lg border border-border/60 bg-secondary/20 p-3 space-y-2">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <Checkbox
+                checked={confirmed}
+                onCheckedChange={(checked) => setConfirmed(checked === true)}
+                className="mt-0.5"
+              />
+              <span className="text-[11px] leading-5 text-foreground/85">
+                我已核对本次录入的
+                <span className="font-semibold">客户入金、机构应入金、客户入场价</span>
+                与所属批次，确认无误后再进入下一位客户。
+              </span>
+            </label>
+            {errors.confirmed && (
+              <p className="text-[11px] text-danger flex items-center gap-1">
+                <AlertCircle className="h-3 w-3" />
+                {errors.confirmed}
+              </p>
+            )}
           </div>
         </div>
 

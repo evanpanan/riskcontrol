@@ -76,7 +76,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import {
@@ -275,6 +275,18 @@ interface SettingsFormState {
   realtimeTickIntervalSec: number;
 }
 
+type SettingsFieldName =
+  | "warningThreshold"
+  | "marginThreshold"
+  | "priorityRatio"
+  | "subordinateRatio"
+  | "emailWebhook"
+  | "whatsappWebhook"
+  | "defaultRiskEmail"
+  | "emergencyPhone"
+  | "apiKey"
+  | "realtimeTickIntervalSec";
+
 const DEFAULT_FORM: SettingsFormState = {
   warningThreshold: 15,
   marginThreshold: 20,
@@ -297,6 +309,23 @@ const DEFAULT_FORM: SettingsFormState = {
   realtimeTickEnabled: true,
   realtimeTickIntervalSec: 8,
 };
+
+type SettingsFieldProps = Omit<ComponentProps<typeof Input>, "name" | "value" | "defaultValue" | "onChange"> & {
+  name: SettingsFieldName;
+  value: string | number;
+  onValueChange: (name: SettingsFieldName, value: string) => void;
+};
+
+function SettingsField({ name, value, onValueChange, ...props }: SettingsFieldProps) {
+  return (
+    <Input
+      {...props}
+      name={name}
+      value={value}
+      onChange={(e) => onValueChange(name, e.target.value)}
+    />
+  );
+}
 
 export default function SettingsPage() {
   const { user: currentUser, role: currentRole } = useAuthContext();
@@ -1137,14 +1166,32 @@ export default function SettingsPage() {
     setConfirmation({ title: "确认清空收件人？通知将暂停发送给名单中的人员。", run: () => setRecipients([]) });
   };
 
-  const Field = (props: any) => (
-    <Input
-      {...props}
-      onChange={(e: any) => setForm({ ...form, [props.name as keyof SettingsFormState]: e.target.value } as any)}
-      defaultValue={undefined}
-      value={(form as any)[props.name] ?? props.defaultValue ?? ""}
-    />
-  );
+  const handleSettingsFieldChange = useCallback((name: SettingsFieldName, value: string) => {
+    setForm((prev) => {
+      switch (name) {
+        case "warningThreshold":
+          return { ...prev, warningThreshold: value === "" ? 0 : Number(value) };
+        case "marginThreshold":
+          return { ...prev, marginThreshold: value === "" ? 0 : Number(value) };
+        case "priorityRatio":
+          return { ...prev, priorityRatio: value === "" ? 0 : Number(value) };
+        case "subordinateRatio":
+          return { ...prev, subordinateRatio: value === "" ? 0 : Number(value) };
+        case "realtimeTickIntervalSec":
+          return { ...prev, realtimeTickIntervalSec: value === "" ? 0 : Number(value) };
+        case "emailWebhook":
+          return { ...prev, emailWebhook: value };
+        case "whatsappWebhook":
+          return { ...prev, whatsappWebhook: value };
+        case "defaultRiskEmail":
+          return { ...prev, defaultRiskEmail: value };
+        case "emergencyPhone":
+          return { ...prev, emergencyPhone: value };
+        case "apiKey":
+          return { ...prev, apiKey: value };
+      }
+    });
+  }, []);
 
   const enabledCount = recipients.filter(r => r.enabled).length;
 
@@ -1248,7 +1295,13 @@ export default function SettingsPage() {
               预警阈值（跌幅）
             </Label>
             <div className="relative">
-              <Field type="number" name="warningThreshold" className="font-mono font-semibold pr-10" />
+              <SettingsField
+                type="number"
+                name="warningThreshold"
+                value={form.warningThreshold}
+                onValueChange={handleSettingsFieldChange}
+                className="font-mono font-semibold pr-10"
+              />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
@@ -1263,7 +1316,13 @@ export default function SettingsPage() {
               补仓阈值（跌幅）
             </Label>
             <div className="relative">
-              <Field type="number" name="marginThreshold" className="font-mono font-semibold pr-10 text-danger" />
+              <SettingsField
+                type="number"
+                name="marginThreshold"
+                value={form.marginThreshold}
+                onValueChange={handleSettingsFieldChange}
+                className="font-mono font-semibold pr-10 text-danger"
+              />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
@@ -1281,7 +1340,14 @@ export default function SettingsPage() {
               </span>
             </Label>
             <div className="relative">
-              <Field type="number" name="priorityRatio" className="font-mono font-semibold pr-10" disabled />
+              <SettingsField
+                type="number"
+                name="priorityRatio"
+                value={form.priorityRatio}
+                onValueChange={handleSettingsFieldChange}
+                className="font-mono font-semibold pr-10"
+                disabled
+              />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
@@ -1299,7 +1365,14 @@ export default function SettingsPage() {
               </span>
             </Label>
             <div className="relative">
-              <Field type="number" name="subordinateRatio" className="font-mono font-semibold pr-10" disabled />
+              <SettingsField
+                type="number"
+                name="subordinateRatio"
+                value={form.subordinateRatio}
+                onValueChange={handleSettingsFieldChange}
+                className="font-mono font-semibold pr-10"
+                disabled
+              />
               <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
                 %
               </span>
@@ -1685,9 +1758,11 @@ export default function SettingsPage() {
                 <Bell className="h-3 w-3" /> 刷新周期（秒）
               </Label>
               <div className="relative">
-                <Field
+                <SettingsField
                   type="number"
                   name="realtimeTickIntervalSec"
+                  value={form.realtimeTickIntervalSec}
+                  onValueChange={handleSettingsFieldChange}
                   className="font-mono font-semibold pr-10"
                 />
                 <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm font-semibold">
@@ -1856,7 +1931,13 @@ export default function SettingsPage() {
               </Badge>
             )}
           </div>
-          <Field name="emailWebhook" placeholder="可选：留空使用服务端配置；自定义地址须由管理员在服务端授权" className="font-mono text-xs" />
+          <SettingsField
+            name="emailWebhook"
+            value={form.emailWebhook}
+            onValueChange={handleSettingsFieldChange}
+            placeholder="可选：留空使用服务端配置；自定义地址须由管理员在服务端授权"
+            className="font-mono text-xs"
+          />
         </div>
 
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
@@ -1890,17 +1971,33 @@ export default function SettingsPage() {
               </Badge>
             )}
           </div>
-          <Field name="whatsappWebhook" placeholder="可选：Make / n8n Webhook，不能直接填 Meta API 地址" className="font-mono text-xs" />
+          <SettingsField
+            name="whatsappWebhook"
+            value={form.whatsappWebhook}
+            onValueChange={handleSettingsFieldChange}
+            placeholder="可选：Make / n8n Webhook，不能直接填 Meta API 地址"
+            className="font-mono text-xs"
+          />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label className="text-xs">默认风控收件人</Label>
-            <Field name="defaultRiskEmail" className="text-xs font-mono" />
+            <SettingsField
+              name="defaultRiskEmail"
+              value={form.defaultRiskEmail}
+              onValueChange={handleSettingsFieldChange}
+              className="text-xs font-mono"
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">紧急联系人电话</Label>
-            <Field name="emergencyPhone" className="text-xs font-mono" />
+            <SettingsField
+              name="emergencyPhone"
+              value={form.emergencyPhone}
+              onValueChange={handleSettingsFieldChange}
+              className="text-xs font-mono"
+            />
           </div>
         </div>
 
@@ -2297,7 +2394,14 @@ export default function SettingsPage() {
             </div>
             <div>
               <Label className="text-xs">API Key</Label>
-              <Field type="password" name="apiKey" placeholder="••••••••••••••••" className="mt-1.5 font-mono text-xs" />
+              <SettingsField
+                type="password"
+                name="apiKey"
+                value={form.apiKey}
+                onValueChange={handleSettingsFieldChange}
+                placeholder="••••••••••••••••"
+                className="mt-1.5 font-mono text-xs"
+              />
             </div>
           </div>
         </div>

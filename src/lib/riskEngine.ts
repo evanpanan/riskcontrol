@@ -1016,7 +1016,7 @@ export function addClientPosition(batch: BatchLike, client: ClientLike): void {
   initializeBatchFinance(batch);
   if (batch.finance!.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再新增客户。");
   if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再新增客户。");
-  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  const price = client.entryStockPrice ?? batch.stockPriceAtStart ?? batch.currentStockPrice;
   if (!(price > 0)) throw new Error("当前成交价无效。");
   if (!Number.isFinite(client.investmentAmount) || client.investmentAmount <= 0) throw new Error("客户本金无效。");
   const capital = client.investmentAmount / PRIORITY_RATIO;

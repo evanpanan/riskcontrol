@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogClose,
@@ -24,8 +26,8 @@ import {
 import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
-import { formatCurrency, cn, formatDate, formatPercent } from "@/lib/utils";
-import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit } from "@/lib/riskEngine";
+import { formatCurrency, cn, formatDate, formatPercent, calculateTradingWindows } from "@/lib/utils";
+import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit, PRIORITY_RATIO, SUBORDINATE_RATIO, calculateBatchStatus, calculateCurrentMarketValue } from "@/lib/riskEngine";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { filterClientsByRole, type ClientLike, canCreateBatch } from "@/lib/authz/dataScope";
@@ -50,6 +52,7 @@ import {
   Calendar,
   Landmark,
   Layers,
+  FolderKanban,
   UserPlus as UserPlusIcon,
   CheckCircle2,
   Plus,
@@ -102,6 +105,8 @@ export default function ClientsPage() {
   const [tick, setTick] = useState(0);
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
+  const [managementTab, setManagementTab] = useState<"batches" | "clients">("batches");
+  const [editBatchOpen, setEditBatchOpen] = useState<string | null>(null);
   const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
   const [clientDetail, setClientDetail] = useState<string | null>(null);
   const [deleteClientConfirm, setDeleteClientConfirm] = useState<null | { id: string; batchId: string; name: string }>(null);
@@ -115,6 +120,8 @@ export default function ClientsPage() {
     bdManager: "",
     batchId: "",
     signDate: new Date().toISOString().split("T")[0],
+    entryPrice: "",
+    confirmedAccurate: false,
   });
   const [createBatchForm, setCreateBatchForm] = useState<{
     signDate: string;
@@ -137,6 +144,14 @@ export default function ClientsPage() {
   });
   const [createBatchFetchingQuote, setCreateBatchFetchingQuote] = useState(false);
   const [createBatchErrors, setCreateBatchErrors] = useState<Record<string, string>>({});
+  const [editBatchForm, setEditBatchForm] = useState({
+    batchNumber: "",
+    stockName: "",
+    signDate: "",
+    maturityDate: "",
+    currentStockPrice: "",
+  });
+  const [editBatchErrors, setEditBatchErrors] = useState<Record<string, string>>({});
   const LAST_BATCH_SYMBOL_KEY = "risk_control_last_batch_symbol_v1";
   const FORBIDDEN_SYMBOL_FOR_MEMORY = /XMAX/i;
   const rememberLastBatchSymbol = (sym: string): void => {
@@ -346,6 +361,57 @@ export default function ClientsPage() {
       }));
   }, [batches, isBdManager, bdManagerFullName]);
 
+  const selectedAddBatch = useMemo(
+    () => batches.find((b) => b.id === addForm.batchId) ?? null,
+    [batches, addForm.batchId]
+  );
+
+  const addClientAmount = useMemo(
+    () => Number(addForm.investment.replace(/[^0-9.]/g, "")) || 0,
+    [addForm.investment]
+  );
+
+  const addClientInstitutionAmount = useMemo(
+    () => (addClientAmount > 0 ? (addClientAmount / PRIORITY_RATIO) * SUBORDINATE_RATIO : 0),
+    [addClientAmount]
+  );
+
+  const addClientTotalCapital = useMemo(
+    () => (addClientAmount > 0 ? addClientAmount / PRIORITY_RATIO : 0),
+    [addClientAmount]
+  );
+
+  const editingBatch = useMemo(
+    () => (editBatchOpen ? batches.find((b) => b.id === editBatchOpen) ?? null : null),
+    [batches, editBatchOpen]
+  );
+
+  useEffect(() => {
+    if (!addClientOpen) return;
+    if (!selectedAddBatch) return;
+    setAddForm((prev) => {
+      const nextEntryPrice = Number(selectedAddBatch.stockPriceAtStart ?? selectedAddBatch.currentStockPrice ?? 0);
+      const shouldReplace =
+        !prev.entryPrice ||
+        prev.entryPrice === Number(selectedAddBatch.currentStockPrice ?? 0).toFixed(4) ||
+        prev.entryPrice === Number(selectedAddBatch.stockPriceAtStart ?? 0).toFixed(4);
+      if (!shouldReplace || !(nextEntryPrice > 0)) return prev;
+      return { ...prev, entryPrice: nextEntryPrice.toFixed(4) };
+    });
+  }, [addClientOpen, selectedAddBatch?.id]);
+
+  useEffect(() => {
+    if (!editingBatch) return;
+    setEditBatchForm({
+      batchNumber: String(editingBatch.batchNumber ?? ""),
+      stockName: String(editingBatch.stockName ?? ""),
+      signDate: editingBatch.signDate ? new Date(editingBatch.signDate).toISOString().split("T")[0] : "",
+      maturityDate: editingBatch.maturityDate ? new Date(editingBatch.maturityDate).toISOString().split("T")[0] : "",
+      currentStockPrice: Number(editingBatch.currentStockPrice ?? 0) > 0 ? Number(editingBatch.currentStockPrice).toFixed(4) : "",
+    });
+    setEditBatchErrors({});
+  }, [editingBatch]);
+
   const allClients = useMemo(() => {
     let result = roleFilteredClients as any[];
     if (batchFilter !== "ALL") {
@@ -548,14 +614,14 @@ export default function ClientsPage() {
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span className="px-2 py-0.5 rounded bg-primary/10 text-primary font-semibold">
-              客户关系
+              批次与客户
             </span>
             <span>/</span>
-            <span>客户管理</span>
+            <span>管理中心</span>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">客户管理中心</h1>
+          <h1 className="text-2xl font-bold tracking-tight">批次与客户管理中心</h1>
           <p className="text-sm text-muted-foreground">
-            统一管理所有批次的客户档案、投资记录与 商务经理分配
+            统一管理所有批次、客户档案、入场价格与商务经理分配
             {isBdManager && (
               <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-secondary/60 border border-border/60 text-xs font-mono">
               <EyeOff className="h-3 w-3" />
@@ -669,6 +735,10 @@ export default function ClientsPage() {
                     bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
                     batchId: batches[0]?.id ?? "",
                     signDate: new Date().toISOString().split("T")[0],
+                    entryPrice: Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0) > 0
+                      ? Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0).toFixed(4)
+                      : "",
+                    confirmedAccurate: false,
                   });
                   setAddErrors({});
                   setLastAddedSummary([]);
@@ -781,98 +851,286 @@ export default function ClientsPage() {
         </Card>
       </div>
 
-      {/* BD Ranking */}
-      <Card className="border-border/50">
+      <Tabs value={managementTab} onValueChange={(value) => setManagementTab(value as "batches" | "clients")}>
+        <div className="flex items-center justify-between gap-3">
+          <TabsList className="grid w-full max-w-[360px] grid-cols-2">
+            <TabsTrigger value="batches" className="gap-1.5 text-xs">
+              <FolderKanban className="h-3.5 w-3.5" />
+              批次管理
+            </TabsTrigger>
+            <TabsTrigger value="clients" className="gap-1.5 text-xs">
+              <Users className="h-3.5 w-3.5" />
+              客户管理
+            </TabsTrigger>
+          </TabsList>
+          {managementTab === "clients" && (
+            <p className="hidden sm:block text-[11px] text-muted-foreground">
+              直接切到客户管理，不用再从批次区往下翻。
+            </p>
+          )}
+        </div>
+
+        <TabsContent value="batches" className="space-y-6">
+          <Card className="border-border/50">
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Trophy className="h-4 w-4 text-warning" />
-              商务经理业绩排行榜
-            </CardTitle>
-            <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={() => setBdRankingOpen(true)}>
-              <Users className="h-3 w-3" />
-              查看全部
-            </Button>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <FolderKanban className="h-4 w-4 text-primary" />
+                批次管理
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                先选批次，再管客户。可以快速查看每个批次的价格、客户数和风险状态，并一键切换客户列表筛选。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={batchFilter === "ALL" ? "secondary" : "outline"}
+                size="sm"
+                className="text-[11px]"
+                onClick={() => setBatchFilter("ALL")}
+              >
+                查看全部批次
+              </Button>
+              {allowCreateBatch && (
+                <Button
+                  size="sm"
+                  className="gap-1.5 text-[11px]"
+                  onClick={() => {
+                    const nextNum = String(batches.length + 1).padStart(3, "0");
+                    const defaultYear = new Date().getUTCFullYear();
+                    const today = new Date();
+                    const signStr = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())).toISOString().split("T")[0];
+                    const maturityBase = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+                    maturityBase.setUTCFullYear(maturityBase.getUTCFullYear() + 2);
+                    maturityBase.setUTCDate(maturityBase.getUTCDate() - 1);
+                    const matStr = maturityBase.toISOString().split("T")[0];
+                    const initialSymbol = (() => {
+                      const remembered = readLastBatchSymbol();
+                      if (remembered) return remembered;
+                      return (typeof window !== "undefined" && getLiveQuoteSettings()?.symbol?.trim().toUpperCase()) || "";
+                    })();
+                    setCreateBatchForm({
+                      signDate: signStr,
+                      maturityDate: matStr,
+                      batchNumber: `BATCH-${defaultYear}-${nextNum}`,
+                      stockSymbol: initialSymbol,
+                      currentStockPrice: "",
+                    });
+                    setCreateBatchErrors({});
+                    setCreateBatchOpen(true);
+                    setCreateBatchFetchingQuote(false);
+                  }}
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  新建批次
+                </Button>
+              )}
+            </div>
           </div>
-          <p className="text-[10.5px] text-muted-foreground mt-1">
-            前三名头像右上角自动佩戴 🥇金 / 🥈银 / 🥉铜 皇冠徽章，点击「查看全部」浏览完整榜单及占比进度条。
-          </p>
         </CardHeader>
         <CardContent className="pt-0">
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {(() => {
-              const ranking = Object.entries(stats.bdStats).sort((a, b) => b[1].amount - a[1].amount);
-              const medalColors = [
-                "text-amber-500",
-                "text-slate-300",
-                "text-orange-600",
-              ];
-              const medalBg = [
-                "bg-amber-500/15 border-amber-500/40 shadow-[inset_0_0_0_1px_hsl(var(--color-amber-500,.969)#f59e0b)/0.15]",
-                "bg-slate-300/10 border-slate-300/40",
-                "bg-orange-500/12 border-orange-500/40",
-              ];
-              const cardChroma = [
-                "from-amber-500/20 via-transparent to-transparent",
-                "from-slate-200/15 via-transparent to-transparent",
-                "from-orange-500/20 via-transparent to-transparent",
-              ];
-              return ranking.map(([bd, s], idx) => {
-                const top3 = idx < 3;
-                return (
-                  <div
-                    key={bd}
-                    className={cn(
-                      "rounded-xl border p-4 hover:bg-secondary/50 transition-colors relative overflow-hidden",
-                      top3
-                        ? `${medalBg[idx]} hover:brightness-105`
-                        : "border-border/50 bg-secondary/30"
-                    )}
-                  >
-                    {top3 && <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br opacity-40", cardChroma[idx])} />}
-                    <div className="relative flex items-center gap-3 mb-3">
-                      <div className="relative shrink-0">
-                        <ClientAvatar name={bd} size="md" />
-                        {top3 && (
-                          <span
-                            className="absolute -top-2 -right-2 h-6 w-6 rounded-full border-2 border-background bg-background flex items-center justify-center shadow-md"
-                            title={`排名第 ${idx + 1}`}
-                          >
-                            <Crown className={cn("h-3.5 w-3.5", medalColors[idx])} strokeWidth={2.25} />
-                          </span>
-                        )}
-                        {!top3 && (
-                          <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full border border-border/60 bg-background text-[9px] font-mono text-muted-foreground flex items-center justify-center shadow-sm">
-                            {idx + 1}
-                          </span>
-                        )}
-                      </div>
-                      <div className="relative min-w-0 flex-1">
-                        <Link href={`/bd/${encodeURIComponent(bd)}`} className="text-xs font-semibold hover:text-primary hover:underline block truncate">{bd}</Link>
-                        <p className="text-[10px] text-muted-foreground">
-                          {s.count} 位客户
-                        </p>
-                      </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {batchTabs.map((tab) => {
+              const batch = batches.find((b) => b.id === tab.batchId);
+              if (!batch) return null;
+              const active = batchFilter === tab.batchId;
+              return (
+                <div
+                  key={tab.batchId}
+                  className={cn(
+                    "rounded-xl border p-4 transition-colors hover:border-primary/40 hover:bg-secondary/30",
+                    active ? "border-primary/50 bg-primary/5" : "border-border/50 bg-card"
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] text-muted-foreground truncate">{batch.batchNumber}</p>
+                      <p className="text-sm font-semibold truncate">{batch.stockSymbol} {batch.stockName || ""}</p>
                     </div>
-                    <p className="relative font-mono font-bold text-sm text-gradient-primary">
-                      {formatCurrency(s.amount)}
-                    </p>
+                    <Badge variant={active ? "primary" : "outline"} className="font-mono text-[10px]">
+                      {tab.clientCount} 位
+                    </Badge>
                   </div>
-                );
-              });
-            })()}
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-[11px]">
+                    <div>
+                      <p className="text-muted-foreground mb-1">批次建仓价</p>
+                      <p className="font-mono font-semibold">{formatCurrency(batch.stockPriceAtStart ?? 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground mb-1">当前价格</p>
+                      <p className="font-mono font-semibold">{formatCurrency(batch.currentStockPrice ?? 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground mb-1">签约日期</p>
+                      <p className="font-mono font-semibold">{formatDate(batch.signDate)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground mb-1">优先池</p>
+                      <p className="font-mono font-semibold">{formatCurrency(batch.priorityAmount ?? 0)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant={active ? "secondary" : "outline"}
+                        size="sm"
+                        className="text-[11px]"
+                        onClick={() => {
+                          setBatchFilter(active ? "ALL" : tab.batchId);
+                          setManagementTab("clients");
+                        }}
+                      >
+                        {active ? "查看全部客户" : "查看该批次客户"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-[11px]"
+                        onClick={() => {
+                          setAddForm({
+                            name: "",
+                            investment: "",
+                            bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                            batchId: batch.id,
+                            signDate: new Date().toISOString().split("T")[0],
+                            entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
+                              ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
+                              : "",
+                            confirmedAccurate: false,
+                          });
+                          setAddErrors({});
+                          setAddClientOpen(true);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5 mr-1" />
+                        新增客户
+                      </Button>
+                    </div>
+                    {allowCreateBatch && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-[11px]"
+                        onClick={() => setEditBatchOpen(batch.id)}
+                      >
+                        <Pencil className="h-3.5 w-3.5 mr-1" />
+                        编辑基础信息
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </CardContent>
-      </Card>
+          </Card>
+        </TabsContent>
 
-      {/* Clients List */}
-      <Card className="border-border/50" id="clients-table">
+        <TabsContent value="clients" className="space-y-6">
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-warning" />
+                  商务经理业绩排行榜
+                </CardTitle>
+                <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={() => setBdRankingOpen(true)}>
+                  <Users className="h-3 w-3" />
+                  查看全部
+                </Button>
+              </div>
+              <p className="text-[10.5px] text-muted-foreground mt-1">
+                前三名头像右上角自动佩戴 🥇金 / 🥈银 / 🥉铜 皇冠徽章，点击「查看全部」浏览完整榜单及占比进度条。
+              </p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                {(() => {
+                  const ranking = Object.entries(stats.bdStats).sort((a, b) => b[1].amount - a[1].amount);
+                  const medalColors = ["text-amber-500", "text-slate-300", "text-orange-600"];
+                  const medalBg = [
+                    "bg-amber-500/15 border-amber-500/40 shadow-[inset_0_0_0_1px_hsl(var(--color-amber-500,.969)#f59e0b)/0.15]",
+                    "bg-slate-300/10 border-slate-300/40",
+                    "bg-orange-500/12 border-orange-500/40",
+                  ];
+                  const cardChroma = [
+                    "from-amber-500/20 via-transparent to-transparent",
+                    "from-slate-200/15 via-transparent to-transparent",
+                    "from-orange-500/20 via-transparent to-transparent",
+                  ];
+                  return ranking.map(([bd, s], idx) => {
+                    const top3 = idx < 3;
+                    return (
+                      <div
+                        key={bd}
+                        className={cn(
+                          "rounded-xl border p-4 hover:bg-secondary/50 transition-colors relative overflow-hidden",
+                          top3 ? `${medalBg[idx]} hover:brightness-105` : "border-border/50 bg-secondary/30"
+                        )}
+                      >
+                        {top3 && <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br opacity-40", cardChroma[idx])} />}
+                        <div className="relative flex items-center gap-3 mb-3">
+                          <div className="relative shrink-0">
+                            <ClientAvatar name={bd} size="md" />
+                            {top3 && (
+                              <span
+                                className="absolute -top-2 -right-2 h-6 w-6 rounded-full border-2 border-background bg-background flex items-center justify-center shadow-md"
+                                title={`排名第 ${idx + 1}`}
+                              >
+                                <Crown className={cn("h-3.5 w-3.5", medalColors[idx])} strokeWidth={2.25} />
+                              </span>
+                            )}
+                            {!top3 && (
+                              <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full border border-border/60 bg-background text-[9px] font-mono text-muted-foreground flex items-center justify-center shadow-sm">
+                                {idx + 1}
+                              </span>
+                            )}
+                          </div>
+                          <div className="relative min-w-0 flex-1">
+                            <Link href={`/bd/${encodeURIComponent(bd)}`} className="text-xs font-semibold hover:text-primary hover:underline block truncate">{bd}</Link>
+                            <p className="text-[10px] text-muted-foreground">{s.count} 位客户</p>
+                          </div>
+                        </div>
+                        <p className="relative font-mono font-bold text-sm text-gradient-primary">
+                          {formatCurrency(s.amount)}
+                        </p>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Clients List */}
+          <Card className="border-border/50" id="clients-table">
         <CardHeader className="pb-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              客户总表（{stats.totalClients} 位自然人 · {stats.totalSubAccounts} 个子账户）
-            </CardTitle>
+            <div className="space-y-2">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                客户总表（{stats.totalClients} 位自然人 · {stats.totalSubAccounts} 个子账户）
+              </CardTitle>
+              {batchFilter !== "ALL" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-[11px]"
+                    onClick={() => {
+                      setBatchFilter("ALL");
+                      setManagementTab("batches");
+                    }}
+                  >
+                    返回批次管理
+                  </Button>
+                  <Badge variant="primary" className="text-[10px] font-mono">
+                    当前筛选批次：{batchTabs.find((b) => b.batchId === batchFilter)?.batchNumber ?? batchFilter}
+                  </Badge>
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
@@ -1187,7 +1445,9 @@ export default function ClientsPage() {
             </div>
           </div>
         </CardContent>
-      </Card>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={addClientOpen}
@@ -1209,7 +1469,7 @@ export default function ClientsPage() {
               <div>
                 <p className="font-bold">批量新增客户</p>
                 <DialogDescription className="text-[11px] text-muted-foreground mt-0.5">
-                  连续录入：保存后自动重置姓名和金额，继续添加下一位客户
+                  批次与客户联合录入：先核对客户入金、机构应入金和客户入场价，再进入下一位客户
                 </DialogDescription>
               </div>
               {lastAddedSummary.length > 0 && (
@@ -1227,7 +1487,7 @@ export default function ClientsPage() {
                   <Label className="text-[11px]">客户姓名 *</Label>
                   <Input
                     value={addForm.name}
-                    onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
+                    onChange={(e) => setAddForm({ ...addForm, name: e.target.value, confirmedAccurate: false })}
                     placeholder="例：张伟 / Jennifer Zhang"
                     className={cn(addErrors.name && "border-danger ring-danger/20")}
                   />
@@ -1243,12 +1503,12 @@ export default function ClientsPage() {
                         const v = e.target.value.replace(/[^0-9.]/g, "");
                         const parts = v.split(".");
                         const cleaned = parts[0] + (parts.length > 1 ? "." + parts.slice(1).join("") : "");
-                        setAddForm({ ...addForm, investment: cleaned });
+                        setAddForm({ ...addForm, investment: cleaned, confirmedAccurate: false });
                       }}
                       onBlur={() => {
                         const n = Number(addForm.investment.replace(/[^0-9.]/g, ""));
                         if (Number.isFinite(n)) {
-                          setAddForm({ ...addForm, investment: n.toFixed(2) });
+                          setAddForm({ ...addForm, investment: n.toFixed(2), confirmedAccurate: false });
                         }
                       }}
                       placeholder="500000.00"
@@ -1261,7 +1521,17 @@ export default function ClientsPage() {
                   <Label className="text-[11px]">所属批次 *</Label>
                   <Select
                     value={addForm.batchId || ""}
-                    onValueChange={(v) => setAddForm({ ...addForm, batchId: v })}
+                    onValueChange={(v) => {
+                      const batch = batches.find((x) => x.id === v);
+                      setAddForm({
+                        ...addForm,
+                        batchId: v,
+                        entryPrice: Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0) > 0
+                          ? Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0).toFixed(4)
+                          : "",
+                        confirmedAccurate: false,
+                      });
+                    }}
                   >
                     <SelectTrigger className={cn(addErrors.batchId && "border-danger ring-danger/20")}>
                       <SelectValue placeholder="选择要加入的批次" />
@@ -1287,7 +1557,7 @@ export default function ClientsPage() {
                   <Label className="text-[11px]">商务经理*</Label>
                   <Select
                     value={addForm.bdManager || ""}
-                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v })}
+                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v, confirmedAccurate: false })}
                     disabled={!!bdManagerFullName}
                   >
                     <SelectTrigger className={cn(addErrors.bdManager && "border-danger ring-danger/20")}>
@@ -1306,34 +1576,75 @@ export default function ClientsPage() {
                   <Input
                     type="date"
                     value={addForm.signDate}
-                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
+                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value, confirmedAccurate: false })}
                   />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-[11px]">客户入场价（USD）*</Label>
+                  <Input
+                    type="number"
+                    step="0.0001"
+                    value={addForm.entryPrice}
+                    onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value, confirmedAccurate: false })}
+                    placeholder="默认带出批次建仓价，也可手动改成更早锁定给客户的认购价"
+                    className={cn(addErrors.entryPrice && "border-danger ring-danger/20", "font-mono tabular-nums")}
+                  />
+                  {addErrors.entryPrice ? (
+                    <p className="text-[10px] text-danger font-mono">{addErrors.entryPrice}</p>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      默认使用所选批次的历史建仓价 {selectedAddBatch ? formatCurrency(selectedAddBatch.stockPriceAtStart ?? 0) : "—"}，所以现在可以把客户归到价格更优的旧批次，不再强制按今天价格录入。
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {(() => {
-                const b = batches.find((x) => x.id === addForm.batchId);
-                const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, "")) || 0;
-                const split = numAmt > 0 ? calculateProfitSplitRatio(numAmt) : null;
-                return (
-                  <div className="rounded-md border border-dashed border-border/70 bg-secondary/30 p-3 grid gap-2 md:grid-cols-3 text-[11px]">
-                    <div>
-                      <p className="text-muted-foreground mb-0.5">批次优先池上限</p>
-                      <p className="font-mono font-semibold">{b ? formatCurrency(b.priorityAmount ?? 0) : "-"}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground mb-0.5">分成比例（客户/WIN100）</p>
-                      <p className="font-mono font-semibold">
-                        {split ? `客户${Number((split.client * 100).toFixed(2))}% / WIN100${Number((split.institution * 100).toFixed(2))}%` : "-"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground mb-0.5">签约日期</p>
-                      <p className="font-mono font-semibold">{addForm.signDate || "-"}</p>
-                    </div>
-                  </div>
-                );
-              })()}
+              <div className="rounded-md border border-dashed border-border/70 bg-secondary/30 p-3 grid gap-2 md:grid-cols-3 text-[11px]">
+                <div>
+                  <p className="text-muted-foreground mb-0.5">批次优先池上限</p>
+                  <p className="font-mono font-semibold">{selectedAddBatch ? formatCurrency(selectedAddBatch.priorityAmount ?? 0) : "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">分成比例（客户/WIN100）</p>
+                  <p className="font-mono font-semibold">
+                    {addClientAmount > 0 ? `客户${Number((calculateProfitSplitRatio(addClientAmount).client * 100).toFixed(2))}% / WIN100${Number((calculateProfitSplitRatio(addClientAmount).institution * 100).toFixed(2))}%` : "-"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">签约日期</p>
+                  <p className="font-mono font-semibold">{addForm.signDate || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">客户入金</p>
+                  <p className="font-mono font-semibold">{addClientAmount > 0 ? formatCurrency(addClientAmount) : "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">机构应入金</p>
+                  <p className="font-mono font-semibold text-primary">{addClientInstitutionAmount > 0 ? formatCurrency(addClientInstitutionAmount) : "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">合计建仓本金</p>
+                  <p className="font-mono font-semibold text-success">{addClientTotalCapital > 0 ? formatCurrency(addClientTotalCapital) : "-"}</p>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border/60 bg-background/40 p-3 space-y-2">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={addForm.confirmedAccurate}
+                    onCheckedChange={(checked) => setAddForm({ ...addForm, confirmedAccurate: checked === true })}
+                    className="mt-0.5"
+                  />
+                  <span className="text-[11px] leading-5 text-foreground/85">
+                    我已核对该客户的
+                    <span className="font-semibold">所属批次、客户入金、机构应入金、客户入场价</span>
+                    ，确认无误后再保存并进入下一位客户。
+                  </span>
+                </label>
+                {addErrors.confirmedAccurate && (
+                  <p className="text-[10px] text-danger font-mono">{addErrors.confirmedAccurate}</p>
+                )}
+              </div>
             </div>
 
             {lastAddedSummary.length > 0 && (
@@ -1397,6 +1708,9 @@ export default function ClientsPage() {
                   if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
                   if (!addForm.batchId) errs.batchId = "请选择所属批次";
                   if (!addForm.bdManager) errs.bdManager = "请选择 商务经理";
+                  const entryPrice = Number(addForm.entryPrice.replace(/[^0-9.]/g, ""));
+                  if (!Number.isFinite(entryPrice) || entryPrice <= 0) errs.entryPrice = "请填写有效的客户入场价";
+                  if (!addForm.confirmedAccurate) errs.confirmedAccurate = "请先确认本次录入数据无误";
                   setAddErrors(errs);
                   if (Object.keys(errs).length > 0) return;
                   const mock = getMockData();
@@ -1414,6 +1728,7 @@ export default function ClientsPage() {
                     initialInvestment: numAmt,
                     bdManager: addForm.bdManager,
                     signDate: new Date(addForm.signDate),
+                    entryStockPrice: entryPrice,
                     status: ClientStatus.ACTIVE,
                     profitSplitClient: split.client * 100,
                     profitSplitInstitution: split.institution * 100,
@@ -1458,12 +1773,14 @@ export default function ClientsPage() {
                     bdManager: addForm.bdManager,
                     batchId: addForm.batchId,
                     signDate: addForm.signDate,
+                    entryPrice: addForm.entryPrice,
+                    confirmedAccurate: false,
                   });
                   setAddErrors({});
                 }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                保存并继续新增
+                确认无误并进入下一位
               </Button>
             </div>
           </DialogFooter>
@@ -2391,9 +2708,9 @@ export default function ClientsPage() {
 
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="cb-mv" className="text-xs font-medium">
-                  建仓价格 (USD)
+                  批次建仓参考价 (USD)
                   <span className="ml-1 text-[10px] text-muted-foreground">
-                    点击右侧「抓取」按钮获取当日股价，也可直接手动修改
+                    可抓取最新价格，也可直接手动填历史更优价格，不强制等于创建当天股价
                   </span>
                   {createBatchFetchingQuote && (
                     <span className="ml-2 text-[10px] text-primary/80">正在获取真实报价…</span>
@@ -2403,7 +2720,7 @@ export default function ClientsPage() {
                   id="cb-mv"
                   type="number"
                   step="0.0001"
-                  placeholder="例如：8.87，点击右侧按钮抓取，或直接手动输入"
+                  placeholder="例如：8.87，可抓取最新价，也可直接填历史参考价"
                   className="font-mono text-sm"
                   value={createBatchForm.currentStockPrice}
                   onChange={(e) => setCreateBatchForm({ ...createBatchForm, currentStockPrice: e.target.value })}
@@ -2423,8 +2740,8 @@ export default function ClientsPage() {
                   const valid = Number.isFinite(basePrice) && basePrice > 0;
                   return (
                     <span className="block mt-1 font-mono text-[11.5px] text-foreground/80">
-                      建仓价格 ≈ <b>{valid ? formatCurrency(basePrice) : "—"}</b>，
-                      客户归属批次后自动汇总本金
+                      批次参考建仓价 ≈ <b>{valid ? formatCurrency(basePrice) : "—"}</b>，
+                      后续客户可直接继承该批次价格，也可按单个客户单独指定更早锁定的入场价
                     </span>
                   );
                 })()}
@@ -2484,6 +2801,164 @@ export default function ClientsPage() {
             >
               <Layers className="h-3.5 w-3.5" />
               保存并创建批次
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!editBatchOpen}
+        onOpenChange={(open) => {
+          if (!open) setEditBatchOpen(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-xl max-h-[88vh] flex flex-col overflow-hidden p-0 gap-0">
+          <DialogHeader className="p-5 pb-4 border-b border-border/50 shrink-0">
+            <DialogTitle className="text-base flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-primary" />
+              编辑批次基础信息
+            </DialogTitle>
+            <DialogDescription className="text-[11px] text-muted-foreground mt-1">
+              这里仅修改不影响历史账本指纹的基础字段：批次号、批次名称、签约/到期日和当前参考价。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-y-auto scrollbar-thin p-5 space-y-4">
+            {editingBatch && (
+              <>
+                <div className="rounded-lg border border-border/50 bg-secondary/15 p-3 text-[11px] space-y-1">
+                  <p>
+                    <span className="text-muted-foreground">股票代码：</span>
+                    <span className="font-mono font-semibold">{editingBatch.stockSymbol || "-"}</span>
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">历史建仓价：</span>
+                    <span className="font-mono font-semibold">{formatCurrency(editingBatch.stockPriceAtStart ?? 0)}</span>
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">批次号 *</Label>
+                    <Input
+                      value={editBatchForm.batchNumber}
+                      onChange={(e) => setEditBatchForm({ ...editBatchForm, batchNumber: e.target.value })}
+                      className="font-mono text-sm"
+                    />
+                    {editBatchErrors.batchNumber && <p className="text-[10.5px] text-danger">{editBatchErrors.batchNumber}</p>}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">批次名称</Label>
+                    <Input
+                      value={editBatchForm.stockName}
+                      onChange={(e) => setEditBatchForm({ ...editBatchForm, stockName: e.target.value })}
+                      placeholder="例如：XMAX Growth"
+                    />
+                    {editBatchErrors.stockName && <p className="text-[10.5px] text-danger">{editBatchErrors.stockName}</p>}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">签约日期 *</Label>
+                    <Input
+                      type="date"
+                      value={editBatchForm.signDate}
+                      onChange={(e) => {
+                        const sign = e.target.value;
+                        let maturityDate = editBatchForm.maturityDate;
+                        if (sign && !maturityDate) {
+                          const parts = sign.split("-").map((x) => Number(x));
+                          if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
+                            const base = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+                            base.setUTCFullYear(base.getUTCFullYear() + 2);
+                            base.setUTCDate(base.getUTCDate() - 1);
+                            maturityDate = base.toISOString().split("T")[0];
+                          }
+                        }
+                        setEditBatchForm({ ...editBatchForm, signDate: sign, maturityDate });
+                      }}
+                    />
+                    {editBatchErrors.signDate && <p className="text-[10.5px] text-danger">{editBatchErrors.signDate}</p>}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">到期日期 *</Label>
+                    <Input
+                      type="date"
+                      value={editBatchForm.maturityDate}
+                      onChange={(e) => setEditBatchForm({ ...editBatchForm, maturityDate: e.target.value })}
+                    />
+                    {editBatchErrors.maturityDate && <p className="text-[10.5px] text-danger">{editBatchErrors.maturityDate}</p>}
+                  </div>
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label className="text-xs font-medium">当前参考价 (USD) *</Label>
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      value={editBatchForm.currentStockPrice}
+                      onChange={(e) => setEditBatchForm({ ...editBatchForm, currentStockPrice: e.target.value })}
+                      className="font-mono"
+                    />
+                    {editBatchErrors.currentStockPrice && <p className="text-[10.5px] text-danger">{editBatchErrors.currentStockPrice}</p>}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter className="p-4 pt-3 border-t border-border/50 shrink-0 flex items-center justify-between gap-2">
+            <DialogClose asChild>
+              <Button type="button" variant="outline" size="sm">取消</Button>
+            </DialogClose>
+            <Button
+              type="button"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                if (!editingBatch) return;
+                const errors: Record<string, string> = {};
+                const batchNumber = String(editBatchForm.batchNumber || "").trim();
+                if (!batchNumber) errors.batchNumber = "请填写批次号";
+                else if (batches.some((b) => b.id !== editingBatch.id && String(b.batchNumber || "").trim() === batchNumber)) {
+                  errors.batchNumber = "批次号已存在，请换一个";
+                }
+                if (!editBatchForm.signDate) errors.signDate = "必填";
+                if (!editBatchForm.maturityDate) errors.maturityDate = "必填";
+                const signDate = editBatchForm.signDate ? new Date(editBatchForm.signDate) : null;
+                const maturityDate = editBatchForm.maturityDate ? new Date(editBatchForm.maturityDate) : null;
+                if (signDate && maturityDate && signDate.getTime() >= maturityDate.getTime()) {
+                  errors.maturityDate = "到期日期必须晚于签约日期";
+                }
+                const currentPrice = Number(editBatchForm.currentStockPrice);
+                if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+                  errors.currentStockPrice = "请填写有效的当前参考价";
+                }
+                setEditBatchErrors(errors);
+                if (Object.keys(errors).length > 0) return;
+                try {
+                  commitBatchFinance(editingBatch, (draft) => {
+                    draft.batchNumber = batchNumber;
+                    draft.stockName = String(editBatchForm.stockName || "").trim() || draft.stockSymbol;
+                    draft.signDate = signDate!;
+                    draft.maturityDate = maturityDate!;
+                    draft.currentStockPrice = currentPrice;
+                    draft.currentMarketValue = calculateCurrentMarketValue(
+                      draft.stockPriceAtStart,
+                      draft.currentStockPrice,
+                      draft.totalShares
+                    );
+                    const metrics = getBatchMetrics(draft);
+                    draft.totalPnL = metrics.totalPnL;
+                    draft.totalPnLPercent = metrics.totalPnLPercent;
+                    draft.riskLevel = metrics.riskLevel;
+                    draft.status = calculateBatchStatus(draft as any);
+                    draft.nextTradingWindow = calculateTradingWindows(draft.signDate).nextTradingDate;
+                    draft.updatedAt = new Date();
+                  });
+                  setEditBatchOpen(null);
+                  setManagementTab("batches");
+                  toast.success(`批次 ${batchNumber} 基础信息已更新`);
+                } catch (e) {
+                  toast.error("保存失败：" + (e instanceof Error ? e.message : "未知错误"));
+                }
+              }}
+            >
+              <SaveAll className="h-3.5 w-3.5" />
+              保存批次设置
             </Button>
           </DialogFooter>
         </DialogContent>
