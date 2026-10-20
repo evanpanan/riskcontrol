@@ -92,6 +92,7 @@ import {
   setRiskRecipients,
 } from "@/lib/riskRecipients";
 import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
+import { clearAllBusinessData, getMockData, isLedgerEmpty } from "@/lib/mockData";
 import {
   getStoredRiskTiers,
   saveRiskTiers,
@@ -356,6 +357,8 @@ export default function SettingsPage() {
   const [auditFilterAction, setAuditFilterAction] = useState<"__ALL__" | AuditAction>("__ALL__");
   const [auditSearchKw, setAuditSearchKw] = useState<string>("");
   const [auditOpenDetail, setAuditOpenDetail] = useState<AuditLogEntry | null>(null);
+  const [clearDataOpen, setClearDataOpen] = useState(false);
+  const [clearingData, setClearingData] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setQuoteTick((x) => x + 1), 1000);
     return () => clearInterval(t);
@@ -379,6 +382,38 @@ export default function SettingsPage() {
     const onAudit = () => setAuditTick((x) => x + 1);
     window.addEventListener("risk-control:audit-updated", onAudit);
     return () => window.removeEventListener("risk-control:audit-updated", onAudit);
+  }, []);
+  // 当前业务数据规模，用于清空前核对；已清空时显示为空。
+  const ledgerScale = useMemo(() => {
+    if (!hydrated || isLedgerEmpty()) return { batches: 0, clients: 0 };
+    try {
+      const data = getMockData();
+      return {
+        batches: data.batches.length,
+        clients: data.batches.reduce((sum, b) => sum + (b.clients?.length ?? 0), 0),
+      };
+    } catch {
+      return { batches: 0, clients: 0 };
+    }
+  }, [hydrated, clearDataOpen]);
+  const handleClearAllData = useCallback(async () => {
+    setClearingData(true);
+    try {
+      const result = clearAllBusinessData();
+      logAudit({
+        action: "ledger_clear",
+        resource: "/settings",
+        detail: { batchCount: result.batches, clientCount: result.clients },
+      });
+      setAuditTick((x) => x + 1);
+      setClearDataOpen(false);
+      toast.success(`已清空 ${result.batches} 个批次、${result.clients} 位客户，系统已恢复为空白状态。`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "清空失败，请稍后重试。");
+      throw err;
+    } finally {
+      setClearingData(false);
+    }
   }, []);
   useEffect(() => {
     if (!hydrated) return;
@@ -2820,6 +2855,40 @@ export default function SettingsPage() {
         ))}
       </CardContent>
     </Card>
+    <Card className="border-danger/40">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2 text-danger">
+          <Database className="h-4 w-4" />
+          数据管理
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-3">
+        <p className="text-xs leading-6 text-muted-foreground">
+          清空后，系统中的全部批次、客户、补仓与结算记录都会被移除，系统恢复为空白状态，可重新录入正式数据。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline" className="h-6 font-mono text-[11px]">
+            当前 {ledgerScale.batches} 个批次
+          </Badge>
+          <Badge variant="outline" className="h-6 font-mono text-[11px]">
+            当前 {ledgerScale.clients} 位客户
+          </Badge>
+        </div>
+        <p className="text-[11px] leading-5 text-muted-foreground">
+          清空前系统会自动留存一份数据备份，本次操作会记入操作记录且无法删除。
+        </p>
+        <Button
+          variant="danger"
+          size="sm"
+          className="gap-1.5 font-semibold"
+          disabled={ledgerScale.batches === 0 && ledgerScale.clients === 0}
+          onClick={() => setClearDataOpen(true)}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          清空所有业务数据
+        </Button>
+      </CardContent>
+    </Card>
       </div>
     </TabsContent>
   </Tabs>
@@ -3126,6 +3195,21 @@ export default function SettingsPage() {
     </DialogFooter>
   </DialogContent>
 </Dialog>
+<ConfirmDialog
+  open={clearDataOpen}
+  onOpenChange={(open) => { if (!open && !clearingData) setClearDataOpen(false); }}
+  tone="danger"
+  title="确认清空所有业务数据？"
+  description="清空后系统将回到空白状态，所有批次、客户、补仓与结算记录都会从工作台移除，页面将不再展示任何历史数据。请确认当前数据已无需保留。"
+  confirmText="确认清空"
+  cancelText="取消"
+  confirmLoading={clearingData}
+  summary={[
+    { label: "待清空批次", value: `${ledgerScale.batches} 个`, accent: "danger" },
+    { label: "待清空客户", value: `${ledgerScale.clients} 位`, accent: "danger" },
+  ]}
+  onConfirm={handleClearAllData}
+/>
 <ConfirmDialog
   open={!!confirmation}
   onOpenChange={(open) => { if (!open) setConfirmation(null); }}

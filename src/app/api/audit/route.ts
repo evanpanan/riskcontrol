@@ -24,6 +24,7 @@ const AUDIT_ACTION_ALLOWLIST = new Set<string>([
   "client_exit_request",
   "client_exit_cancel",
   "batch_notify",
+  "ledger_clear",
   "auth_denied",
 ]);
 

@@ -911,6 +911,66 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
     clients: fresh.batches.reduce((sum, batch) => sum + batch.clients.length, 0), backupKey };
 }
 
+/**
+ * 业务数据清空标记。置位后账本以空数据启动，不再载入演示批次与客户。
+ * 仅由后台「清空所有业务数据」入口写入或清除。
+ */
+export const EMPTY_LEDGER_KEY: string = "risk_control_empty_ledger_v1";
+
+/** 账本是否已处于清空状态（不含任何批次与客户）。 */
+export function isLedgerEmpty(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(EMPTY_LEDGER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 清空后需一并移除的派生数据键（批次/客户/补仓/结算/提醒记录）。 */
+const BUSINESS_DATA_KEYS: string[] = [
+  FINANCE_STORE_KEY,
+  FINANCE_STORE_KEY_LEGACY,
+  MOCK_PERSIST_KEY,
+  "risk_control_client_status_v1",
+  "risk_control_notifications_v1",
+  "risk_control_xmax_notifications_v1",
+  "risk_control_alert_ack_v1",
+  "risk_control_xmax_alert_ack_v1",
+];
+
+/**
+ * 清空全部业务数据（批次、客户、补仓与结算记录），并把系统切换为空账本启动。
+ * 执行前先把当前数据整体备份到 localStorage；备份写入失败则不删除任何数据。
+ */
+export function clearAllBusinessData(): { batches: number; clients: number; backupKey: string } {
+  if (typeof window === "undefined") throw new Error("请在已登录的浏览器中执行该操作。");
+  const storage = window.localStorage;
+  let batchCount = 0;
+  let clientCount = 0;
+  try {
+    const records = Object.values(readFinanceStore());
+    batchCount = records.length;
+    clientCount = records.reduce((sum, r) => sum + (r?.batch?.clients?.length ?? 0), 0);
+  } catch {
+    batchCount = 0;
+    clientCount = 0;
+  }
+  const backupKey = `risk_control_cleared_backup_${Date.now()}`;
+  const backup = Object.fromEntries(BUSINESS_DATA_KEYS.map((key) => [key, storage.getItem(key)]));
+  // 先落备份与空账本，再清除其余派生键；任一步抛错都不会留下半清空状态。
+  storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+  storage.setItem(FINANCE_STORE_KEY, JSON.stringify({}));
+  storage.setItem(EMPTY_LEDGER_KEY, "1");
+  for (const key of BUSINESS_DATA_KEYS.slice(1)) storage.removeItem(key);
+  resetClientNoAllocator();
+  lastClientNoAllocator = ensureClientNosOnBatches([]);
+  cachedMockData = null;
+  window.dispatchEvent(new CustomEvent("risk-control:finance-changed"));
+  window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
+  return { batches: batchCount, clients: clientCount, backupKey };
+}
+
 function batchFingerprint(batch: BatchLike): string {
   return `${batch.id}|${batch.stockSymbol}|${batch.stockPriceAtStart}`;
 }
@@ -1023,6 +1083,34 @@ export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: str
 }
 
 export function getMockData(): MockDataSet {
+  // 已清空业务数据：只从账本读取管理员后续新建的批次，不再载入演示数据。
+  if (typeof window !== "undefined" && isLedgerEmpty()) {
+    if (!cachedMockData) {
+      const empty: MockDataSet = { batches: [], stockHistory: [] };
+      const store = readFinanceStore();
+      const seen = new Set<string>();
+      for (const [id, record] of Object.entries(store)) {
+        const rec = record as any;
+        if (!rec?.batch || !rec.fingerprint) continue;
+        const revived = reviveBatch(structuredClone(rec.batch)) as typeof empty.batches[number];
+        if (!revived || typeof revived !== "object") continue;
+        try { syncBatchFinance(revived); } catch { /* ignore */ }
+        empty.batches.push(revived);
+        seen.add(id);
+      }
+      if (seen.size !== Object.keys(store).length) {
+        // 丢弃无法还原的脏记录，避免每次加载重复尝试
+        const cleaned: FinanceStore = {};
+        for (const key of seen) cleaned[key] = store[key];
+        try { window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(cleaned)); } catch { /* ignore */ }
+      }
+      resetClientNoAllocator();
+      lastClientNoAllocator = ensureClientNosOnBatches(empty.batches);
+      ensureSubAccountNosOnBatches(empty.batches);
+      cachedMockData = empty;
+    }
+    return cachedMockData;
+  }
   if (!cachedMockData) {
     const loaded = generateMockData();
     const store = readFinanceStore();

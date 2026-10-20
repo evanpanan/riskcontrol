@@ -23,6 +23,7 @@ export type AuditAction =
   | 'client_exit_request'
   | 'client_exit_cancel'
   | 'batch_notify'
+  | 'ledger_clear'
   | 'auth_denied';
 
 export interface AuditLogEntry {

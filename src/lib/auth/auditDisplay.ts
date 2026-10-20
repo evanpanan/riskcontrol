@@ -20,6 +20,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   client_exit_request: '客户申请退出',
   client_exit_cancel: '撤销退出申请',
   batch_notify: '批次通知客户',
+  ledger_clear: '清空业务数据',
   auth_denied: '权限校验未通过',
 };
 
@@ -120,6 +121,8 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   investmentAmount: '入金金额',
   bdManager: '商务经理',
   status_before: '原状态',
+  batchCount: '涉及批次',
+  clientCount: '涉及客户',
 };
 
 const CURRENCY_KEYS = new Set([
@@ -286,6 +289,15 @@ export function describeAuditLog(log: AuditLogEntry): string {
       const sent = d.sentToCount;
       const result = d.success === false ? '发送失败' : '发送成功';
       return `向批次 ${s('batchNumber') || s('batchId') || ''} 客户发送${typeof sent === 'number' ? ` ${sent} 人` : ''}通知（${channel || '通知'}）· ${result}`.replace(/\s+/g, ' ').trim();
+    }
+    case 'ledger_clear': {
+      const batches = d.batchCount;
+      const clients = d.clientCount;
+      const scope = [
+        typeof batches === 'number' ? `${batches} 个批次` : '',
+        typeof clients === 'number' ? `${clients} 位客户` : '',
+      ].filter(Boolean).join('、');
+      return `清空全部业务数据${scope ? `（${scope}）` : ''}`;
     }
     case 'auth_denied':
       return `权限校验未通过：${s('reason') || s('denyAction') || '无权限'}`;
