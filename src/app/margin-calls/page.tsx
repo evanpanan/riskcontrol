@@ -30,6 +30,13 @@ import { RoleGate } from "@/components/auth/RoleGate";
 import { APP_ROLES } from "@/types/auth";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import * as XLSX from "xlsx";
+import {
   summarizeBatchMarginFromClients,
   executeInstitutionTopup,
   isTopupBlockedByLegacyLedger,
@@ -64,6 +71,11 @@ export default function MarginCallsPage() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | MarginCallStatus>("ALL");
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [fulfillTarget, setFulfillTarget] = useState<FullfillTarget>(null);
+  const [docTarget, setDocTarget] = useState<any | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advFrom, setAdvFrom] = useState("");
+  const [advTo, setAdvTo] = useState("");
+  const [advBatch, setAdvBatch] = useState("");
 
   useEffect(() => {
     const handler = () => setTick((t) => t + 1);
@@ -139,10 +151,22 @@ export default function MarginCallsPage() {
     if (statusFilter !== "ALL") {
       result = result.filter((c) => c.status === statusFilter);
     }
+    if (advBatch.trim()) {
+      const q = advBatch.toLowerCase().trim();
+      result = result.filter((c) => c.batchNumber.toLowerCase().includes(q));
+    }
+    if (advFrom) {
+      const from = new Date(`${advFrom}T00:00:00`).getTime();
+      result = result.filter((c) => new Date(c.triggerDate).getTime() >= from);
+    }
+    if (advTo) {
+      const to = new Date(`${advTo}T23:59:59`).getTime();
+      result = result.filter((c) => new Date(c.triggerDate).getTime() <= to);
+    }
     return result.sort(
       (a, b) => new Date(b.triggerDate).getTime() - new Date(a.triggerDate).getTime()
     );
-  }, [batches, search, statusFilter]);
+  }, [batches, search, statusFilter, advBatch, advFrom, advTo]);
 
   const stats = useMemo(() => {
     let pending = 0,
@@ -200,6 +224,92 @@ export default function MarginCallsPage() {
           color: "text-muted-foreground",
         };
     }
+  };
+
+  const buildDocRows = (mc: any): [string, string][] => [
+    ["单据编号", String(mc.id ?? "").slice(-8).toUpperCase()],
+    ["批次号", mc.batchNumber ?? ""],
+    ["股票", `${mc.symbol ?? ""}${mc.stockName ? ` · ${mc.stockName}` : ""}`],
+    ["触发时间", mc.triggerDate ? formatDate(mc.triggerDate) : ""],
+    ["到期时间（T+2）", mc.dueDate ? formatDate(mc.dueDate) : "—"],
+    ["触发时仓位价值", formatCurrency(mc.triggerMarketValue ?? 0)],
+    ["触发跌幅", `-${(Number(mc.dropPercent ?? 0) * 100).toFixed(2)}%`],
+    ["应补金额", formatCurrency(mc.requiredAmount ?? 0)],
+    ["已到账金额", formatCurrency(mc.fulfilledAmount ?? 0)],
+    ["完成进度", `${Number(mc.fulfillmentPct ?? 0).toFixed(1)}%`],
+    ["补仓形式", mc.collateralType ? (mc.collateralType === "cash" ? "现金" : "股票") : "—"],
+    ["当前状态", getStatusConfig(mc.status).label],
+    ["到账日期", mc.fulfilledDate ? formatDate(mc.fulfilledDate) : "—"],
+    ["备注", mc.note || "—"],
+  ];
+
+  const handleExport = () => {
+    try {
+      if (allCalls.length === 0) {
+        toast.error("当前筛选条件下没有可导出的补仓记录。");
+        return;
+      }
+      const rows = allCalls.map((mc: any) => ({
+        "批次号": mc.batchNumber ?? "",
+        "股票代码": mc.symbol ?? "",
+        "股票名称": mc.stockName ?? "",
+        "触发时间": mc.triggerDate ? formatDate(mc.triggerDate) : "",
+        "到期时间（T+2）": mc.dueDate ? formatDate(mc.dueDate) : "",
+        "触发时仓位价值（USD）": Number(Number(mc.triggerMarketValue ?? 0).toFixed(2)),
+        "跌幅（%）": Number((Number(mc.dropPercent ?? 0) * 100).toFixed(2)),
+        "应补金额（USD）": Number(Number(mc.requiredAmount ?? 0).toFixed(2)),
+        "已到账（USD）": Number(Number(mc.fulfilledAmount ?? 0).toFixed(2)),
+        "完成进度（%）": Number(Number(mc.fulfillmentPct ?? 0).toFixed(1)),
+        "状态": getStatusConfig(mc.status).label,
+        "补仓形式": mc.collateralType ? (mc.collateralType === "cash" ? "现金" : "股票") : "",
+        "到账日期": mc.fulfilledDate ? formatDate(mc.fulfilledDate) : "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [
+        { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 18 },
+        { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "补仓记录明细");
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const fileName = `补仓记录明细_${stamp}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+      toast.success(`导出成功：${fileName}（共 ${allCalls.length} 条记录）`);
+    } catch {
+      toast.error("导出失败，请重试。若问题持续请联系管理员。");
+    }
+  };
+
+  const handlePrintDoc = (mc: any) => {
+    const rows = buildDocRows(mc);
+    const esc = (v: string) => v.replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string);
+    const win = window.open("", "_blank", "width=820,height=920");
+    if (!win) {
+      toast.error("浏览器阻止了打印窗口，请允许弹出窗口后重试。");
+      return;
+    }
+    win.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8" />
+      <title>补仓单据 ${esc(String(mc.batchNumber ?? ""))}</title>
+      <style>
+        body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#111;padding:40px;}
+        h1{font-size:20px;margin:0 0 4px;}
+        p.sub{color:#666;font-size:12px;margin:0 0 24px;}
+        table{border-collapse:collapse;width:100%;font-size:13px;}
+        th,td{border:1px solid #ddd;padding:10px 12px;text-align:left;}
+        th{background:#f5f5f5;width:180px;font-weight:600;}
+        .foot{margin-top:28px;font-size:11px;color:#888;}
+      </style></head><body>
+      <h1>WIN100 补仓单据</h1>
+      <p class="sub">批次 ${esc(String(mc.batchNumber ?? ""))} · 生成时间 ${esc(new Date().toLocaleString("zh-CN"))}</p>
+      <table><tbody>
+        ${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(String(v))}</td></tr>`).join("")}
+      </tbody></table>
+      <p class="foot">本单据由 WIN100 风控平台自动生成，仅作内部对账与归档使用。</p>
+      </body></html>`);
+    win.document.close();
+    win.focus();
+    window.setTimeout(() => win.print(), 300);
   };
 
   return (
@@ -298,16 +408,45 @@ export default function MarginCallsPage() {
                 <option value="FULLFILLED">已完成</option>
                 <option value="EXPIRED">已过期</option>
               </select>
-              <Button variant="outline" size="sm" className="gap-1.5 h-9 text-xs">
+              <Button
+                variant={advancedOpen ? "secondary" : "outline"}
+                size="sm"
+                className="gap-1.5 h-9 text-xs"
+                onClick={() => setAdvancedOpen((v) => !v)}
+              >
                 <Filter className="h-3.5 w-3.5" />
                 高级筛选
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5 h-9 text-xs">
+              <Button variant="outline" size="sm" className="gap-1.5 h-9 text-xs" onClick={handleExport}>
                 <Download className="h-3.5 w-3.5" />
                 导出
               </Button>
             </div>
           </div>
+          {advancedOpen && (
+            <div className="mt-3 flex flex-wrap items-end gap-3 rounded-xl border border-border/50 bg-secondary/20 p-3">
+              <div className="space-y-1">
+                <p className="text-[10px] text-muted-foreground">起始日期</p>
+                <Input type="date" className="h-9 w-[150px] text-xs" value={advFrom} onChange={(e) => setAdvFrom(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] text-muted-foreground">结束日期</p>
+                <Input type="date" className="h-9 w-[150px] text-xs" value={advTo} onChange={(e) => setAdvTo(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] text-muted-foreground">批次号关键词</p>
+                <Input className="h-9 w-[180px] text-xs" placeholder="如 008" value={advBatch} onChange={(e) => setAdvBatch(e.target.value)} />
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 text-xs"
+                onClick={() => { setAdvFrom(""); setAdvTo(""); setAdvBatch(""); }}
+              >
+                重置
+              </Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="pt-0">
           <div className="border border-border/50 rounded-xl overflow-hidden">
@@ -420,7 +559,7 @@ export default function MarginCallsPage() {
                           </Button>
                         </Link>
                         <Button variant="ghost" size="icon" className="h-8 w-8" title="查看单据"
-                          onClick={() => console.log("[补仓单据] 导出/查看PDF:", mc.id)}
+                          onClick={() => setDocTarget(mc)}
                         >
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
@@ -594,6 +733,46 @@ export default function MarginCallsPage() {
           setTick((t) => t + 1);
         }}
       />
+
+      <Dialog open={!!docTarget} onOpenChange={(v) => { if (!v) setDocTarget(null); }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              WIN100 补仓单据
+            </DialogTitle>
+          </DialogHeader>
+          {docTarget && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-border/50 overflow-hidden">
+                {buildDocRows(docTarget).map(([label, value], i) => (
+                  <div
+                    key={label}
+                    className={cn(
+                      "grid grid-cols-[130px_1fr] text-xs",
+                      i > 0 && "border-t border-border/40"
+                    )}
+                  >
+                    <div className="px-3 py-2.5 bg-secondary/30 text-muted-foreground font-medium">
+                      {label}
+                    </div>
+                    <div className="px-3 py-2.5 font-mono break-all">{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setDocTarget(null)}>
+                  关闭
+                </Button>
+                <Button size="sm" className="gap-1.5" onClick={() => handlePrintDoc(docTarget)}>
+                  <FileText className="h-3.5 w-3.5" />
+                  打印 / 另存为 PDF
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

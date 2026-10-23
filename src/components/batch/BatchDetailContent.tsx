@@ -42,6 +42,7 @@ import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { notifyBatchChannel } from "@/lib/notifier";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime, formatPercent } from "@/lib/utils";
 import { Batch, BatchStatus, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
+import * as XLSX from "xlsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/auth/RoleGate";
@@ -479,6 +480,54 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     return enriched;
   }, [filteredBase, mv, search, bdFilter, statusFilter, splitFilter, split, batch, metrics]);
 
+  const handleExportDetail = () => {
+    try {
+      const visible = filteredClients.filter((c: any) => !c.__redacted);
+      if (visible.length === 0) {
+        toast.error("当前视图没有可导出的客户记录。");
+        return;
+      }
+      const rows = visible.map((c: any) => ({
+        "客户编号": String(c.clientNo ?? ""),
+        "客户姓名": c.name ?? "",
+        "子账号": String(c.subAccountNo ?? ""),
+        "商务经理": c.bdManager ?? "",
+        "单笔投资金额（USD）": Number(Number(c.investmentAmount ?? 0).toFixed(2)),
+        "入场价（USD）": Number(Number(c.entryStockPrice ?? batch.stockPriceAtStart ?? 0).toFixed(4)),
+        "持股数": Number(Number(c.clientShares ?? 0).toFixed(4)),
+        "当前市值（USD）": Number(Number(c.marketValueShare ?? 0).toFixed(2)),
+        "客户盈亏（USD）": Number(Number(c.actualClientPnL ?? 0).toFixed(2)),
+        "盈亏比例（%）": Number(Number(c.actualClientPnLPercent ?? 0).toFixed(2)),
+        "客户状态":
+          c.status === ClientStatus.ACTIVE ? "持仓中" :
+          c.status === ClientStatus.EXIT_REQUESTED ? "申请退出中" :
+          c.status === ClientStatus.SETTLED ? "已结算" : String(c.status ?? ""),
+        "签约日期": c.signDate ? formatDate(c.signDate) : "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows, {
+        header: [
+          "客户编号", "客户姓名", "子账号", "商务经理", "单笔投资金额（USD）", "入场价（USD）",
+          "持股数", "当前市值（USD）", "客户盈亏（USD）", "盈亏比例（%）", "客户状态", "签约日期",
+        ],
+      });
+      ws["!cols"] = [
+        { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 12 },
+        { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "批次客户明细");
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const fileName = `批次客户明细_${batch.batchNumber ?? batch.id}_${stamp}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+      const redactedSkipped = filteredClients.length - visible.length;
+      toast.success(
+        `导出成功：${fileName}（共 ${visible.length} 位客户${redactedSkipped > 0 ? `，已跳过 ${redactedSkipped} 条当前角色不可见记录` : ""}）`
+      );
+    } catch {
+      toast.error("导出失败，请重试。若问题持续请联系管理员。");
+    }
+  };
+
   const investedByBD = useMemo(() => {
     const map: Record<string, BdStatValue> = {};
     (batch.clients || []).forEach((c) => {
@@ -714,7 +763,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-9"
-              onClick={() => console.log("[导出] 导出批次明细 CSV/Excel:", batch.batchNumber)}
+              onClick={handleExportDetail}
             >
               <Download className="h-3.5 w-3.5" />
               导出明细
