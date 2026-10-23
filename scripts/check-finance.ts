@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ClientStatus } from "@prisma/client";
 import {
   type BatchLike, type ClientLike, initializeBatchFinance, syncBatchFinance,
   executeInstitutionTopup, summarizeBatchMarginFromClients, getBatchMetrics,
@@ -36,6 +37,16 @@ function batch(price = 80): BatchLike {
   } as unknown as BatchLike;
   initializeBatchFinance(b);
   return b;
+}
+// Phase 3 起结算要求客户先提交退出申请且通知期已过。
+// 结算用例统一走“到期退出”路径（签约日早于最终到期日，无提前退出费），
+// 以验证资产守恒与机构收益归属，而非提前退出费逻辑。
+function markExitReady(b: BatchLike, id: string) {
+  const c = b.clients!.find((x) => x.id === id)!;
+  c.signDate = new Date("2024-01-01");
+  c.status = ClientStatus.EXIT_REQUESTED;
+  c.exitRequestedAt = new Date(Date.now() - 20 * 86400000);
+  c.exitEligibleAt = new Date(Date.now() - 5 * 86400000);
 }
 let count = 0;
 function test(name: string, run: () => void) {
@@ -118,7 +129,8 @@ test("legacy receipts cannot overwrite other clients or silently permit duplicat
   delete b.finance;
   b.marginCalls = [{
     id: "legacy", requiredAmount: 200000, fulfilledAmount: 100000, averageEntryPrice: 80,
-    status: "PENDING", triggerDate: new Date("2026-02-01"),
+    // 触发日取当前时间：T+2 到期日未到，轮次保持 PENDING（固定历史日期会因过期被判 OVERDUE）
+    status: "PENDING", triggerDate: new Date(),
   }];
   b.cumulativeMarginCalls = 150000;
   b.clients![0].marginState = { initialInvestment: 350000, required: 100000, fulfilled: 50000, history: [] };
@@ -134,7 +146,7 @@ test("legacy receipts cannot overwrite other clients or silently permit duplicat
   archived.initialTotalAmount = 1000000;
   archived.clients!.forEach((c) => { c.status = "SETTLED"; });
   archived.marginCalls = [{ id: "old", requiredAmount: 200000, fulfilledAmount: 5000,
-    status: "PENDING", triggerDate: new Date("2026-02-01") } as any];
+    status: "PENDING", triggerDate: new Date() } as any];
   const dummySnapshot = { clientPnL: 0, institutionPnL: 0, splitRatioClient: 40, isLoss: false,
     clientReceives: 350000, institutionReceives: 0, marginCallReturned: 0, originalAccountCapital: 350000 / 0.7,
     clientInvestmentAmount: 350000, settlementDate: new Date(), settleReason: "fake-for-test" };
@@ -151,6 +163,7 @@ test("rescue gains belong to institution; partial exit conserves assets and free
   b.currentStockPrice = 110;
   syncBatchFinance(b);
   const before = b.currentMarketValue!;
+  markExitReady(b, "a");
   const result = settleClientPosition(b, "a");
   near(result.clientReceives, 364000);
   near(result.institutionReceives, 323500);
@@ -166,6 +179,7 @@ test("rescue gains belong to institution; partial exit conserves assets and free
   const split = calculateBatchPnLSplit(b, b.currentMarketValue!);
   near(split.clientTotalPnL + split.institutionTotalPnL,
     getBatchMetrics(b).totalPnL + result.clientPnL + result.institutionPnL);
+  markExitReady(b, "b");
   const final = settleClientPosition(b, "b");
   near(b.currentMarketValue!, 0);
   near(b.initialTotalAmount, 0);
@@ -185,11 +199,15 @@ test("signing threshold is inclusive; settings never rewrite old contracts", () 
 
 test("later subscriptions have their own cost and institution matching capital", () => {
   const b = batch(110);
-  addClientPosition(b, client("new", 70000));
+  // 后加入的客户按加入时点成交价建仓（引擎优先采用 client.entryStockPrice）
+  const newcomer = client("new", 70000);
+  newcomer.entryStockPrice = 110;
+  addClientPosition(b, newcomer);
   near(b.initialTotalAmount, 1100000);
   near(b.currentMarketValue!, 1200000);
   near(calculateClientSettlement(b.clients![2], b, b.currentMarketValue!, 110).clientPnL, 0);
   const before = b.currentMarketValue!;
+  markExitReady(b, "new");
   const result = settleClientPosition(b, "new");
   near(result.clientReceives + result.institutionReceives + b.currentMarketValue!, before);
   near(b.initialTotalAmount, 1000000);
@@ -207,6 +225,7 @@ test("unpriced historical topups retain cost but block settlement", () => {
 
 test("atomic persistence survives serialization; quota failure and stale tabs cannot book", () => {
   const b = batch();
+  markExitReady(b, "a");
   const stale = structuredClone(b);
   const baseline = structuredClone(b);
   storageFailure = true;
@@ -222,9 +241,8 @@ test("atomic persistence survives serialization; quota failure and stale tabs ca
   commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, { amount: 100000 }));
   commitBatchFinance(b, (draft) => settleClientPosition(draft, "a"));
   const settled = JSON.parse(storage.get(FINANCE_STORE_KEY)!).test.batch;
-  const inMem = { ...b.finance!.settlements.a };
-  delete inMem.operatorName;
-  delete inMem.settleReason;
+  // 账本以 JSON 落盘，值为 undefined 的字段（operatorName/settleReason/earlyExitFeeRecipient 等）会被丢弃
+  const inMem = JSON.parse(JSON.stringify(b.finance!.settlements.a));
   assert.deepEqual(settled.finance.settlements.a, inMem);
   near(settled.finance.remainingCapital, 500000);
 });

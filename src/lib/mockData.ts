@@ -21,9 +21,11 @@ import {
   initializeBatchFinance,
   syncBatchFinance,
   settleClientPosition,
+  requestClientExit,
   getClientPositionMetrics,
   calculateContractDates,
   getMarginRoundDueDate,
+  NOTICE_PERIOD_DAYS,
   SUBORDINATE_RATIO,
   PRIORITY_RATIO,
   type BatchLike,
@@ -627,6 +629,10 @@ export function generateMockData(): MockDataSet {
       const origPrice = Number(b.currentStockPrice ?? 0);
       (b as any).currentStockPrice = settlePrice;
       try {
+        // Phase 3：结算前必须先提交退出申请；此处将申请时间回拨至通知期已过，还原历史退出流程
+        requestClientExit(b, client.id, { operatorName: "SYSTEM_MOCK", reason: "历史批次模拟退出" });
+        client.exitRequestedAt = new Date(effectiveSettleTs - NOTICE_PERIOD_DAYS * 86400000);
+        client.exitEligibleAt = new Date(effectiveSettleTs);
         settleClientPosition(b, client.id, { operatorName: "SYSTEM_MOCK" });
         settledCount++;
       } catch (settleErr: any) {

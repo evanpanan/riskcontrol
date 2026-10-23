@@ -63,13 +63,16 @@ function aggregateBdMap(clients: ClientLike[]): Record<string, BdStatValue> {
 
 // ========== Test Suite ==========
 let passCount = 0;
+const results: { name: string; ok: boolean }[] = [];
 function test(name: string, fn: () => void) {
   try {
     console.log(`\n🧪 TEST: ${name}`);
     fn();
     passCount += 1;
+    results.push({ name, ok: true });
   } catch (e: any) {
     console.error(`🔥 TEST ABORTED: ${name} → ${e.message}`);
+    results.push({ name, ok: false });
   }
 }
 
@@ -104,31 +107,33 @@ test('T2.2 BD_LIXIAOMING 客户管理仅返回自己名下，数量应与其他 
 });
 
 // --- T3: filterBatchDetailClientsByRole (XMAX批次008 batch-008) ---
-test('T3.1 XMAX批次008 CRIT 批次详情 RISK 视角 = 18 位客户全量，无脱敏占位', () => {
+test('T3.1 XMAX批次008 CRIT 批次详情 RISK 视角 = 全量客户，无脱敏占位', () => {
   const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
-  assert(batch008Clients.length === 18, `XMAX批次008 批次原始客户数 ${batch008Clients.length} === 18`);
+  const total = batch008Clients.length;
+  assert(total > 0, `XMAX批次008 批次原始客户数 ${total} > 0`);
   const r = filterBatchDetailClientsByRole(batch008Clients, userRisk);
-  assert(r.visibleOwnCount === 18, `Risk 视角 visibleOwnCount=18`);
+  assert(r.visibleOwnCount === total, `Risk 视角 visibleOwnCount=${total}`);
   assert(r.redactedCount === 0, `Risk 视角 redactedCount=0`);
-  assert(r.totalOriginalCount === 18, `totalOriginalCount 保留原值 18`);
-  assert(r.mergedRows.length === 18, `mergedRows 长度 18`);
+  assert(r.totalOriginalCount === total, `totalOriginalCount 保留原值 ${total}`);
+  assert(r.mergedRows.length === total, `mergedRows 长度 ${total}`);
   assert(!(r.mergedRows[0] as any).__redacted, 'Risk 视角返回行无 __redacted 标记');
 });
 
-test('T3.2 XMAX批次008 CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅自己客户真实，其他脱敏占位', () => {
+test('T3.2 XMAX批次008 CRIT 批次详情 BD_LIUJIA = 保留总行数，仅自己客户真实，其他脱敏占位', () => {
   const { clients: batch008Clients } = batchClientsById(data.batches, 'batch-2026-008');
+  const total = batch008Clients.length;
   const r = filterBatchDetailClientsByRole(batch008Clients, userLiujia);
   const realLiujiaCount = batch008Clients.filter(c => c.bdManager === userLiujia.bdManagerFullName).length;
-  console.log(`  ℹ️  XMAX批次008真实刘佳客户数: ${realLiujiaCount} / redacted: ${18 - realLiujiaCount}`);
-  assert(r.totalOriginalCount === 18, `totalOriginalCount 仍=18（总行数保留防 BD 猜其他 BD 客户量级）`);
-  assert(r.mergedRows.length === 18, `mergedRows 长度=18（=真实N + 脱敏M，防猜）`);
+  console.log(`  ℹ️  XMAX批次008真实刘佳客户数: ${realLiujiaCount} / redacted: ${total - realLiujiaCount}`);
+  assert(r.totalOriginalCount === total, `totalOriginalCount 仍=${total}（总行数保留防 BD 猜其他 BD 客户量级）`);
+  assert(r.mergedRows.length === total, `mergedRows 长度=${total}（=真实N + 脱敏M，防猜）`);
   assert(r.visibleOwnCount === realLiujiaCount, `visibleOwnCount=${realLiujiaCount}`);
-  assert(r.redactedCount === 18 - realLiujiaCount, `redactedCount=${18 - realLiujiaCount}`);
+  assert(r.redactedCount === total - realLiujiaCount, `redactedCount=${total - realLiujiaCount}`);
   const visibleRealRows = r.mergedRows.filter((row: any) => !row.__redacted) as ClientLike[];
   const redactedRows = r.mergedRows.filter((row: any) => row.__redacted) as RedactedClientPlaceholder[];
   assert(visibleRealRows.length === realLiujiaCount, `可见行数=真实刘佳客户数`);
   assert(visibleRealRows.every(c => c.bdManager === userLiujia.bdManagerFullName), '可见行 bdManager=刘佳');
-  assert(redactedRows.length === 18 - realLiujiaCount, `脱敏行数=M`);
+  assert(redactedRows.length === total - realLiujiaCount, `脱敏行数=M`);
   assert(redactedRows.every(row => row.__placeholder === true), '脱敏行 __placeholder=true');
   assert(redactedRows.every(row => row.name === '— 其他商务经理 客户（已脱敏）—'), `脱敏行 name=固定占位字符串`);
   assert(redactedRows.every(row => row.bdManager === '（已隐藏）'), `脱敏行 bdManager=（已隐藏）`);
@@ -138,12 +143,13 @@ test('T3.2 XMAX批次008 CRIT 批次详情 BD_LIUJIA = 保留总行数 18，仅�
 });
 
 // --- T4: filterBatchDetailClientsByRole XMAX批次004 验证同样逻辑 ---
-test('T4.1 XMAX批次004 击穿批次 BD_ZHANGZHIQ 视角 = 保留 15 行', () => {
+test('T4.1 XMAX批次004 批次详情 BD_ZHANGZHIQ 视角 = 保留原总行数', () => {
   const { clients: batch004Clients } = batchClientsById(data.batches, 'batch-2026-004');
-  assert(batch004Clients.length === 15, `XMAX批次004 原始客户数=15`);
+  const total = batch004Clients.length;
+  assert(total > 0, `XMAX批次004 原始客户数=${total}`);
   const r = filterBatchDetailClientsByRole(batch004Clients, userZhangzhiq);
-  assert(r.mergedRows.length === 15, `XMAX批次004 ZhangZhiq mergedRows=15`);
-  assert(r.totalOriginalCount === 15, `totalOriginalCount=15`);
+  assert(r.mergedRows.length === total, `XMAX批次004 ZhangZhiq mergedRows=${total}`);
+  assert(r.totalOriginalCount === total, `totalOriginalCount=${total}`);
 });
 
 // --- T5: filterBdStatsByRole RISK 全量 4 BD ---
@@ -207,7 +213,7 @@ test('T8.1 补仓记录 = 批次宏观信息，无论 RISK/BD 均全行可见（
 });
 
 // --- T9: 边缘 — BD 自己名下 0 客户时 ---
-test('T9.1 构造虚构 BD "虚构 BD"（名下 0），filterBatchDetailClientsByRole 仍返回原总行数 78 占位', () => {
+test('T9.1 构造虚构 BD "虚构 BD"（名下 0），filterBatchDetailClientsByRole 仍返回原总行数占位', () => {
   const fakeBdUser: AppSessionUser = {
     id: 'fake',
     email: 'fake@test.com',
@@ -216,11 +222,13 @@ test('T9.1 构造虚构 BD "虚构 BD"（名下 0），filterBatchDetailClientsB
     avatarInitials: 'FK',
     bdManagerFullName: '虚构 BD (Fake BD)',
   };
-  const r = filterBatchDetailClientsByRole(allClients.slice(0, 78), fakeBdUser);
+  const sample = allClients.slice(0, Math.min(78, allClients.length));
+  const total = sample.length;
+  const r = filterBatchDetailClientsByRole(sample, fakeBdUser);
   assert(r.visibleOwnCount === 0, `虚构 BD 真实客户=0`);
-  assert(r.redactedCount === 78, `虚构 BD 脱敏=78`);
-  assert(r.mergedRows.length === 78, `mergedRows 仍=78 保留原数防猜`);
-  assert(r.mergedRows.every((row: any) => row.__redacted === true), `所有 78 行均为 __redacted`);
+  assert(r.redactedCount === total, `虚构 BD 脱敏=${total}`);
+  assert(r.mergedRows.length === total, `mergedRows 仍=${total} 保留原数防猜`);
+  assert(r.mergedRows.every((row: any) => row.__redacted === true), `所有 ${total} 行均为 __redacted`);
 });
 
 // --- T10: 数据泄漏检测 — BD 视角 mergedRows 中的脱敏行不包含任何原始客户姓名/金额 ---
@@ -242,16 +250,16 @@ test('T10.1 泄漏检测：BD_LIUJIA XMAX批次008 mergedRows 脱敏行 无原�
 });
 
 // --- Summary ---
+const totalTests = results.length;
+const failed = results.filter(r => !r.ok);
 console.log(`\n\n=====================================================`);
-console.log(`🎉 验收完成: ${passCount}/10 子测试全部通过`);
-console.log(`   T1 全量 RISK          ✅`);
-console.log(`   T2 BD 客户管理隔离    ✅`);
-console.log(`   T3 XMAX批次008 批次保留总行数 ✅（含占位行防猜）`);
-console.log(`   T4 XMAX批次004 批次逻辑      ✅`);
-console.log(`   T5 RISK BD 分布全量   ✅`);
-console.log(`   T6 BD 分布 3 人聚合   ✅（无其他 BD 姓名）`);
-console.log(`   T7 XMAX批次008 局部 BD 分布   ✅`);
-console.log(`   T8 补仓记录全行可见   ✅`);
-console.log(`   T9 边缘 0 客户 BD     ✅`);
-console.log(`   T10 泄漏检测          ✅`);
+if (failed.length === 0) {
+  console.log(`🎉 验收完成: ${passCount}/${totalTests} 子测试全部通过`);
+} else {
+  console.log(`⚠️  验收完成: ${passCount}/${totalTests} 子测试通过，${failed.length} 项失败`);
+}
+for (const r of results) {
+  console.log(`   ${r.ok ? '✅' : '❌'} ${r.name}`);
+}
 console.log(`=====================================================`);
+if (failed.length > 0) process.exitCode = 1;
