@@ -3,7 +3,7 @@
 import { memo, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { FlashNumber } from "@/components/ui/FlashNumber";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatCurrencyByUnit } from "@/lib/utils";
 import type { PortfolioSummary } from "@/lib/riskEngine";
 import {
   Line,
@@ -280,14 +280,6 @@ const formatCompactMoney = (v: number) =>
 
 const formatCompactMoneyY = (v: number) =>
   "$" + v.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
-
-const formatCompactTrend = (v: number) =>
-  v.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    notation: "compact",
-    maximumFractionDigits: 2,
-  });
 
 const valueTooltipFormatter = (v: number, n: string) => {
   const cfg = VALUE_LEGEND_MAP[n];
@@ -735,8 +727,13 @@ const MiniStat = memo(function MiniStat({
 }) {
   const trendStr = useMemo(() => {
     if (typeof trendAmount !== "number") return null;
-    return (trendAmount >= 0 ? "+" : "") + formatCompactTrend(trendAmount);
+    return trendAmount > 0 ? `+${formatCurrencyByUnit(trendAmount)}` : formatCurrencyByUnit(trendAmount);
   }, [trendAmount]);
+  const fullValueTitle = formatter === "currency" ? formatCurrency(value) : undefined;
+  const fullTrendTitle =
+    typeof trendAmount === "number"
+      ? `${trendAmount >= 0 ? "+" : ""}${formatCurrency(trendAmount)}`
+      : undefined;
   return (
     <div
       className="rounded-xl border p-3 bg-card/70"
@@ -749,23 +746,25 @@ const MiniStat = memo(function MiniStat({
           </p>
           <FlashNumber
             value={value}
-            formatter={formatter}
+            formatter={formatter === "currency" ? "currencyUnit" : formatter}
             digits={digits}
             className={cn(
-              "text-xl font-bold tracking-tight",
+              "block max-w-full whitespace-nowrap text-xl font-bold tracking-tight",
               formatter === "percent"
                 ? value >= 0
                   ? "text-success"
                   : "text-danger"
                 : "text-foreground"
             )}
+            title={fullValueTitle}
           />
           {trendStr !== null ? (
             <p
               className={cn(
-                "text-[11px] font-mono font-semibold",
+                "max-w-full whitespace-nowrap text-[11px] font-mono font-semibold",
                 (trendAmount ?? 0) >= 0 ? "text-success" : "text-danger"
               )}
+              title={fullTrendTitle}
             >
               {trendStr}
             </p>

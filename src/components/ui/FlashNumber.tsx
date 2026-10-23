@@ -1,11 +1,11 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
-import { cn, formatCurrency, formatPercent, formatCompactNumber } from "@/lib/utils";
+import { memo, useEffect, useRef, useState, type ComponentPropsWithoutRef } from "react";
+import { cn, formatCurrency, formatCurrencyByUnit, formatPercent, formatCompactNumber } from "@/lib/utils";
 
-type Formatter = "currency" | "percent" | "number" | "dollarCompact";
+type Formatter = "currency" | "percent" | "number" | "dollarCompact" | "currencyCompact" | "currencyUnit";
 
-interface FlashNumberProps {
+interface FlashNumberProps extends Omit<ComponentPropsWithoutRef<"span">, "children"> {
   value: number;
   formatter?: Formatter;
   className?: string;
@@ -31,6 +31,10 @@ const format = (v: number, f: Formatter, digits: number) => {
       const sign = v >= 0 ? "+" : "-";
       return `${sign}$${formatCompactNumber(Math.abs(v))}`;
     }
+    case "currencyCompact":
+      return formatCurrencyByUnit(v);
+    case "currencyUnit":
+      return formatCurrencyByUnit(v);
   }
 };
 
@@ -68,6 +72,7 @@ export const FlashNumber = memo(function FlashNumber({
   suffix = "",
   digits = 2,
   animateOnMount = true,
+  ...spanProps
 }: FlashNumberProps) {
   const valueRef = useRef<number>(value);
   const [flash, setFlash] = useState<"up" | "down" | null>(null);
@@ -200,6 +205,7 @@ export const FlashNumber = memo(function FlashNumber({
 
   return (
     <span
+      {...spanProps}
       className={cn(
         "inline-flex items-baseline tabular-nums px-1.5 -mx-1.5 rounded-md transition-colors",
         flash === "up" && "animate-flash-up",

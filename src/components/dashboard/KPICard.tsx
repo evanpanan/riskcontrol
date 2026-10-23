@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { cn, formatCurrency, formatPercent, formatCompactNumber } from "@/lib/utils";
+import { cn, formatCurrency, formatCurrencyByUnit, formatPercent, formatCompactNumber } from "@/lib/utils";
 import { type LucideIcon, TrendingUp, TrendingDown } from "lucide-react";
 
 export interface KPICardProps {
@@ -30,18 +30,7 @@ const iconVariants = {
 };
 
 export function formatCurrencyCompact(value: number, currency: string = "USD"): string {
-  const ABS = Math.abs(value);
-  const sign = value < 0 ? "-" : "";
-  const SYMBOL = currency === "USD" ? "$" : "¥";
-  if (ABS >= 1e9) return `${sign}${SYMBOL}${(ABS / 1e9).toFixed(2)}B`;
-  if (ABS >= 1e6) return `${sign}${SYMBOL}${(ABS / 1e6).toFixed(2)}M`;
-  if (ABS >= 1e3) return `${sign}${SYMBOL}${(ABS / 1e3).toFixed(2)}K`;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
+  return formatCurrencyByUnit(value, currency);
 }
 
 export function KPICard({

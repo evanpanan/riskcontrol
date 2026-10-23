@@ -7,13 +7,29 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number, currency: string = "USD"): string {
+export function formatCurrencyExact(value: number, currency: string = "USD"): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+export function formatCurrency(value: number, currency: string = "USD"): string {
+  const abs = Math.abs(value);
+  if (abs >= 1e8) return formatCurrencyByUnit(value, currency);
+  return formatCurrencyExact(value, currency);
+}
+
+export function formatCurrencyByUnit(value: number, currency: string = "USD"): string {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  const prefix = currency === "USD" ? "US$" : `${currency} `;
+
+  if (abs >= 1e12) return `${sign}${prefix}${(abs / 1e12).toFixed(2)}万亿`;
+  if (abs >= 1e8) return `${sign}${prefix}${(abs / 1e8).toFixed(2)}亿`;
+  return `${sign}${formatCurrencyExact(abs, currency)}`;
 }
 
 export function formatPercent(value: number, digits: number = 2): string {
