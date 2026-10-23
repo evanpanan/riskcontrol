@@ -55,3 +55,11 @@ next-env.d.ts
 # IDE work spec (local scratch planning, internal only)
 /.trae/specs/
 /.trae/
+
+# 测试与汇报产物（本地保留，不入库）
+/test-report-*.html
+/post-login-real-page-test-report-*.md
+/video-report-*/
+/.trae-html-share-packages/
+/scripts/xmax-6m-history.json
+/scripts/xmax-6m.log
