@@ -62,7 +62,7 @@ async function main() {
   respond = () => new Response(JSON.stringify({ success: false }), { status: 200 });
   await assert.rejects(() => deliverNotification({ channel: "email", payload }, {
     ...env, EMAIL_WEBHOOK_URL: "https://trusted.test/hook",
-  }), /业务失败/);
+  }), /通知转发目标返回失败/);
   respond = () => new Response("rejected", { status: 400 });
   const failed = await deliverNotification({ channel: "email", payload }, env);
   assert.equal(failed.status, "failed");
