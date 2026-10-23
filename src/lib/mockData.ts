@@ -943,6 +943,7 @@ const BUSINESS_DATA_KEYS: string[] = [
   "risk_control_xmax_notifications_v1",
   "risk_control_alert_ack_v1",
   "risk_control_xmax_alert_ack_v1",
+  "risk_control_price_history",
 ];
 
 /**

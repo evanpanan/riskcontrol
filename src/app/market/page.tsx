@@ -18,6 +18,8 @@ import {
   getBatchMetrics,
   calculateBatchPnLSplit,
   calculatePortfolioSummary,
+  type BatchLike,
+  type SettlementSnapshot,
 } from "@/lib/riskEngine";
 import {
   XAxis,
@@ -60,35 +62,13 @@ import { getLiveQuoteSettings, DEFAULT_LIVE_QUOTE, type BrowserQuote, fetchQuote
 import { BD_MANAGERS } from "@/lib/mockData";
 import { MonthlyBatchesTrend } from "@/components/dashboard/MonthlyBatchesTrend";
 
-function generateInstitutionRiskByMonth(seed = 20260917) {
-  const months = [
-    "25/05",
-    "25/07",
-    "25/10",
-    "25/12",
-    "26/02",
-    "26/03",
-    "26/04",
-    "26/05",
-    "26/06",
-    "26/07",
-    "26/08",
-    "26/09",
-  ];
-  function mulberry32(a: number) {
-    return function () {
-      let t = (a += 0x6d2b79f5);
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-  const rnd = mulberry32(seed >>> 0);
-  return months.map((m, i) => ({
-    month: m,
-    风险敞口: Math.round(500000 + rnd() * 1800000 - i * 30000),
-    "WIN100 补仓": i < 3 ? 0 : Math.round(rnd() * 500000 * (i / 8)),
-  }));
+function monthKeyFromDate(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getFullYear().toString().slice(2);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}/${month}`;
 }
 
 const MARKET_OPEN_HOURS = { startHour: 21, endHour: 4 }; // HK/US crossover 模拟
@@ -152,12 +132,40 @@ export default function MarketPage() {
   const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
 
   const riskMonthly = useMemo(() => {
-    const raw = generateInstitutionRiskByMonth(20260917);
-    return raw.map((row) => {
-      const { tick, tooltip } = expandMonthTick(row.month);
-      return { ...row, month: tick, monthLabel: tooltip };
+    if (batches.length === 0) return [];
+    const financeBatches = batches as BatchLike[];
+
+    const now = new Date();
+    const months = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (11 - index), 1);
+      const key = `${date.getFullYear().toString().slice(2)}/${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const { tick, tooltip } = expandMonthTick(key);
+      return {
+        key,
+        month: tick,
+        monthLabel: tooltip,
+        风险敞口: 0,
+        "WIN100 补仓": 0,
+      };
     });
-  }, []);
+    const bucketMap = new Map(months.map((item) => [item.key, item]));
+
+    for (const batch of financeBatches) {
+      for (const snapshot of Object.values(batch.finance?.settlements ?? {}) as SettlementSnapshot[]) {
+        const key = monthKeyFromDate(snapshot?.settledAt);
+        if (!key || !bucketMap.has(key)) continue;
+        bucketMap.get(key)!.风险敞口 += Number(snapshot?.institutionPnL ?? 0);
+      }
+      for (const round of batch.finance?.rounds ?? []) {
+        const key = monthKeyFromDate(round?.triggerDate);
+        if (!key || !bucketMap.has(key)) continue;
+        bucketMap.get(key)!["WIN100 补仓"] += Math.max(0, Number(round?.fulfilledAmount ?? 0));
+      }
+    }
+
+    const hasBusinessTrace = months.some((item) => Math.abs(item.风险敞口) > 0.005 || Math.abs(item["WIN100 补仓"]) > 0.005);
+    return hasBusinessTrace ? months : [];
+  }, [batches]);
 
   useEffect(() => {
     const id = window.setTimeout(() => setAnimActive(false), 1400);
@@ -377,7 +385,10 @@ export default function MarketPage() {
   // ====== 新增 3：批次风险分层堆叠 ======
   const riskLayerDist = useMemo(() => {
     const counter: Record<RiskLevel, number> = { [RiskLevel.NORMAL]: 0, [RiskLevel.WARNING]: 0, [RiskLevel.CRITICAL]: 0 };
-    for (const b of batches) counter[b.riskLevel] = (counter[b.riskLevel] || 0) + 1;
+    for (const b of batches) {
+      const level = b.riskLevel ?? RiskLevel.NORMAL;
+      counter[level] = (counter[level] || 0) + 1;
+    }
     const total = batches.length || 1;
     return [
       { key: "正常 (NORMAL)", value: counter[RiskLevel.NORMAL], pct: (counter[RiskLevel.NORMAL] / total) * 100, color: DEFAULT_RISK_COLORS[RiskLevel.NORMAL] },
@@ -474,11 +485,12 @@ export default function MarketPage() {
         const remain = Math.max(0, Math.ceil((new Date(b.maturityDate).getTime() - now) / 86400000));
         const total = Math.max(1, Math.ceil((new Date(b.maturityDate).getTime() - new Date(b.signDate).getTime()) / 86400000));
         const progressPct = Math.min(100, Math.max(0, ((total - remain) / total) * 100));
+        const riskLevel = b.riskLevel ?? RiskLevel.NORMAL;
         return {
-          batch: b.batchNumber.replace(/^BATCH-/, ""),
+          batch: (b.batchNumber ?? b.id).replace(/^BATCH-/, ""),
           剩余天数: remain,
           progressPct,
-          fill: DEFAULT_RISK_COLORS[b.riskLevel] || "hsl(217 91% 60%)",
+          fill: DEFAULT_RISK_COLORS[riskLevel] || "hsl(217 91% 60%)",
         };
       })
       .sort((a, b) => a.剩余天数 - b.剩余天数)
@@ -949,10 +961,12 @@ export default function MarketPage() {
               const instPnL = summary.institutionPnL;
               const cliPnL = summary.allClientsPnL;
               const total = Math.abs(instPnL) + Math.abs(cliPnL);
-              const instPct = total > 0 ? (Math.abs(instPnL) / total) * 100 : 50;
-              const cliPct = 100 - instPct;
+              const hasPnL = total > 0.005;
+              const instPct = hasPnL ? (Math.abs(instPnL) / total) * 100 : 0;
+              const cliPct = hasPnL ? 100 - instPct : 0;
               const expectedInstPct = 30;
               const EPS = 0.005;
+              const deviation = hasPnL ? instPct - expectedInstPct : 0;
               return (
                 <>
                   <div className="space-y-2">
@@ -998,8 +1012,8 @@ export default function MarketPage() {
                         <div className="h-full rounded-full bg-primary" style={{ width: `${instPct}%` }} />
                       </div>
                       <div className="flex items-center justify-between text-[10.5px] font-mono text-muted-foreground">
-                        <span>占 {formatPercent(instPct, 1)}</span>
-                        <span>理论 ~{expectedInstPct}%</span>
+                        <span>{hasPnL ? `占 ${formatPercent(instPct, 1)}` : "暂无数据"}</span>
+                        <span>{hasPnL ? `理论 ~${expectedInstPct}%` : "—"}</span>
                       </div>
                     </div>
 
@@ -1045,8 +1059,8 @@ export default function MarketPage() {
                         <div className="h-full rounded-full bg-info" style={{ width: `${cliPct}%` }} />
                       </div>
                       <div className="flex items-center justify-between text-[10.5px] font-mono text-muted-foreground">
-                        <span>占 {formatPercent(cliPct, 1)}</span>
-                        <span>理论 ~{100 - expectedInstPct}%</span>
+                        <span>{hasPnL ? `占 ${formatPercent(cliPct, 1)}` : "暂无数据"}</span>
+                        <span>{hasPnL ? `理论 ~${100 - expectedInstPct}%` : "—"}</span>
                       </div>
                     </div>
                   </div>
@@ -1059,10 +1073,15 @@ export default function MarketPage() {
                       </span>
                       <span className={cn(
                         "font-mono font-bold tabular-nums",
-                        Math.abs(instPct - expectedInstPct) <= 3 ? "text-success" :
-                        Math.abs(instPct - expectedInstPct) <= 8 ? "text-warning" : "text-danger"
+                        !hasPnL
+                          ? "text-muted-foreground"
+                          : Math.abs(deviation) <= 3
+                          ? "text-success"
+                          : Math.abs(deviation) <= 8
+                          ? "text-warning"
+                          : "text-danger"
                       )}>
-                        {formatPercent(instPct - expectedInstPct, 1)}
+                        {hasPnL ? formatPercent(deviation, 1) : "—"}
                       </span>
                     </div>
                   </div>

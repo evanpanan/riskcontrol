@@ -211,6 +211,22 @@ function synthesizeYieldHistory(
   seed: number
 ): YieldDataPoint[] {
   const N = TIMEFRAME_POINTS[timeframe];
+  if (
+    Math.abs(totalPnLPercent) < 1e-9 &&
+    Math.abs(institutionPnLPercent) < 1e-9 &&
+    Math.abs(allClientsPnLPercent) < 1e-9
+  ) {
+    return Array.from({ length: N }, (_, i) => {
+      const ft = formatTick(timeframe, i, N);
+      return {
+        label: ft.tick,
+        tooltipLabel: ft.tooltip,
+        total: 0,
+        institution: 0,
+        client: 0,
+      };
+    });
+  }
   const rnd = mulberry32(seed + TIMEFRAME_POINTS[timeframe] * 11);
   const vol =
     timeframe === "1D"
