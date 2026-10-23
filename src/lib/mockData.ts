@@ -982,6 +982,30 @@ function batchFingerprint(batch: BatchLike): string {
   return `${batch.id}|${batch.stockSymbol}|${batch.stockPriceAtStart}`;
 }
 
+/**
+ * 旧版运行态快照判别：记录里没有任何真实结算、没有任何实际到账的补仓轮次、
+ * 也没有非 legacy 的手动记账交易时，说明这份账本只是历史版本的演示快照，
+ * 不代表任何真实资金动作。
+ */
+function isPristineLedgerRecord(record: unknown): boolean {
+  const finance = (record as any)?.batch?.finance;
+  if (!finance) return true;
+  // 没有任何客户结算
+  if (Object.keys(finance.settlements ?? {}).length) return false;
+  // 所有补仓轮次均未实际 fulfilled（也就是说从来没真正做过机构补仓记账）
+  if ((finance.rounds ?? []).some((r: any) => Number(r.fulfilledAmount ?? 0) > 0.005)) return false;
+  // 没有任何非 legacy 的手动记账交易
+  if ((finance.trades ?? []).some((t: any) => (t.source ?? "legacy") !== "legacy")) return false;
+  return true;
+}
+
+/** 两份批次是否包含完全相同的客户集合（用于判断快照可否整体替换）。 */
+function sameClientIds(a: BatchLike, b: BatchLike): boolean {
+  const idsA = (a.clients ?? []).map((c) => c.id).sort();
+  const idsB = (b.clients ?? []).map((c) => c.id).sort();
+  return idsA.length === idsB.length && idsA.every((id, i) => id === idsB[i]);
+}
+
 function financeRecord(batch: BatchLike): FinanceRecord {
   return {
     fingerprint: batchFingerprint(batch),
@@ -1067,17 +1091,7 @@ export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: str
   })();
   const existing = Object.values(store);
   if (!existing.length) return { didReset: false };
-  const looksPristine = existing.every((entry: any) => {
-    const finance = entry?.batch?.finance;
-    if (!finance) return true;
-    // 没有任何客户结算
-    if (Object.keys(finance.settlements ?? {}).length) return false;
-    // 所有补仓轮次均未实际 fulfilled（也就是说从来没真正做过机构补仓记账）
-    if ((finance.rounds ?? []).some((r: any) => Number(r.fulfilledAmount ?? 0) > 0.005)) return false;
-    // 没有任何非 legacy 的手动记账交易
-    if ((finance.trades ?? []).some((t: any) => (t.source ?? "legacy") !== "legacy")) return false;
-    return true;
-  });
+  const looksPristine = existing.every((entry: any) => isPristineLedgerRecord(entry));
   if (!looksPristine) {
     return { didReset: false, reason: "存在真实结算/补仓记录，拒绝自动覆盖。请联系管理员核对账本。" };
   }
@@ -1148,6 +1162,24 @@ export function getMockData(): MockDataSet {
             imported.status = "PENDING";
             saved.batch.finance.revision++;
           }
+        }
+        // 演示夹具中的历史结算是测试数据的一部分。运行态账本若只是一份没有任何真实记账的旧快照，
+        // 仍然整体覆盖会把已结算客户永久抹成「持仓中」，因此这里保留夹具结算后的批次并回写账本。
+        const fixture = batch as BatchLike;
+        if (
+          isPristineLedgerRecord(saved) &&
+          Object.keys(fixture.finance?.settlements ?? {}).length > 0 &&
+          sameClientIds(fixture, saved.batch)
+        ) {
+          const previousRevision = saved.batch.finance?.revision ?? 0;
+          fixture.finance!.revision = Math.max(Date.now(), previousRevision + 1);
+          const savedPrice = Number(saved.batch.currentStockPrice ?? 0);
+          if (savedPrice > 0) fixture.currentStockPrice = savedPrice;
+          if (typeof saved.batch.currentDayChange === "number") fixture.currentDayChange = saved.batch.currentDayChange;
+          reviveBatch(fixture);
+          syncBatchFinance(fixture);
+          store[batch.id] = financeRecord(fixture);
+          continue;
         }
         // Upgrade the initial v2 import only if no new financial actions have been booked.
         if (!saved.batch.finance.legacyAllocationVersion &&
