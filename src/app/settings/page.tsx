@@ -121,7 +121,7 @@ import {
   getNYSEInfo,
 } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
-import { QUOTE_PROVIDERS } from "@/lib/quote/providers";
+import { QUOTE_PROVIDERS, quoteProviderLabel } from "@/lib/quote/providers";
 
 const LS_KEY = "risk_control_settings";
 const RECIPIENTS_LS_KEY = "risk_control_recipients";
@@ -584,7 +584,7 @@ export default function SettingsPage() {
       const res = await fetch('/api/auth/manage', { method: 'GET', credentials: 'include', cache: 'no-store', headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' } });
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) throw new Error(res.status === 401 ? '未登录' : '仅管理员可查看');
-        throw new Error(`加载失败 HTTP ${res.status}`);
+        throw new Error('暂时无法读取系统账号，请稍后重试');
       }
       const data: any = await res.json();
       const remote: Array<any> = Array.isArray(data?.users) ? data.users : [];
@@ -803,7 +803,7 @@ export default function SettingsPage() {
           optimisticId = String(data.user.id);
         }
       } else {
-        apiError = data?.error ?? `HTTP ${resp.status}`;
+        apiError = data?.error ?? "系统暂时无法处理，请稍后重试";
         storedHint = data?.stored === "failed" ? "failed" : null;
       }
     } catch (err: any) {
@@ -880,7 +880,7 @@ export default function SettingsPage() {
             apiOk = true;
             storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
           } else {
-            apiError = data?.error ?? `HTTP ${resp.status}`;
+            apiError = data?.error ?? "系统暂时无法处理，请稍后重试";
             storedHint = data?.stored === "failed" ? "failed" : null;
           }
         } catch (err: any) {
@@ -946,7 +946,7 @@ export default function SettingsPage() {
         if (resp.status === 200 || resp.status === 202) {
           storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
         } else {
-          apiError = data?.error ?? `HTTP ${resp.status}`;
+          apiError = data?.error ?? "系统暂时无法处理，请稍后重试";
           storedHint = data?.stored === "failed" ? "failed" : null;
         }
       } catch (err: any) {
@@ -1384,7 +1384,7 @@ export default function SettingsPage() {
               <Building2 className="h-3 w-3" />
               优先出资比例
               <span className="ml-1 inline-flex h-4 items-center px-1.5 rounded-full border border-dashed border-warning/40 text-[9px] tracking-wide text-warning/90 bg-warning/5">
-                暂未接入引擎
+                当前版本固定
               </span>
             </Label>
             <div className="relative">
@@ -1409,7 +1409,7 @@ export default function SettingsPage() {
               <Building2 className="h-3 w-3" />
               WIN100 担保出资比例
               <span className="ml-1 inline-flex h-4 items-center px-1.5 rounded-full border border-dashed border-warning/40 text-[9px] tracking-wide text-warning/90 bg-warning/5">
-                暂未接入引擎
+                当前版本固定
               </span>
             </Label>
             <div className="relative">
@@ -1942,7 +1942,7 @@ export default function SettingsPage() {
           {channelStatus && (["email", "whatsapp"] as const).map((channel) => (
             <p key={channel} className={channelStatus[channel].ready ? "text-success" : "text-warning"}>
               {channel === "email" ? "邮件" : "WhatsApp"}：{channelStatus[channel].ready
-                ? `${channelStatus[channel].provider} 配置已就绪，待实发验证`
+                ? "配置已就绪，待实发验证"
                 : channelStatus[channel].issues.join("；")}
             </p>
           ))}
@@ -1955,9 +1955,9 @@ export default function SettingsPage() {
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
-                  <p className="font-semibold text-sm">Email Webhook</p>
+                  <p className="font-semibold text-sm">邮件通知通道</p>
                   <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
-                    onClick={() => setHelpOpen("email-webhook")} title="如何配置 Email 通知渠道？">
+                    onClick={() => setHelpOpen("email-webhook")} title="如何配置邮件通知通道？">
                     <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
                 </div>
@@ -1995,9 +1995,9 @@ export default function SettingsPage() {
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
-                  <p className="font-semibold text-sm">WhatsApp Business Webhook</p>
+                  <p className="font-semibold text-sm">WhatsApp 通知通道</p>
                   <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
-                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 通知渠道？">
+                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 通知通道？">
                     <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
                 </div>
@@ -2281,13 +2281,13 @@ export default function SettingsPage() {
                     </span>
                     {quoteLive?.provider && (
                       <Badge variant="secondary" className="text-[10px] h-5">
-                        {quoteLive.provider}
+                        {quoteProviderLabel(quoteLive.provider)}
                         {quoteLive.source !== "LIVE" && ` · ${quoteLive.source === "CACHE" ? "缓存" : "离线"}`}
                       </Badge>
                     )}
                     {quoteFetching && (
                       <Badge variant="outline" className="text-[10px] h-5 font-mono">
-                        UPDATING...
+                        更新中…
                       </Badge>
                     )}
                   </div>
@@ -2403,7 +2403,7 @@ export default function SettingsPage() {
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2">
           <Database className="h-4 w-4 text-success" />
-          数据源 & API 集成
+          数据源配置
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0 space-y-5">
@@ -2414,7 +2414,7 @@ export default function SettingsPage() {
                 <RadioTower className="h-4 w-4 text-warning" />
               </div>
               <div>
-                <p className="font-semibold text-sm">股票行情 API</p>
+                <p className="font-semibold text-sm">股票行情数据源</p>
                 <p className="text-[11px] text-muted-foreground">
                   支持 Yahoo Finance、Finnhub、Alpha Vantage
                 </p>
@@ -2439,7 +2439,7 @@ export default function SettingsPage() {
               </select>
             </div>
             <div>
-              <Label className="text-xs">API Key</Label>
+              <Label className="text-xs">行情访问授权码</Label>
               <SettingsField
                 type="password"
                 name="apiKey"
@@ -2459,9 +2459,9 @@ export default function SettingsPage() {
                 <Database className="h-4 w-4 text-success" />
               </div>
               <div>
-                <p className="font-semibold text-sm">Supabase / PostgreSQL</p>
+                <p className="font-semibold text-sm">数据存储服务</p>
                 <p className="text-[11px] text-muted-foreground">
-                 数据存储服务 · 批次、客户与补仓记录
+                 批次、客户、补仓与结算记录统一存储
                 </p>
               </div>
             </div>
@@ -2842,8 +2842,8 @@ export default function SettingsPage() {
       </CardHeader>
       <CardContent className="pt-0 space-y-2 text-xs">
         {[
-          { k: "系统版本", v: "v2.0.1 Professional" },
-          { k: "构建时间", v: "2026-09-19 15:42" },
+          { k: "系统名称", v: "RiskControl 风控预警平台" },
+          { k: "服务状态", v: "运行中" },
         ].map((x) => (
           <div
             key={x.k}

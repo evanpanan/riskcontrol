@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { QUOTE_PROVIDERS, type HistoryPeriod, HISTORY_PERIOD_CONFIG, type HistoryCandle } from "@/lib/quote/providers";
+import { quoteProviderLabel, type HistoryPeriod, HISTORY_PERIOD_CONFIG, type HistoryCandle } from "@/lib/quote/providers";
 import { AlertTriangle, Clock, Loader2, TrendingDown, TrendingUp, RefreshCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getNYSEInfo } from "@/lib/liveQuote";
@@ -160,7 +160,7 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
             continue;
           }
           const raw = e?.message || String(e || "加载失败");
-          setError(/HTTP 502|行情获取失败|UPSTREAM_FATAL|所有行情源均失败/i.test(raw) ? "行情获取失败，请稍后重试或检查网络。" : raw);
+          setError(/HTTP \d{3}|no candles|empty data|UPSTREAM_FATAL|所有行情源均失败|行情获取失败/i.test(raw) ? "行情获取失败，请稍后重试或检查网络。" : raw);
           setCandles(null);
         }
       }
@@ -219,10 +219,8 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
   const isSynthetic = provider === "SYNTHETIC_INTRADAY";
   const providerLabel =
     isSynthetic
-      ? "合成模拟分时（3 免费源均无可用 intraday 数据）"
-      : provider && QUOTE_PROVIDERS.find((p) => p.id === provider)
-        ? QUOTE_PROVIDERS.find((p) => p.id === provider)!.label
-        : provider || "";
+      ? "模拟分时走势（当前暂无实时分时数据）"
+      : quoteProviderLabel(provider);
 
   useEffect(() => {
     if (!open) return;
@@ -458,7 +456,7 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
         mountedOnce = true;
         return true;
       } catch (e: any) {
-        setError(e?.message || String(e || "createChart failed"));
+        setError("图表加载失败，请刷新页面后重试。");
         destroyChart();
         return false;
       }

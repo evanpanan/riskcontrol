@@ -153,7 +153,7 @@ const METHOD_LABELS: Record<string, string> = {
 
 const CHANNEL_LABELS: Record<string, string> = {
   email: '邮件',
-  webhook: 'Webhook',
+  webhook: '通知转发',
   sms: '短信',
   feishu: '飞书',
 };

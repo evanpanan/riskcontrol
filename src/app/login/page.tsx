@@ -480,17 +480,17 @@ function LoginPageInner() {
             <Logo size={38} />
             <div className="flex flex-col">
               <span className="font-bold tracking-tight text-gradient-primary text-lg">RiskControl</span>
-              <span className="text-[10px] text-muted-foreground/80 tracking-widest uppercase">v2.0 Professional</span>
+              <span className="text-[10px] text-muted-foreground/80 tracking-widest">机构级股票风控平台</span>
             </div>
           </Link>
           <div className="hidden sm:flex items-center gap-3">
             <Badge variant="outline" className="text-[10.5px] h-7 px-3 backdrop-blur-sm bg-card/40">
               <BadgeCheck className="h-3 w-3 mr-1.5 text-success" />
-              SOC 2 Type II · Financial-grade
+              15% 预警 · 20% 补仓自动击穿
             </Badge>
             <Badge variant="secondary" className="text-[10.5px] h-7 px-3 backdrop-blur-sm">
               <Shield className="h-3 w-3 mr-1.5 text-primary" />
-              TLS 1.3 + Aria Encrypted
+              全量操作审计留痕
             </Badge>
           </div>
         </div>
@@ -517,8 +517,8 @@ function LoginPageInner() {
             <div className="grid grid-cols-2 gap-3 max-w-lg">
               <Card className="p-4 gradient-card border-border/50">
                 <Shield className="h-5 w-5 text-primary mb-2" />
-                <p className="text-sm font-semibold">RBAC 权限分离</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">ADMIN / 风控总监 / 商务经理 / 运营</p>
+                <p className="text-sm font-semibold">角色权限分离</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">系统管理员 / 风控总监 / 商务经理 / 运营</p>
               </Card>
               <Card className="p-4 gradient-card border-border/50">
                 <Users className="h-5 w-5 text-success mb-2" />
@@ -691,11 +691,9 @@ function LoginPageInner() {
             </Card>
 
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/70 font-mono">
-              <span>© 2026 RiskControl v2.0 Professional</span>
+              <span>© 2026 RiskControl</span>
               <span>·</span>
-              <span>Build 2026.Q3</span>
-              <span>·</span>
-              <span>Mock Auth Provider</span>
+              <span>机构级股票风控平台</span>
             </div>
           </div>
         </div>
@@ -861,7 +859,7 @@ function WelcomeTransitionOverlay(props: {
                     className="h-1.5 w-1.5 rounded-full bg-success"
                     style={{ animation: "rc-blink 1s ease-in-out infinite" }}
                   />
-                  会话密钥签发
+                  正在验证身份
                 </span>
                 <span>正在跳转工作台…</span>
               </div>
@@ -871,10 +869,10 @@ function WelcomeTransitionOverlay(props: {
           {/* 底部品牌条 */}
           <div className="border-t border-border/50 px-8 py-3 flex items-center justify-between bg-gradient-to-r from-primary/[0.04] via-transparent to-indigo-500/[0.04]">
             <span className="text-[10px] font-mono text-muted-foreground/80">
-              RiskControl v2.0 Professional
+              RiskControl 风控平台
             </span>
             <span className="text-[10px] font-mono text-muted-foreground/80">
-              Build 2026.Q3 · Secure
+              安全连接 · 正在进入工作台
             </span>
           </div>
         </div>

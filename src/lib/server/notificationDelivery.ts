@@ -25,16 +25,16 @@ export function notificationReadiness(env: Env = process.env) {
   const channels = Object.fromEntries((["email", "whatsapp"] as const).map((channel) => {
     const selected = provider(channel, env);
     const issues: string[] = [];
-    if (!authConfigured) issues.push("配置 NOTIFICATION_SEND_TOKEN（至少32位）");
-    if (selected === "none") issues.push(channel === "email" ? "配置 Resend API Key 和已验证的发件地址" : "配置 Twilio 或 Meta WhatsApp 服务");
+    if (!authConfigured) issues.push("系统尚未开通通知发送，请联系系统运维启用");
+    if (selected === "none") issues.push(channel === "email" ? "邮件发送服务尚未开通，请联系系统运维启用" : "WhatsApp 消息服务尚未开通，请联系系统运维启用");
     if (channel === "email" && selected !== "webhook" && selected !== "none" &&
-        !configured(env.NOTIFICATION_FROM_EMAIL)) issues.push("配置已验证的 NOTIFICATION_FROM_EMAIL");
+        !configured(env.NOTIFICATION_FROM_EMAIL)) issues.push("发件邮箱尚未验证，请联系系统运维完成发件地址验证");
     if (selected === "twilio") {
-      if (!phoneValid((env.TWILIO_WHATSAPP_FROM_NUMBER ?? "").replace(/^whatsapp:/, ""))) issues.push("配置 WhatsApp 发件号码");
-      if (!configured(env.TWILIO_WHATSAPP_CONTENT_SID)) issues.push("配置审核通过的 WhatsApp 模板 Content SID");
+      if (!phoneValid((env.TWILIO_WHATSAPP_FROM_NUMBER ?? "").replace(/^whatsapp:/, ""))) issues.push("WhatsApp 发件号码尚未配置");
+      if (!configured(env.TWILIO_WHATSAPP_CONTENT_SID)) issues.push("WhatsApp 消息模板尚未审核通过");
     }
     if (selected === "meta" && (!configured(env.META_WA_TEMPLATE_NAME) || !configured(env.META_GRAPH_API_VERSION))) {
-      issues.push("配置审核通过的模板名和当前受支持的 Graph API 版本");
+      issues.push("WhatsApp 消息模板或接口版本待更新，请联系系统运维");
     }
     return [channel, { provider: selected, ready: !issues.length, issues }];
   })) as Record<Channel, { provider: string; ready: boolean; issues: string[] }>;
@@ -56,10 +56,10 @@ async function request(url: string, init: RequestInit) {
 }
 
 function allowedWebhook(value: string, configuredUrl: string) {
-  if (value !== configuredUrl) throw new Error("Webhook 必须与服务端配置的地址完全一致；留空即可使用服务端配置。");
+  if (value !== configuredUrl) throw new Error("转发地址必须与系统已配置的地址完全一致；留空即可使用系统默认通道。");
   const url = new URL(value);
   if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-    throw new Error("Webhook 必须使用不含账号密码的 HTTPS 地址。");
+    throw new Error("转发地址必须使用不含账号密码的 HTTPS 地址。");
   }
   // Only an operator-controlled server environment can choose the destination; redirects are disabled.
   return url.toString();
@@ -86,7 +86,7 @@ export async function deliverNotification(body: any, env: Env = process.env) {
   if (!status.ready) throw new Error(status.issues.join("；"));
   const configuredUrl = env[channel === "email" ? "EMAIL_WEBHOOK_URL" : "WHATSAPP_WEBHOOK_URL"] ?? "";
   if (body.webhookOverride && body.webhookOverride !== configuredUrl) {
-    throw new Error("Webhook 未获服务端授权。请让管理员配置相同地址，或清空输入使用服务端通道。");
+    throw new Error("该转发地址未获授权。请让管理员配置相同地址，或清空输入使用系统默认通道。");
   }
   const selected = provider(channel, env);
   const sentTo: string[] = [];
@@ -107,7 +107,7 @@ export async function deliverNotification(body: any, env: Env = process.env) {
       severity: payload.severity, type: payload.type, batchId: payload.batchId, details: payload.details,
     }));
     const data = await response.json().catch(() => null);
-    if (data?.success === false) throw new Error("Webhook 返回业务失败，请检查自动化流程执行记录。");
+    if (data?.success === false) throw new Error("通知转发目标返回失败，请检查自动化流程执行记录。");
     if (Array.isArray(data?.sentTo)) {
       sentTo.push(...targets.filter((target) => data.sentTo.includes(target)));
       if (sentTo.length !== targets.length) errors.push("部分收件人未获服务商受理，请检查流程执行记录。");

@@ -7,6 +7,7 @@ import { FlashNumber } from "@/components/ui/FlashNumber";
 import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
 import { toast } from "sonner";
 import { getNYSEInfo } from "@/lib/liveQuote";
+import { quoteProviderLabel } from "@/lib/quote/providers";
 import {
   cn,
   formatCurrency,
@@ -605,10 +606,10 @@ export default function MarketPage() {
                 )}
               />
               {realtime?.provider
-                ? realtime.provider.replace("_UNOFFICIAL", "").replace("_", " ")
-                : "LIVE"}
+                ? quoteProviderLabel(realtime.provider)
+                : "实时行情"}
               <span className="text-[10px] opacity-70 font-mono">
-                [{realtime?.source ?? "—"}]
+                [{realtime?.source === "LIVE" ? "实时" : realtime?.source === "CACHE" ? "缓存" : realtime?.source === "OFFLINE" ? "离线" : "—"}]
               </span>
             </Badge>
             <Button

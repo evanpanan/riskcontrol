@@ -316,7 +316,7 @@ export async function sendNotification(
       const success = resp.ok && data?.success === true && sentTo.length === new Set(targets).size;
       result.channels[channel] = {
         success, sentTo,
-        error: success ? undefined : data?.error || `发送未获确认（HTTP ${resp.status}），请先核查服务商记录。`,
+        error: success ? undefined : data?.error || "发送未获确认，请先核查服务商记录，勿直接重复发送。",
       };
       if (!success) result.success = false;
     } catch {
@@ -353,8 +353,8 @@ export async function sendTestNotification(
     severity: "LOW",
     title: isEmail ? "【测试】邮箱通道连通测试" : "【测试】WhatsApp 通道连通测试",
     message: isEmail
-      ? `这是 RiskControl 风控系统通过 Email Webhook 发出的一封测试邮件。\n发送时间：${new Date().toLocaleString()}。\n如果您收到了本邮件，说明通知通道配置成功。`
-      : `这是 RiskControl 风控系统通过 WhatsApp Webhook 发出的一条测试短信。\n发送时间：${new Date().toLocaleString()}。\n如您收到本条消息，说明 WhatsApp 通道已打通。`,
+      ? `这是 RiskControl 风控系统发出的一封测试邮件。\n发送时间：${new Date().toLocaleString()}。\n如果您收到了本邮件，说明通知通道配置成功。`
+      : `这是 RiskControl 风控系统发出的一条测试消息。\n发送时间：${new Date().toLocaleString()}。\n如您收到本条消息，说明 WhatsApp 通道已打通。`,
     recipients: {
       emails: isEmail ? targets : [],
       whatsapps: isEmail ? [] : targets,

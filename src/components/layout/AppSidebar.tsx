@@ -148,8 +148,8 @@ export function AppSidebar() {
             <span className="font-bold text-base tracking-tight text-gradient-primary">
               RiskControl
             </span>
-            <span className="text-[10px] text-muted-foreground tracking-wider uppercase">
-              v2.0 Professional
+            <span className="text-[10px] text-muted-foreground tracking-wider">
+              机构级股票风控平台
             </span>
           </div>
         </Link>

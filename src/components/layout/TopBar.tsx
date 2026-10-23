@@ -40,6 +40,7 @@ import { toast } from "sonner";
 import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { KLineDialog } from "@/components/quote/KLineDialog";
+import { quoteProviderLabel } from "@/lib/quote/providers";
 import { refreshMockDataPrices } from "@/lib/mockData";
 
 function getQuoteSettings(): LiveQuoteSettings {
@@ -393,8 +394,8 @@ export function TopBar() {
                     </p>
                     {liveQuote?.provider && (
                       <p className="text-muted-foreground mt-1">
-                        数据源：{liveQuote.provider}
-                        {liveQuote.source !== "LIVE" && `（${liveQuote.source === "CACHE" ? "最近成功缓存" : "离线兜底"}）`}
+                        数据源：{quoteProviderLabel(liveQuote.provider)}
+                        {liveQuote.source !== "LIVE" && `（${liveQuote.source === "CACHE" ? "最近成功缓存" : "离线数据"}）`}
                       </p>
                     )}
                     <p className="text-primary mt-1">点击打开 K 线图（多周期切换）</p>

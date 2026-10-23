@@ -1,11 +1,21 @@
 export type QuoteProvider = "YAHOO_FINANCE" | "NASDAQ_UNOFFICIAL" | "STOOQ" | "FINNHUB";
 
 export const QUOTE_PROVIDERS: { id: QuoteProvider; label: string; url: string }[] = [
-  { id: "YAHOO_FINANCE", label: "Yahoo Finance（免费，全球覆盖）", url: "https://finance.yahoo.com" },
-  { id: "NASDAQ_UNOFFICIAL", label: "Nasdaq Unofficial（免费，美股）", url: "https://www.nasdaq.com" },
-  { id: "STOOQ", label: "Stooq（免费，CSV 友好）", url: "https://stooq.com" },
-  { id: "FINNHUB", label: "Finnhub（专业美股行情，需免费 API Key）", url: "https://finnhub.io" },
+  { id: "YAHOO_FINANCE", label: "Yahoo Finance（全球行情）", url: "https://finance.yahoo.com" },
+  { id: "NASDAQ_UNOFFICIAL", label: "Nasdaq（美股行情）", url: "https://www.nasdaq.com" },
+  { id: "STOOQ", label: "Stooq（全球行情）", url: "https://stooq.com" },
+  { id: "FINNHUB", label: "Finnhub（专业美股行情）", url: "https://finnhub.io" },
 ];
+
+/** 把行情源标识转换为可读名称，供界面展示使用。 */
+export function quoteProviderLabel(id?: string | null): string {
+  if (!id) return "";
+  if (id === "SYNTHETIC_INTRADAY") return "模拟分时";
+  const found = QUOTE_PROVIDERS.find((p) => p.id === id);
+  return found
+    ? found.label.replace(/（.*）/, "")
+    : id.replace(/_UNOFFICIAL$/, "").replace(/_/g, " ");
+}
 
 function getFinnhubKey(): string | null {
   const k =
@@ -18,7 +28,7 @@ function getFinnhubKey(): string | null {
 
 export async function finnhubRealtime(symbol: string): Promise<RealtimeQuote> {
   const key = getFinnhubKey();
-  if (!key) throw new Error("Finnhub API Key 未配置 (FINNHUB_API_KEY)");
+  if (!key) throw new Error("Finnhub 行情授权未配置，请联系系统运维");
   const s = symbol.trim().toUpperCase();
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${key}`;
   const res = await timeout(
@@ -74,7 +84,7 @@ function _aggCandlesTo4H(raw: HistoryCandle[]): HistoryCandle[] {
 
 export async function finnhubHistory(symbol: string, period: HistoryPeriod): Promise<HistoryCandle[]> {
   const key = getFinnhubKey();
-  if (!key) throw new Error("Finnhub API Key 未配置 (FINNHUB_API_KEY)");
+  if (!key) throw new Error("Finnhub 行情授权未配置，请联系系统运维");
   const s = symbol.trim().toUpperCase();
   const cfg = HISTORY_PERIOD_CONFIG[period];
   const toSec = Math.floor(Date.now() / 1000);

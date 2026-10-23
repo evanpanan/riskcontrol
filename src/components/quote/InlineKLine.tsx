@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   HISTORY_PERIOD_CONFIG,
-  QUOTE_PROVIDERS,
+  quoteProviderLabel,
   type HistoryCandle,
   type HistoryPeriod,
 } from "@/lib/quote/providers";
@@ -107,7 +107,7 @@ export function InlineKLine({
       } catch (e: any) {
         if (cancelled) return;
         const raw = e?.message || String(e || "加载失败");
-        setError(/HTTP 502|行情获取失败|UPSTREAM_FATAL|所有行情源均失败/i.test(raw) ? "行情获取失败，请稍后重试。" : raw);
+        setError(/HTTP \d{3}|no candles|empty data|UPSTREAM_FATAL|所有行情源均失败|行情获取失败/i.test(raw) ? "行情获取失败，请稍后重试。" : raw);
         setCandles(null);
       } finally {
         if (!cancelled) setLoading(false);
@@ -121,9 +121,7 @@ export function InlineKLine({
   const isSynthetic = provider === "SYNTHETIC_INTRADAY";
   const providerLabel = isSynthetic
     ? "模拟 · 合成分时"
-    : provider && QUOTE_PROVIDERS.find((p) => p.id === provider)
-      ? QUOTE_PROVIDERS.find((p) => p.id === provider)!.label
-      : provider || "";
+    : quoteProviderLabel(provider);
 
   const summary = useMemo(() => {
     if (!candles || candles.length === 0) return null;
@@ -287,7 +285,7 @@ export function InlineKLine({
         mountedOnce = true;
         return true;
       } catch (e: any) {
-        setError(e?.message || String(e || "createChart failed"));
+        setError("图表加载失败，请刷新页面后重试。");
         try {
           if (resizeObserverRef.current) { resizeObserverRef.current.disconnect(); resizeObserverRef.current = null; }
           if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; candleSeriesRef.current = null; }

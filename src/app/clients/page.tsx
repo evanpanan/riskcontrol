@@ -26,6 +26,7 @@ import {
 import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
+import { quoteProviderLabel } from "@/lib/quote/providers";
 import { formatCurrency, cn, formatDate, formatPercent, calculateTradingWindows } from "@/lib/utils";
 import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit, PRIORITY_RATIO, SUBORDINATE_RATIO, calculateBatchStatus, calculateCurrentMarketValue } from "@/lib/riskEngine";
 import { toast } from "sonner";
@@ -3068,8 +3069,8 @@ export default function ClientsPage() {
                           setCreateBatchForm((prev) => prev.stockSymbol === sym ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
                           const label =
                             q?.source === "CACHE" ? "缓存报价" :
-                            q?.source === "LIVE" ? "实时报价" : "离线兜底报价";
-                          toast.success(`${label}：${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${q.provider})` : ""}`);
+                            q?.source === "LIVE" ? "实时报价" : "离线报价";
+                          toast.success(`${label}：${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${quoteProviderLabel(q.provider)})` : ""}`);
                         } else {
                           toast.error(`抓取失败：${sym} 未返回有效价格，请手动输入。`);
                         }
