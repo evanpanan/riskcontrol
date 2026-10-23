@@ -901,6 +901,7 @@ export default function MarketPage() {
                     tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`}
                   />
                   <ReTooltip
+                    cursor={false}
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
                       border: "1px solid hsl(var(--border))",
