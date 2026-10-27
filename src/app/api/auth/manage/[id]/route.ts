@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
+import { RC_SESSION_COOKIE } from "@/lib/auth/session";
+import { resolveSessionUserFromToken } from "@/lib/server/apiAuth";
+import { revokeUserSessions } from "@/lib/server/sessionRegistry";
 import { hashPassword, generateSalt } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
@@ -86,7 +88,7 @@ async function requireAdminSession(req: NextRequest): Promise<{ ok: boolean; res
   RATE_BUCKET.set(ip, remaining);
 
   const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return {
       ok: false,
@@ -198,6 +200,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       data: patch,
       select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
     });
+    // 停用 / 降权 / 改密后，该账号已签发的旧会话必须立即失效，
+    // 否则旧凭证在有效期内仍可继续访问（改密尤其需要）。
+    if (patch.enabled === false || patch.role !== undefined || patch.passwordHash !== undefined) {
+      await revokeUserSessions(id);
+    }
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", user: updated },
       { status: 200, headers: { "Cache-Control": "no-store" } },

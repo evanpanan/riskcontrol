@@ -2,6 +2,13 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { resolveSessionUser, unauthorized, forbidden, jsonNoStore } from '@/lib/server/apiAuth';
 import { APP_ROLES, type AppRole } from '@/types/auth';
+import {
+  collectOwnedScope,
+  isBdManager,
+  ledgersContainOwnedClient,
+  mergeLedgerWriteForBd,
+  redactLedgerForBd,
+} from '@/lib/server/workspaceScope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +36,46 @@ async function computeVersion(): Promise<string> {
  * 读取工作区数据。
  * - 带 ?version= 时先比对版本，未变化直接返回 unchanged，避免多端轮询时反复传输整包数据。
  * - 默认返回全部记录（含乐观锁 revision）。
+ * - 商务经理仅返回本人名下客户所属的批次账本与补丁，他人客户行脱敏。
  */
+
+interface StoreRow {
+  kind: string;
+  key: string;
+  payload: unknown;
+  revision: number;
+  updatedAt: Date;
+}
+
+/** 商务经理视角的数据范围收敛：他人批次/客户状态/补丁不下发，批次内他人客户行脱敏。 */
+async function scopeRowsForBd(rows: StoreRow[], bdName: string | null): Promise<StoreRow[]> {
+  const ledgers = await prisma.workspaceRecord.findMany({
+    where: { kind: 'ledger' },
+    select: { key: true, payload: true },
+  });
+  const scope = collectOwnedScope(ledgers, bdName);
+  const out: StoreRow[] = [];
+  for (const row of rows) {
+    if (row.kind === 'ledger') {
+      if (!scope.batchIds.has(row.key)) continue;
+      out.push({ ...row, payload: bdName ? redactLedgerForBd(row.payload, bdName) : row.payload });
+      continue;
+    }
+    if (row.kind === 'patches') {
+      if (!scope.batchIds.has(row.key)) continue;
+      out.push(row);
+      continue;
+    }
+    if (row.kind === 'client_status') {
+      if (!scope.clientIds.has(row.key)) continue;
+      out.push(row);
+      continue;
+    }
+    out.push(row); // config / meta：读取保留，写入另行按角色收敛
+  }
+  return out;
+}
+
 export async function GET(req: Request) {
   const session = await resolveSessionUser();
   if (!session) return unauthorized();
@@ -47,10 +93,13 @@ export async function GET(req: Request) {
       where,
       select: { kind: true, key: true, payload: true, revision: true, updatedAt: true },
     });
+    const scopedRows = isBdManager(session)
+      ? await scopeRowsForBd(rows, session.bdManagerFullName ?? null)
+      : rows;
     return jsonNoStore({
       ok: true,
       version,
-      records: rows.map((r) => ({
+      records: scopedRows.map((r) => ({
         kind: r.kind,
         key: r.key,
         payload: r.payload,
@@ -96,6 +145,20 @@ export async function PUT(req: Request) {
     return forbidden('仅管理员或风控总监可修改机构级配置');
   }
   if (!key || key.length > MAX_KEY_LENGTH) return jsonNoStore({ ok: false, error: '数据键无效' }, 400);
+  // 商务经理：补仓补丁与结算/补仓相关的批次级写入一律拒绝；客户状态仅限本人名下客户。
+  const bdWrite = isBdManager(session);
+  if (bdWrite && kind === 'patches') {
+    return forbidden('商务经理不可修改补仓记录');
+  }
+  if (bdWrite && kind === 'client_status') {
+    const ledgers = await prisma.workspaceRecord.findMany({
+      where: { kind: 'ledger' },
+      select: { payload: true },
+    });
+    if (!ledgersContainOwnedClient(ledgers, key, session.bdManagerFullName)) {
+      return forbidden('仅可修改本人名下客户的状态');
+    }
+  }
   if (body.payload === undefined || body.payload === null) {
     return jsonNoStore({ ok: false, error: '缺少数据内容' }, 400);
   }
@@ -122,6 +185,10 @@ export async function PUT(req: Request) {
         select: { revision: true, payload: true },
       });
       if (!existing) {
+        // 商务经理无建批次权限：不得创建账本记录（杜绝注入他人批次账本）。
+        if (bdWrite && kind === 'ledger') {
+          return { ok: false as const, forbidden: '仅可修改已存在的本人名下批次账本' };
+        }
         try {
           const created = await tx.workspaceRecord.create({
             data: { kind, key, payload, revision: 1, updatedBy: session.id },
@@ -149,11 +216,20 @@ export async function PUT(req: Request) {
           conflict: { payload: existing.payload, revision: existing.revision },
         };
       }
+      // 商务经理写账本：只接受自有客户条目的变更，批次级字段与他人客户行以服务端为准。
+      let nextPayload: Prisma.InputJsonValue = payload;
+      if (bdWrite && kind === 'ledger') {
+        const merged = mergeLedgerWriteForBd(existing.payload, payload, session.bdManagerFullName);
+        if (!merged.ok) {
+          return { ok: false as const, forbidden: merged.error ?? '当前角色不可修改该账本' };
+        }
+        nextPayload = JSON.parse(JSON.stringify(merged.payload)) as Prisma.InputJsonValue;
+      }
       // 版本比较必须落在 UPDATE 的 WHERE 条件里，仅靠事务内「先读后比」在并发下会丢失更新：
       // 两个事务读到同一 revision 时都能通过 check，最终只有一份 payload 生效。
       const updated = await tx.workspaceRecord.updateMany({
         where: { kind, key, revision: existing.revision },
-        data: { payload, revision: existing.revision + 1, updatedBy: session.id },
+        data: { payload: nextPayload, revision: existing.revision + 1, updatedBy: session.id },
       });
       if (updated.count !== 1) {
         const current = await tx.workspaceRecord.findUnique({
@@ -169,6 +245,7 @@ export async function PUT(req: Request) {
     });
 
     if (!result.ok) {
+      if ('forbidden' in result) return forbidden(result.forbidden);
       return jsonNoStore(
         {
           ok: false,

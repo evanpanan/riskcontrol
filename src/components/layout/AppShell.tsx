@@ -5,6 +5,8 @@ import { TopBar } from "@/components/layout/TopBar";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { WORKSPACE_ERROR_EVENT } from "@/lib/workspaceStore";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
@@ -15,6 +17,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setHydrated(true);
+  }, []);
+
+  // 工作区落库失败必须让操作员看见：此前失败只写控制台，界面仍显示为已保存。
+  useEffect(() => {
+    let lastAt = 0;
+    const handler = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ message?: string }>).detail;
+      const now = Date.now();
+      if (now - lastAt < 5000) return;
+      lastAt = now;
+      toast.error(detail?.message || "数据未能保存到服务器，请刷新页面后重试");
+    };
+    window.addEventListener(WORKSPACE_ERROR_EVENT, handler);
+    return () => window.removeEventListener(WORKSPACE_ERROR_EVENT, handler);
   }, []);
 
   useEffect(() => {

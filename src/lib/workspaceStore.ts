@@ -13,6 +13,8 @@ export type WorkspaceKind = 'ledger' | 'patches' | 'client_status' | 'config' | 
 export const WORKSPACE_SYNCED_EVENT = 'risk-control:workspace-synced';
 export const WORKSPACE_CONFLICT_EVENT = 'risk-control:workspace-conflict';
 export const WORKSPACE_ERROR_EVENT = 'risk-control:workspace-error';
+/** 服务端判定会话已失效（过期 / 被撤销 / 账号被停用）：通知上层登出。 */
+export const WORKSPACE_UNAUTHORIZED_EVENT = 'risk-control:session-invalid';
 
 interface Slot {
   kind: WorkspaceKind;
@@ -61,6 +63,14 @@ function dispatch(name: string, detail?: unknown): void {
 
 export function isWorkspaceHydrated(): boolean {
   return hydrated;
+}
+
+/**
+ * 服务端是否已不可写（未登录 / 会话失效 / 首次同步失败）。
+ * 资金类操作必须据此拒绝本地记账，避免出现「本地成功、服务端未保存」的假成功。
+ */
+export function isWorkspaceWriteBlocked(): boolean {
+  return writeBlocked;
 }
 
 /**
@@ -159,6 +169,7 @@ async function flushSlot(k: string): Promise<void> {
     if (res.status === 401) {
       writeBlocked = true;
       slot.dirty = true;
+      dispatch(WORKSPACE_UNAUTHORIZED_EVENT, {});
       return;
     }
     if (res.status === 409) {
@@ -174,6 +185,21 @@ async function flushSlot(k: string): Promise<void> {
       slot.retries = 0;
       workspaceVersion = null;
       dispatch(WORKSPACE_CONFLICT_EVENT, { kind: slot.kind, key: slot.key });
+      return;
+    }
+    if (res.status === 403) {
+      // 无权限写入（如商务经理写入他人批次）：重试不会改变结果，直接终止并提示。
+      slot.dirty = false;
+      slot.retries = 0;
+      const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      dispatch(WORKSPACE_ERROR_EVENT, {
+        kind: slot.kind,
+        key: slot.key,
+        message:
+          typeof data?.error === 'string' && data.error
+            ? data.error
+            : '当前账号无权修改该数据',
+      });
       return;
     }
     if (!res.ok) {
@@ -264,6 +290,12 @@ async function fetchStore(version?: string | null): Promise<StoreResponse | null
     credentials: 'include',
     headers: { Accept: 'application/json', 'Cache-Control': 'no-store' },
   });
+  if (res.status === 401) {
+    // 会话已被服务端撤销 / 账号被停用：停止写入并通知上层回登录页。
+    writeBlocked = true;
+    dispatch(WORKSPACE_UNAUTHORIZED_EVENT, {});
+    return null;
+  }
   if (!res.ok) return null;
   return (await res.json()) as StoreResponse;
 }
@@ -314,6 +346,8 @@ export async function refreshWorkspaceIfChanged(): Promise<boolean> {
   try {
     const data = await fetchStore(workspaceVersion);
     if (!data?.ok) return false;
+    // 轮询成功说明服务端已恢复：解除写入封锁，让资金操作重新可用。
+    writeBlocked = false;
     if (data.unchanged) return false;
     if (!Array.isArray(data.records)) return false;
     const changed = applyRemoteRecords(data.records, true);

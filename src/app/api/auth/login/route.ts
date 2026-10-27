@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { signSessionJwt, buildSetCookieHeader, buildClearCookieHeader, RC_SESSION_COOKIE } from '@/lib/auth/session';
+import {
+  signSessionJwt,
+  buildSetCookieHeader,
+  buildClearCookieHeader,
+  RC_SESSION_MAX_AGE_SEC,
+} from '@/lib/auth/session';
 import { isAllowedRole, type AppSessionUser } from '@/types/auth';
 import {
   resolveAnyAccountByIdentifier,
   verifyPassword,
 } from '@/lib/auth/password';
 import type { ResolvedAnyAccount } from '@/lib/auth/password';
+import { registerSession } from '@/lib/server/sessionRegistry';
 
 export const runtime = 'nodejs';
 
@@ -139,6 +145,25 @@ export async function POST(req: NextRequest) {
     };
 
     const token = await signSessionJwt(sessionUser);
+
+    // 数据库账号必须登记服务端会话，否则该凭证在后续请求中会被判为已撤销。
+    // 内建演示账号（开发环境）没有数据库行，不参与会话表校验，无需登记。
+    if (account.kind === 'prisma') {
+      const registered = await registerSession({
+        userId: sessionUser.id,
+        token,
+        expiresAt: new Date(Date.now() + RC_SESSION_MAX_AGE_SEC * 1000),
+        ipAddr: ip,
+        userAgent: req.headers.get('user-agent'),
+      });
+      if (!registered) {
+        return NextResponse.json(
+          { ok: false, error: '登录服务暂时不可用，请稍后重试' },
+          { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } }
+        );
+      }
+    }
+
     const cookie = buildSetCookieHeader(token);
 
     const res = NextResponse.json({

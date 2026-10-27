@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { verifySessionJwt } from "@/lib/auth/session";
+import { resolveSessionUserFromToken } from "@/lib/server/apiAuth";
 import { filterClientsByRole, type ClientLike } from "@/lib/authz/dataScope";
 import type { AppSessionUser } from "@/types/auth";
 
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   try {
     const token = cookies().get("rc_session_v1")?.value;
-    const session = token ? await verifySessionJwt(token) : null;
+    const session = await resolveSessionUserFromToken(token);
     if (!session) {
       return NextResponse.json({ error: "未登录或会话已过期", filtered: [] }, { status: 401 });
     }

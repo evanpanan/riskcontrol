@@ -25,7 +25,7 @@ import {
   createMockSessionByKey,
 } from './providers/mockProvider';
 import { logAuthDeny, logAudit } from './audit';
-import { hydrateWorkspace, startWorkspaceRealtimeSync } from '@/lib/workspaceStore';
+import { hydrateWorkspace, startWorkspaceRealtimeSync, WORKSPACE_UNAUTHORIZED_EVENT } from '@/lib/workspaceStore';
 import { bootstrapSharedSettings } from '@/lib/settingsStore';
 
 export const SESSION_UPDATED_EVENT = 'rbac:session-updated';
@@ -275,6 +275,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // 服务端判定会话失效（过期 / 被撤销 / 账号被停用）时立即登出，
+  // 使「停用账号、重置密码、退出登录」对已打开的页面即时生效。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => {
+      cache.clear();
+      setUser((prev) => (prev ? null : prev));
+    };
+    window.addEventListener(WORKSPACE_UNAUTHORIZED_EVENT, handler);
+    return () => {
+      window.removeEventListener(WORKSPACE_UNAUTHORIZED_EVENT, handler);
+    };
+  }, []);
+
   const serverLoginCredentials = useCallback(async (identifier: string, password: string): Promise<AppSessionUser | null> => {
     if (typeof window === 'undefined') return null;
     if (!identifier || !password) return null;
@@ -377,17 +391,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.id, user?.role, user?.email, serverLogin, setSession]);
 
   const logoutToLogin = useCallback(() => {
-    const snap = user;
-    if (snap?.id || snap?.email) {
-      logAudit({
-        action: "logout",
-        actorId: snap?.id ?? undefined,
-        actorEmail: snap?.email ?? undefined,
-        role: snap?.role ?? undefined,
-        resource: "auth:logout",
-        detail: { source: "logoutToLogin" },
-      });
-    }
+    // 退出审计由服务端 /api/auth/logout 在同一请求内落库（避免与撤销会话竞态）。
     clearSession();
     cache.clear();
     void serverLogout().finally(() => {
@@ -402,7 +406,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try { window.location.replace(dest); } catch { window.location.href = dest; }
       }
     });
-  }, [user, serverLogout, setSession]);
+  }, [serverLogout, setSession]);
 
   const loginAsCustom = useCallback((nextUser: AppSessionUser) => {
     if (!nextUser || !nextUser.id || !nextUser.email || !isAllowedRole(nextUser.role)) return;

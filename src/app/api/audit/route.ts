@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
-import type { AppSessionUser } from "@/types/auth";
+import { RC_SESSION_COOKIE } from "@/lib/auth/session";
+import { resolveSessionUserFromToken } from "@/lib/server/apiAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   RATE_BUCKET.set(ip, remaining);
 
   const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const session = await resolveSessionUserFromToken(token);
 
   let raw: Buffer;
   try { raw = await readLimited(req); }
@@ -222,7 +222,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return NextResponse.json({ ok: false, error: "未登录" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }

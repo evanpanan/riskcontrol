@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { RC_SESSION_COOKIE, verifySessionJwt } from '@/lib/auth/session';
-import { buildClearCookieHeader } from '@/lib/auth/session';
+import { RC_SESSION_COOKIE, buildClearCookieHeader } from '@/lib/auth/session';
+import { resolveSessionUserFromToken } from '@/lib/server/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (!token || typeof token !== 'string') {
     return NextResponse.json({ ok: false, error: 'unauthorized', user: null }, { status: 401 });
   }
-  const user = await verifySessionJwt(token);
+  const user = await resolveSessionUserFromToken(token);
   if (!user) {
     const res = NextResponse.json({ ok: false, error: 'invalid_or_expired_token', user: null }, { status: 401 });
     res.headers.set('Set-Cookie', buildClearCookieHeader());

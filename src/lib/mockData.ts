@@ -39,6 +39,7 @@ import {
   deleteWorkspaceRecords,
   flushWorkspaceWrites,
   isWorkspaceHydrated,
+  isWorkspaceWriteBlocked,
   readWorkspaceKind,
   readWorkspaceRecord,
   registerWorkspaceInvalidator,
@@ -1102,6 +1103,11 @@ function readFinanceStore(): FinanceStore {
 function writeFinanceRecords(store: FinanceStore, ids: string[]): void {
   if (typeof window === "undefined") return;
   if (isWorkspaceHydrated()) {
+    // 服务端不可写（未登录 / 会话失效 / 首次同步失败）时必须中止本次记账：
+    // 只更新本地会让操作员看到「已入账」，而服务端账本没有这笔钱。
+    if (isWorkspaceWriteBlocked()) {
+      throw new Error("服务器暂时不可用，本次资金操作未入账。请刷新页面或稍后重试。");
+    }
     for (const id of ids) upsertWorkspaceRecord("ledger", id, store[id]);
     // 服务端已接管持久化，本地镜像尽力而为，写失败不影响记账结果。
     try {

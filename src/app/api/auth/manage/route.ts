@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
+import { RC_SESSION_COOKIE } from "@/lib/auth/session";
+import { resolveSessionUserFromToken } from "@/lib/server/apiAuth";
 import { hashPassword, generateSalt } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
@@ -86,7 +87,7 @@ async function requireAdminSession(req: NextRequest): Promise<{ ok: boolean; res
   RATE_BUCKET.set(ip, remaining);
 
   const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return {
       ok: false,
