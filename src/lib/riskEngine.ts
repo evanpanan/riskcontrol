@@ -797,8 +797,15 @@ export function initializeBatchFinance(batch: BatchLike): void {
   syncBatchFinance(batch);
 }
 
-function activeRound(batch: BatchLike): MarginRound | undefined {
-  return batch.finance?.rounds.find((r) => r.status === "PENDING");
+/**
+ * 当前「尚未履约的补仓义务」轮次：待缴（PENDING）或已逾期（OVERDUE）但未足额的轮次。
+ * 逾期不等于义务消失 —— 仍是同一轮在原期限内的未履约义务，需要继续缴纳并计罚息。
+ * 因此判断「是否需要新开一轮」必须用它，绝不能在逾期后新建 PENDING 轮次把原期限绕开。
+ */
+function openObligationRound(batch: BatchLike): MarginRound | undefined {
+  return batch.finance?.rounds.find(
+    (r) => (r.status === "PENDING" || r.status === "OVERDUE") && r.requiredAmount - r.fulfilledAmount > 0.005
+  );
 }
 
 export function syncBatchFinance(batch: BatchLike): void {
@@ -819,7 +826,9 @@ export function syncBatchFinance(batch: BatchLike): void {
   for (const r of f.rounds) {
     if (checkMarginRoundOverdue(r)) r.status = "OVERDUE";
   }
-  if (!activeRound(batch) && metrics.requiredMarginCall > 0 && (batch.clients ?? []).some((c) => c.status !== ClientStatus.SETTLED)) {
+  // 仅当不存在「未履约的补仓义务」时才新开一轮。
+  // 逾期只是同一轮义务的到期状态，不得借此重建轮次、重置期限。
+  if (!openObligationRound(batch) && metrics.requiredMarginCall > 0 && (batch.clients ?? []).some((c) => c.status !== ClientStatus.SETTLED)) {
     const id = uid();
     const triggerDate = new Date().toISOString();
     f.rounds.push({ id, number: f.rounds.length + 1, requiredAmount: metrics.requiredMarginCall,
@@ -828,7 +837,7 @@ export function syncBatchFinance(batch: BatchLike): void {
       dropPercent: metrics.dropPercent / 100, status: "PENDING",
       allocations: allocateRound(batch, metrics.requiredMarginCall, id) });
   }
-  const round = activeRound(batch) ?? f.rounds[f.rounds.length - 1];
+  const round = openObligationRound(batch) ?? f.rounds[f.rounds.length - 1];
   for (const c of batch.clients ?? []) {
     c.marginState = round?.allocations[c.id] ?? { initialInvestment: c.investmentAmount, required: 0, fulfilled: 0, history: [], roundId: round?.id };
     if (f.settlements[c.id]) c.settlement = f.settlements[c.id];
@@ -845,20 +854,21 @@ export function syncBatchFinance(batch: BatchLike): void {
 }
 
 export function getLockedBatchRequiredMargin(batch: BatchLike): number {
-  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  const round = openObligationRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
   return round?.requiredAmount ?? getBatchMetrics(batch).requiredMarginCall;
 }
 export function allocateClientMarginRequirements(batch: BatchLike, batchRequiredTotal: number, _cumulative = 0): Map<string, ClientMarginState> {
-  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  const round = openObligationRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
   return new Map(Object.entries(round?.allocations ?? allocateRound(batch, batchRequiredTotal, "uninitialized")));
 }
 export function summarizeBatchMarginFromClients(batch: BatchLike) {
-  const round = activeRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
+  const round = openObligationRound(batch) ?? batch.finance?.rounds[batch.finance.rounds.length - 1];
   const perClient = allocateClientMarginRequirements(batch, round?.requiredAmount ?? 0);
   const totalRequired = round?.requiredAmount ?? 0;
   const totalFulfilled = round?.fulfilledAmount ?? 0;
+  const isOpenObligation = round?.status === "PENDING" || round?.status === "OVERDUE";
   return {
-    totalRequired, totalFulfilled, totalPending: round?.status === "PENDING" ? money(Math.max(0, totalRequired - totalFulfilled)) : 0,
+    totalRequired, totalFulfilled, totalPending: isOpenObligation ? money(Math.max(0, totalRequired - totalFulfilled)) : 0,
     perClient, roundId: round?.id, roundNumber: round?.number ?? 0,
     clientCountWithSingleTopup: [...perClient.values()].filter((s) => s.history.some((h) => h.source === "client_single")).length,
     pendingClientCount: [...perClient.values()].filter((s) => s.required - s.fulfilled > 0.005).length,
@@ -875,7 +885,7 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   collateralType?: "cash" | "stock";
 }): number {
   initializeBatchFinance(batch);
-  const round = activeRound(batch);
+  const round = openObligationRound(batch);
   if (!round || (options.expectedRoundId && options.expectedRoundId !== round.id)) return 0;
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
   if (isTopupBlockedByLegacyLedger(batch)) {
@@ -936,7 +946,7 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   return applied;
 }
 export function applyBatchLevelMarginTopupRemainder(batch: BatchLike, amount: number, operatorName?: string): number {
-  return executeInstitutionTopup(batch, { amount, operatorName, expectedRoundId: activeRound(batch)?.id });
+  return executeInstitutionTopup(batch, { amount, operatorName, expectedRoundId: openObligationRound(batch)?.id });
 }
 export function registerClientSingleMargin(client: ClientLike, amount: number, extra: Partial<ClientMarginCallEntry> & { fallbackRequired?: number } = {}): ClientMarginState {
   throw new Error("请通过 executeInstitutionTopup 记录机构成交，禁止只修改客户补仓状态。");
@@ -978,7 +988,7 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     throw new Error(eligibility.reason);
   }
 
-  const pendingRound = activeRound(batch);
+  const pendingRound = openObligationRound(batch);
   if (pendingRound) {
     pendingRound.status = "CANCELLED";
   }
@@ -1059,7 +1069,7 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
 export function addClientPosition(batch: BatchLike, client: ClientLike): void {
   initializeBatchFinance(batch);
   if (batch.finance!.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再新增客户。");
-  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再新增客户。");
+  if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再新增客户。");
   const price = client.entryStockPrice ?? batch.stockPriceAtStart ?? batch.currentStockPrice;
   if (!(price > 0)) throw new Error("当前成交价无效。");
   if (!Number.isFinite(client.investmentAmount) || client.investmentAmount <= 0) throw new Error("客户本金无效。");
@@ -1084,7 +1094,7 @@ export function updateClientPosition(batch: BatchLike, clientId: string, patch: 
   const client = batch.clients?.find((c) => c.id === clientId);
   if (!client) throw new Error("未找到该客户。");
   if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可修改。");
-  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再修改客户。");
+  if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再修改客户。");
   if (patch.investmentAmount !== undefined) {
     const newAmt = Number(patch.investmentAmount);
     if (!Number.isFinite(newAmt) || newAmt <= 0) throw new Error("客户本金无效。");
@@ -1122,7 +1132,7 @@ export function removeClientPosition(batch: BatchLike, clientId: string): void {
   if (idx < 0) throw new Error("未找到该客户。");
   const client = batch.clients![idx];
   if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可删除。");
-  if (activeRound(batch)) throw new Error("请先处理当前补仓轮次，再删除客户。");
+  if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再删除客户。");
   const price = (client as any).entryStockPrice ?? batch.stockPriceAtStart;
   if (!(price > 0)) throw new Error("当前成交价无效。");
   const capital = Number(client.investmentAmount || 0) / PRIORITY_RATIO;
@@ -1248,23 +1258,14 @@ export function calculateBatchPnLSplit(batch: BatchLike, _currentMarketValue: nu
       });
     }
   }
-  if (batch.finance?.settlements) {
-    const settledIds = Object.keys(batch.finance.settlements);
-    let realizedWeightSum = 0;
-    for (const id of settledIds) {
-      const c = (batch.clients ?? []).find((x) => x.id === id);
-      realizedWeightSum += (c?.investmentAmount ?? 0) / PRIORITY_RATIO;
-    }
-    const cap = batch.finance.originalCapital ?? batch.initialTotalAmount ?? 0;
-    const w = cap > 0 ? Math.min(1, realizedWeightSum / Math.max(cap, 1)) : 0;
-    realizedInstitutionInitial += initialBase * w;
-    unrealizedInstitutionInitial = initialBase * (1 - w);
-    realizedInstitutionRescue += fullRescuePnL * w;
-    unrealizedInstitutionRescue = fullRescuePnL * (1 - w);
-  } else {
-    unrealizedInstitutionInitial = initialBase;
-    unrealizedInstitutionRescue = fullRescuePnL;
-  }
+  // 已实现部分只能来自冻结的结算快照（上面的循环已按 snapshot 累加）。
+  // 这里绝不能再按「当前价」重算已实现 —— 否则剩余仓位价格一变，
+  // 历史已实现机构损益就会跟着变，与「结算即冻结」的口径矛盾。
+  // 未实现部分只对应仍在账的剩余仓位：initialBase / fullRescuePnL 本身由
+  // 剩余份额（batch.totalShares）与剩余本金（batch.initialTotalAmount）推导，
+  // 已结算仓位在结算时已同步扣减，故不能再乘 (1 - w) 二次扣减。
+  unrealizedInstitutionInitial = initialBase;
+  unrealizedInstitutionRescue = fullRescuePnL;
   const institutionInitialSubordinatePnL = realizedInstitutionInitial + unrealizedInstitutionInitial;
   const institutionClientSplitShare = realizedInstitutionSplitShare + unrealizedInstitutionSplitShare;
   const institutionRescuePnL = realizedInstitutionRescue + unrealizedInstitutionRescue;

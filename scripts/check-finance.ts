@@ -247,4 +247,45 @@ test("atomic persistence survives serialization; quota failure and stale tabs ca
   near(settled.finance.remainingCapital, 500000);
 });
 
+test("realized institution PnL is frozen on settlement and never follows the remaining price", () => {
+  const b = batch();
+  executeInstitutionTopup(b, { amount: 200000 });
+  b.currentStockPrice = 110;
+  syncBatchFinance(b);
+  markExitReady(b, "a");
+  const settled = settleClientPosition(b, "a");
+  b.currentStockPrice = 75;
+  syncBatchFinance(b);
+  const at75 = calculateBatchPnLSplit(b, b.currentMarketValue!);
+  b.currentStockPrice = 150;
+  syncBatchFinance(b);
+  const at150 = calculateBatchPnLSplit(b, b.currentMarketValue!);
+  // 已实现部分只能来自冻结快照：剩余仓位价格从 75 变到 150 不得改动它
+  near(at150.realizedInstitutionPnL, at75.realizedInstitutionPnL, "已实现机构损益必须冻结");
+  near(at150.realizedClientPnL, at75.realizedClientPnL, "已实现客户损益必须冻结");
+  near(at75.realizedInstitutionPnL, settled.institutionPnL, "已实现机构损益应等于冻结快照");
+  // 只有未实现部分随剩余仓位价格变化
+  assert.notEqual(Math.round(at150.unrealizedInstitutionPnL), Math.round(at75.unrealizedInstitutionPnL));
+});
+
+test("an overdue round keeps its original deadline, is not rebuilt, and stays fulfillable", () => {
+  const b = batch();
+  const roundId = summarizeBatchMarginFromClients(b).roundId;
+  const roundsBefore = b.finance!.rounds.length;
+  // 把到期日推到过去，模拟 WIN100 未在 T+2 内履约
+  b.finance!.rounds[0].dueDate = new Date(Date.now() - 3 * 86400000).toISOString();
+  const dueBefore = b.finance!.rounds[0].dueDate;
+  b.currentStockPrice = 64;
+  syncBatchFinance(b);
+  assert.equal(b.finance!.rounds[0].status, "OVERDUE");
+  assert.equal(b.finance!.rounds.length, roundsBefore, "逾期不得新建轮次");
+  assert.equal(b.finance!.rounds[0].dueDate, dueBefore, "逾期不得重置期限");
+  assert.equal(summarizeBatchMarginFromClients(b).roundId, roundId, "逾期后仍指向同一轮义务");
+  near(summarizeBatchMarginFromClients(b).totalPending, 200000);
+  // 逾期轮次仍可继续履约，缴清后转为已履约，原始期限与罚息依据保持不变
+  near(executeInstitutionTopup(b, { amount: 200000, expectedRoundId: roundId }), 200000);
+  assert.equal(b.finance!.rounds[0].status, "FULLFILLED");
+  assert.equal(b.finance!.rounds[0].dueDate, dueBefore);
+});
+
 process.stdout.write(`Finance regression: ${count} scenarios passed.\n`);
