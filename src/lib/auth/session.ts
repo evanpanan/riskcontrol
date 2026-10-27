@@ -62,26 +62,17 @@ function base64UrlDecodeToString(encoded: string): string | null {
   return decoder.decode(bytes);
 }
 
-function getVercelSessionFallback(): string | null {
-  if (process.env.VERCEL !== '1') return null;
-  const vercelEnv = process.env.VERCEL_ENV?.trim() || 'unknown';
-  const projectRef =
-    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
-    process.env.VERCEL_BRANCH_URL?.trim() ||
-    process.env.VERCEL_URL?.trim();
-  const deploymentRef =
-    process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_REF?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_MESSAGE?.trim();
-  if (!projectRef || !deploymentRef) return null;
-  return `vercel-session-secret-v1::${vercelEnv}::${projectRef}::${deploymentRef}::risk-control`;
-}
-
+/**
+ * 生产环境必须显式提供独立随机密钥（NEXT_RC_AUTH_SECRET），缺失直接拒绝服务。
+ *
+ * 不再从 Vercel 部署元信息派生回退密钥：部署元信息（项目地址、部署 ID、commit）
+ * 属于可预测/可探测信息，一旦密钥缺失，签名密钥即可被推导，等同于
+ * 「任何人都能伪造 ADMIN 会话」。会话签名密钥不允许存在任何默认值。
+ */
 function getAuthSecret(override?: string): Uint8Array {
   const raw = (override ?? process.env.NEXT_RC_AUTH_SECRET) as string | undefined;
   const fallback: string = process.env.NODE_ENV === 'production'
-    ? (getVercelSessionFallback() ?? '')
+    ? ''
     : `dev-session-secret-v1::${process.env.NODE_ENV ?? 'local'}::do-not-use-in-prod`;
   const chosen = (raw && raw.trim()) ? raw.trim() : fallback;
   if (!chosen) {

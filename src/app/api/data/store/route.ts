@@ -1,12 +1,16 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { resolveSessionUser, unauthorized, jsonNoStore } from '@/lib/server/apiAuth';
+import { resolveSessionUser, unauthorized, forbidden, jsonNoStore } from '@/lib/server/apiAuth';
+import { APP_ROLES, type AppRole } from '@/types/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** 允许落库的工作区数据类别。 */
 const ALLOWED_KINDS = new Set(['ledger', 'patches', 'client_status', 'config', 'meta']);
+
+/** 机构级配置与全局标记（空账本标记）仅限机构管理层改写。 */
+const CONFIG_WRITE_ROLES: readonly AppRole[] = [APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER];
 const MAX_KEY_LENGTH = 200;
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024; // 单条记录上限 4MB，防止异常数据拖垮库
 
@@ -87,6 +91,10 @@ export async function PUT(req: Request) {
   const kind = typeof body.kind === 'string' ? body.kind : '';
   const key = typeof body.key === 'string' ? body.key : '';
   if (!ALLOWED_KINDS.has(kind)) return jsonNoStore({ ok: false, error: '未知的数据类别' }, 400);
+  // 机构级配置与全局标记不得由商务经理改写（防止绕过界面直接篡改风控阈值 / 预警收件人）。
+  if ((kind === 'config' || kind === 'meta') && !CONFIG_WRITE_ROLES.includes(session.role)) {
+    return forbidden('仅管理员或风控总监可修改机构级配置');
+  }
   if (!key || key.length > MAX_KEY_LENGTH) return jsonNoStore({ ok: false, error: '数据键无效' }, 400);
   if (body.payload === undefined || body.payload === null) {
     return jsonNoStore({ ok: false, error: '缺少数据内容' }, 400);
@@ -114,11 +122,26 @@ export async function PUT(req: Request) {
         select: { revision: true, payload: true },
       });
       if (!existing) {
-        const created = await tx.workspaceRecord.create({
-          data: { kind, key, payload, revision: 1, updatedBy: session.id },
-          select: { revision: true },
-        });
-        return { ok: true as const, revision: created.revision };
+        try {
+          const created = await tx.workspaceRecord.create({
+            data: { kind, key, payload, revision: 1, updatedBy: session.id },
+            select: { revision: true },
+          });
+          return { ok: true as const, revision: created.revision };
+        } catch (createErr) {
+          // 并发首建：另一请求已抢先创建，改为冲突回带，由客户端以服务端为准重试。
+          if (createErr instanceof Prisma.PrismaClientKnownRequestError && createErr.code === 'P2002') {
+            const current = await tx.workspaceRecord.findUnique({
+              where: { kind_key: { kind, key } },
+              select: { payload: true, revision: true },
+            });
+            return {
+              ok: false as const,
+              conflict: { payload: current?.payload ?? null, revision: current?.revision ?? 0 },
+            };
+          }
+          throw createErr;
+        }
       }
       if (baseRevision === null || baseRevision !== existing.revision) {
         return {
@@ -126,12 +149,23 @@ export async function PUT(req: Request) {
           conflict: { payload: existing.payload, revision: existing.revision },
         };
       }
-      const updated = await tx.workspaceRecord.update({
-        where: { kind_key: { kind, key } },
+      // 版本比较必须落在 UPDATE 的 WHERE 条件里，仅靠事务内「先读后比」在并发下会丢失更新：
+      // 两个事务读到同一 revision 时都能通过 check，最终只有一份 payload 生效。
+      const updated = await tx.workspaceRecord.updateMany({
+        where: { kind, key, revision: existing.revision },
         data: { payload, revision: existing.revision + 1, updatedBy: session.id },
-        select: { revision: true },
       });
-      return { ok: true as const, revision: updated.revision };
+      if (updated.count !== 1) {
+        const current = await tx.workspaceRecord.findUnique({
+          where: { kind_key: { kind, key } },
+          select: { payload: true, revision: true },
+        });
+        return {
+          ok: false as const,
+          conflict: { payload: current?.payload ?? null, revision: current?.revision ?? 0 },
+        };
+      }
+      return { ok: true as const, revision: existing.revision + 1 };
     });
 
     if (!result.ok) {

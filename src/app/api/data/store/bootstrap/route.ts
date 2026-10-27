@@ -1,11 +1,14 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { resolveSessionUser, unauthorized, jsonNoStore } from '@/lib/server/apiAuth';
+import { resolveSessionUser, unauthorized, forbidden, jsonNoStore } from '@/lib/server/apiAuth';
+import { APP_ROLES, type AppRole } from '@/types/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ALLOWED_KINDS = new Set(['ledger', 'patches', 'client_status', 'config', 'meta']);
+/** 初始化落库会写入机构级配置与全部账本，仅限机构管理层。 */
+const BOOTSTRAP_ROLES: readonly AppRole[] = [APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER];
 const MAX_KEY_LENGTH = 200;
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_RECORDS = 2000;
@@ -21,6 +24,9 @@ interface BootstrapBody {
 export async function POST(req: Request) {
   const session = await resolveSessionUser();
   if (!session) return unauthorized();
+  if (!BOOTSTRAP_ROLES.includes(session.role)) {
+    return forbidden('仅管理员或风控总监可执行工作区初始化');
+  }
 
   let body: BootstrapBody;
   try {
