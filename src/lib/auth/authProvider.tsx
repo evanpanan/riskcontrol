@@ -25,6 +25,8 @@ import {
   createMockSessionByKey,
 } from './providers/mockProvider';
 import { logAuthDeny, logAudit } from './audit';
+import { hydrateWorkspace, startWorkspaceRealtimeSync } from '@/lib/workspaceStore';
+import { bootstrapSharedSettings } from '@/lib/settingsStore';
 
 export const SESSION_UPDATED_EVENT = 'rbac:session-updated';
 
@@ -215,12 +217,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       await refreshMe();
       if (cancelled) return;
+      // 会话就绪后再同步工作区数据（批次/客户/补仓/结算），
+      // 保证首屏读取到的就是服务端共享账本，而非空的本地占位。
+      try {
+        await hydrateWorkspace();
+        // 把浏览器中已成型的机构级配置（阈值/收件人/档位/行情源/Logo）带上服务端，
+        // 实现老配置无缝迁移；服务端已有该键时不覆盖。
+        await bootstrapSharedSettings();
+      } catch {
+        /* 同步失败时退化为本地运行，不阻塞界面 */
+      }
+      if (cancelled) return;
+      startWorkspaceRealtimeSync();
       firstHydrateDoneRef.current = true;
       setIsLoading(false);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshMe]);
+
+  // 兜底：若在登录页完成登录后以 SPA 方式进入业务页，补做一次工作区同步。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!user) return;
+    const path = window.location.pathname;
+    if (path.startsWith('/login') || path.startsWith('/signup')) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateWorkspace();
+        await bootstrapSharedSettings();
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      startWorkspaceRealtimeSync();
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

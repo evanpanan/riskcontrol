@@ -153,6 +153,8 @@ export async function POST(req: NextRequest) {
     res.headers.set('Pragma', 'no-cache');
     return res;
   } catch (err) {
+    // 仅记录到服务器日志，绝不回传客户端，避免暴露内部细节。
+    try { console.error('[auth:login] unexpected error:', err instanceof Error ? err.message : String(err)); } catch {}
     const clear = buildClearCookieHeader();
     return NextResponse.json(
       { ok: false, error: GENERIC_DENY_MESSAGE },

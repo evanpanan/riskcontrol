@@ -1,4 +1,5 @@
 import type { RealtimeQuote } from "@/lib/quote/providers";
+import { readSharedSetting, writeSharedSetting } from "./settingsStore";
 
 export const LIVE_QUOTE_SETTINGS_KEY = "risk_control_live_quote_v2";
 const LAST_SUCCESSFUL_QUOTE_KEY = "risk_control_live_quote_last_v2";
@@ -93,16 +94,20 @@ export const DEFAULT_LIVE_QUOTE: LiveQuoteSettings = {
 export function getLiveQuoteSettings(): LiveQuoteSettings {
   try {
     if (typeof window === "undefined") return { ...DEFAULT_LIVE_QUOTE };
-    const raw = localStorage.getItem(LIVE_QUOTE_SETTINGS_KEY);
+    const raw = readSharedSetting(LIVE_QUOTE_SETTINGS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const next: LiveQuoteSettings = { ...DEFAULT_LIVE_QUOTE, ...(parsed || {}) };
     next.symbol = String(next.symbol || "").trim().toUpperCase();
     if (!next.symbol) next.symbol = DEFAULT_LIVE_QUOTE.symbol;
     const refreshSecRaw = Number(next.refreshSec) || 0;
     next.refreshSec = Math.max(1, Math.min(3600, refreshSecRaw)) || 8;
-    try {
-      localStorage.setItem(LIVE_QUOTE_SETTINGS_KEY, JSON.stringify(next));
-    } catch {}
+    // 仅在归一化结果与存储值不一致时回写，避免每次读取都触发落库。
+    const normalized = JSON.stringify(next);
+    if (normalized !== raw) {
+      try {
+        writeSharedSetting(LIVE_QUOTE_SETTINGS_KEY, normalized);
+      } catch {}
+    }
     return next;
   } catch {
     return { ...DEFAULT_LIVE_QUOTE };
@@ -117,7 +122,7 @@ export function setLiveQuoteSettings(next: LiveQuoteSettings): void {
       symbol: String(next.symbol || "").trim().toUpperCase(),
       refreshSec: Math.max(1, Math.min(3600, Number(next.refreshSec) || 0)) || 8,
     };
-    localStorage.setItem(LIVE_QUOTE_SETTINGS_KEY, JSON.stringify(clean));
+    writeSharedSetting(LIVE_QUOTE_SETTINGS_KEY, JSON.stringify(clean));
     const ev = new CustomEvent("risk-control:quote-changed", { detail: clean });
     window.dispatchEvent(ev);
   } catch {}

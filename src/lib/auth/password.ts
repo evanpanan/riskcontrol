@@ -80,35 +80,64 @@ export interface BuiltInMockAccountRecord {
   defaultPasswordHint?: string;
 }
 
-const BUILTIN_PASSWORDS: Record<MockUserKey, { password: string; hint?: string }> = {
-  admin_root: { password: 'Admin@Risk2026', hint: '仅演示环境可用' },
-  risk_evan: { password: 'Evan@Risk2026', hint: '风控总监演示口令' },
-  bd_lixiaoming: { password: 'Li@Client2026', hint: '商务经理演示口令' },
-  bd_wangsy: { password: 'Wang@Client2026', hint: '商务经理演示口令' },
-  bd_zhangzhiq: { password: 'Zhang@Client2026', hint: '商务经理演示口令' },
-  bd_liujia: { password: 'Liu@Client2026', hint: '商务经理演示口令' },
-};
+/**
+ * 内建演示账号仅在开发环境可用。
+ * 生产环境一律禁用，避免演示口令变成生产后门。
+ * 需要显式开启/关闭时，用 RC_ENABLE_DEV_MOCK_ACCOUNTS=1 / 0 覆盖。
+ */
+export function isDevMockAccountsEnabled(): boolean {
+  const flag = process.env.RC_ENABLE_DEV_MOCK_ACCOUNTS;
+  if (flag === '1') return true;
+  if (flag === '0') return false;
+  return process.env.NODE_ENV === 'development';
+}
+
+/**
+ * 开发环境演示口令来源：环境变量 RC_DEV_MOCK_PASSWORDS（JSON 形如 {"admin_root":"..."}）。
+ * 源码中不再保存任何明文口令；未配置的账号视为禁用。
+ */
+function getDevMockPasswords(): Partial<Record<MockUserKey, string>> {
+  const raw = process.env.RC_DEV_MOCK_PASSWORDS;
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<Record<MockUserKey, string>> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string' && v.length > 0) out[k as MockUserKey] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 const BUILTIN_CACHE = new Map<MockUserKey, BuiltInMockAccountRecord>();
 const BUILTIN_INIT_PROMISE: Promise<void> | null =
-  typeof window === 'undefined' ? null : (async () => {
-    const keys = Object.keys(MOCK_USER_META) as MockUserKey[];
-    for (const key of keys) {
-      const meta = MOCK_USER_META[key];
-      if (!meta) continue;
-      const cred = BUILTIN_PASSWORDS[key];
-      const salt = `mock-builtin-${key}-${meta.id}-s4lt`;
-      const passwordHash = await hashPassword(cred?.password ?? String(Date.now()), salt);
-      BUILTIN_CACHE.set(key, {
-        enabled: true,
-        passwordHash,
-        salt,
-        defaultPasswordHint: cred?.hint,
-      });
-    }
-  })();
+  typeof window === 'undefined' || !isDevMockAccountsEnabled()
+    ? null
+    : (async () => {
+        const devPasswords = getDevMockPasswords();
+        const keys = Object.keys(MOCK_USER_META) as MockUserKey[];
+        for (const key of keys) {
+          const meta = MOCK_USER_META[key];
+          if (!meta) continue;
+          const plain = devPasswords[key];
+          const salt = `mock-builtin-${key}-${meta.id}-s4lt`;
+          const passwordHash = await hashPassword(
+            typeof plain === 'string' && plain.length > 0 ? plain : `${key}::disabled::${meta.id}`,
+            salt
+          );
+          BUILTIN_CACHE.set(key, {
+            enabled: typeof plain === 'string' && plain.length > 0,
+            passwordHash,
+            salt,
+            defaultPasswordHint: '开发环境演示账号',
+          });
+        }
+      })();
 
 export async function getBuiltInMockAccountByEmail(email: string): Promise<(BuiltInMockAccountRecord & { key: MockUserKey }) | null> {
+  if (!isDevMockAccountsEnabled()) return null;
   if (BUILTIN_INIT_PROMISE) await BUILTIN_INIT_PROMISE;
   const entries = Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>;
   const hit = entries.find(([, m]) => m.email === email);
@@ -173,19 +202,21 @@ export async function resolvePrismaAccountByIdentifier(
     })();
     const row = await prisma.appUser.findFirst({
       where,
-      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true },
+      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true, passwordSalt: true, enabled: true },
     });
     if (!row) return null;
     if (!isAllowedRole(row.role)) return null;
-    // 注意：hashPassword(salt+::+password) — passwordHash 里已经包含了 salt 信息，因此把 passwordHash 的前 32 位当做固定 salt 构造假 salt 即可；
-    // 真实 verifyPassword(candidate, expectedHash=row.passwordHash, salt=构造salt) → hashPassword(candidate, salt) 与 expectedHash 做 XOR。
-    // 为了兼容「自定义用户通过浏览器端 hashCustomUserPassword(pwd) 得到 passwordHash+salt 上传」模式，我们约定 salt 字段缺失时，用 email+suffix 作为固定 salt，
-    // 但为了更兼容直接校验，这里在 db 侧再引入一个单独的 resolve 约定：
-    // 把 passwordHash 前 16 字符（hex）+ email+`${row.id}-s4lt` 组合为统一 salt；登录/register 两侧都用此约定，从而保证 hashPassword(pwd, salt) 与 expectedHash 相等。
-    const deterministicSalt = `prisma-${row.email}-${row.id}-s4lt-v1`;
-    const passwordHashRaw: string = typeof row.passwordHash === 'string' && row.passwordHash.length > 0
-      ? row.passwordHash
-      : await hashPassword(`${row.displayName}@${String(row.id).slice(-4)}`, deterministicSalt);
+    // 被停用的账号一律禁止登录
+    if (row.enabled === false) return null;
+    // 口令必须由账号自身携带的 hash + 随机 salt 校验。
+    // 未设置口令的账号一律禁止登录（不再派生任何默认口令）。
+    if (typeof row.passwordHash !== 'string' || row.passwordHash.length === 0) {
+      return null;
+    }
+    const salt: string =
+      typeof row.passwordSalt === 'string' && row.passwordSalt.length > 0
+        ? row.passwordSalt
+        : `prisma-${row.email}-${row.id}-s4lt-v1`;
     return {
       kind: 'prisma',
       id: String(row.id),
@@ -197,8 +228,8 @@ export async function resolvePrismaAccountByIdentifier(
         : (String(row.displayName || '??').slice(0, Math.min(2, String(row.displayName || '??').length)).toUpperCase()),
       avatarDataUrl: row.avatarDataUrl ?? undefined,
       bdManagerFullName: row.bdManagerFullName ?? undefined,
-      passwordHash: passwordHashRaw,
-      salt: deterministicSalt,
+      passwordHash: row.passwordHash,
+      salt,
     };
   } catch {
     return null;
@@ -214,6 +245,7 @@ export async function resolveAnyAccountByIdentifier(identifier: string): Promise
 export async function resolveMockAccountByIdentifier(
   identifier: string
 ): Promise<ResolvedMockAccount | null> {
+  if (!isDevMockAccountsEnabled()) return null;
   if (!identifier) return null;
   const trimmed = identifier.trim();
   if (!trimmed) return null;
@@ -221,8 +253,8 @@ export async function resolveMockAccountByIdentifier(
   const hit = entries.find(([key, meta]) => key === trimmed || meta.email === trimmed);
   if (!hit) return null;
   const [key, meta] = hit;
-  const cred = BUILTIN_PASSWORDS[key];
-  const passwordPlain = cred?.password ?? `${key}__${String(Date.now())}`;
+  const passwordPlain = getDevMockPasswords()[key];
+  if (!passwordPlain) return null;
   const salt = `mock-builtin-${key}-${meta.id}-s4lt`;
   const passwordHash = await hashPassword(passwordPlain, salt);
   if (!isAllowedRole(meta.role)) return null;

@@ -77,10 +77,11 @@ export default function BDManagerProfilePage() {
   const router = useRouter();
   const bdName = decodeURIComponent(params?.bdName || "");
   const { user, role, isBdManager, bdManagerFullName, isLoading } = useCurrentUser();
-  const mockData = useMemo(() => getMockData(), []);
-  const batches0 = mockData.batches as any[];
   const [hydrated, setHydrated] = useState(false);
   const [tick, setTick] = useState(0);
+  // tick 变化时重新读取账本，保证他端（其他用户/设备）的改动也能同步展示。
+  const mockData = useMemo(() => getMockData(), [tick]);
+  const batches0 = mockData.batches as any[];
   const batches = useMemo(() => {
     if (!hydrated) {
       return batches0.map((b: any) => ({ ...b, clients: (b.clients || []) as any[] }));

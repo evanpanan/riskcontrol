@@ -1,3 +1,5 @@
+import { readSharedSetting } from "./settingsStore";
+
 export interface ProfitSettings {
   vipThreshold: number;
   vipClient: number;
@@ -18,7 +20,7 @@ export function validProfitSettings(value: ProfitSettings): boolean {
 export function getProfitSettings(): ProfitSettings {
   if (typeof window === "undefined") return DEFAULT_PROFIT_SETTINGS;
   try {
-    const stored = JSON.parse(window.localStorage.getItem("risk_control_settings") || "{}");
+    const stored = JSON.parse(readSharedSetting("risk_control_settings") || "{}");
     const value = {
       vipThreshold: stored.vipThreshold ?? DEFAULT_PROFIT_SETTINGS.vipThreshold,
       vipClient: stored.vipClient ?? DEFAULT_PROFIT_SETTINGS.vipClient,

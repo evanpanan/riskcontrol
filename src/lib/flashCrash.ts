@@ -13,6 +13,8 @@
  * 检测时回溯指定时间窗口内的最低价/最高价计算跌幅。
  */
 
+import { readSharedSetting, writeSharedSetting } from "./settingsStore";
+
 /** 单条价格快照 */
 export interface PriceSnapshot {
   /** 毫秒时间戳 */
@@ -71,12 +73,12 @@ export const DEFAULT_FLASH_CRASH_THRESHOLDS: FlashCrashThreshold[] = [
 ];
 
 /**
- * 获取已配置的闪跌阈值（localStorage）
+ * 获取已配置的闪跌阈值（机构级共享配置）
  */
 export function getFlashCrashThresholds(): FlashCrashThreshold[] {
   if (typeof window === "undefined") return DEFAULT_FLASH_CRASH_THRESHOLDS;
   try {
-    const raw = window.localStorage.getItem(FLASH_CRASH_LS_KEY);
+    const raw = readSharedSetting(FLASH_CRASH_LS_KEY);
     if (!raw) return DEFAULT_FLASH_CRASH_THRESHOLDS;
     const parsed = JSON.parse(raw) as FlashCrashThreshold[];
     if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_FLASH_CRASH_THRESHOLDS;
@@ -87,7 +89,7 @@ export function getFlashCrashThresholds(): FlashCrashThreshold[] {
 }
 
 /**
- * 保存闪跌阈值配置
+ * 保存闪跌阈值配置（机构级共享配置）
  */
 export function saveFlashCrashThresholds(thresholds: FlashCrashThreshold[]): void {
   if (typeof window === "undefined") return;
@@ -95,7 +97,7 @@ export function saveFlashCrashThresholds(thresholds: FlashCrashThreshold[]): voi
   const valid = thresholds
     .filter((t) => t.windowMinutes > 0 && t.dropPercent > 0 && t.dropPercent <= 100)
     .sort((a, b) => a.windowMinutes - b.windowMinutes);
-  window.localStorage.setItem(FLASH_CRASH_LS_KEY, JSON.stringify(valid));
+  writeSharedSetting(FLASH_CRASH_LS_KEY, JSON.stringify(valid));
 }
 
 /**
@@ -103,7 +105,7 @@ export function saveFlashCrashThresholds(thresholds: FlashCrashThreshold[]): voi
  */
 export function resetFlashCrashThresholds(): FlashCrashThreshold[] {
   if (typeof window !== "undefined") {
-    window.localStorage.removeItem(FLASH_CRASH_LS_KEY);
+    writeSharedSetting(FLASH_CRASH_LS_KEY, null);
   }
   return DEFAULT_FLASH_CRASH_THRESHOLDS;
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
-import { hashPassword } from "@/lib/auth/password";
+import { hashPassword, generateSalt } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
 
@@ -127,7 +127,7 @@ export async function GET(req: NextRequest) {
   try {
     const prisma = await getPrisma();
     const all = await prisma.appUser.findMany({
-      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, bdManagerFullName: true },
+      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
       orderBy: { id: "desc" },
     });
     return NextResponse.json(
@@ -176,20 +176,22 @@ export async function POST(req: NextRequest) {
   const passwordPlain = typeof payload.password === "string" ? payload.password.trim() : "";
   const passwordHashIn = typeof payload.passwordHash === "string" ? payload.passwordHash : null;
 
-  let passwordHash: string | null = passwordHashIn;
-  if (!passwordHash && passwordPlain.length >= 6) {
-    const deterministicSalt = `prisma-${email}-PENDING-s4lt-v1`;
-    passwordHash = await hashPassword(passwordPlain, deterministicSalt);
-  }
   if (passwordPlain.length > 0 && passwordPlain.length < 6) {
     return jsonError("密码至少 6 位", 400);
+  }
+  // 口令一律以随机盐实时哈希，并把盐随账号一并落库。
+  // 不再依赖由 email/id 推导的确定性盐，避免管理员改邮箱后登录失效。
+  let passwordHash: string | null = passwordHashIn;
+  let passwordSalt: string | null = null;
+  if (passwordPlain.length >= 6) {
+    passwordSalt = generateSalt();
+    passwordHash = await hashPassword(passwordPlain, passwordSalt);
   }
   if (!passwordHash) {
     return jsonError("请设置密码", 400);
   }
   if (email.length > EMAIL_MAX) return jsonError("邮箱过长", 400);
 
-  let newId: string | null = null;
   try {
     const prisma = await getPrisma();
     const created = await prisma.appUser.create({
@@ -200,20 +202,11 @@ export async function POST(req: NextRequest) {
         avatarInitials,
         bdManagerFullName: bdManagerFullName ?? undefined,
         passwordHash,
+        passwordSalt: passwordSalt ?? undefined,
+        enabled,
       },
-      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true },
+      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
     });
-    newId = created.id;
-    // 二次修补：把 PENDING 的 passwordHash 替换为含真实 id 的 deterministic salt 重新 hash，保证 resolvePrismaAccountByIdentifier 中 salt 与登录一致
-    const finalSalt = `prisma-${email}-${created.id}-s4lt-v1`;
-    const finalPasswordHash = passwordPlain.length >= 6
-      ? await hashPassword(passwordPlain, finalSalt)
-      : (passwordHash ?? null);
-    if (finalPasswordHash && finalPasswordHash !== passwordHash) {
-      try {
-        await prisma.appUser.update({ where: { id: created.id }, data: { passwordHash: finalPasswordHash } });
-      } catch {}
-    }
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", user: created },
       { status: 200, headers: { "Cache-Control": "no-store" } },

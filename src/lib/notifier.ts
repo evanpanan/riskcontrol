@@ -4,6 +4,7 @@ import {
   getEnabledRecipientWhatsApps,
   getRiskRecipients,
 } from "./riskRecipients";
+import { readSharedSetting } from "./settingsStore";
 
 const SETTINGS_LS_KEY = "risk_control_settings";
 let notificationSendToken = "";
@@ -21,7 +22,7 @@ export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
   const empty: RuntimeNotificationConfig = {};
   if (typeof window === "undefined") return empty;
   try {
-    const raw = window.localStorage.getItem(SETTINGS_LS_KEY);
+    const raw = readSharedSetting(SETTINGS_LS_KEY);
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as any;
     return {
@@ -39,7 +40,7 @@ export function getRuntimeThresholds(): { marginDropPercent?: number; warningDro
   const empty = { marginDropPercent: undefined, warningDropPercent: undefined };
   if (typeof window === "undefined") return empty;
   try {
-    const raw = window.localStorage.getItem(SETTINGS_LS_KEY);
+    const raw = readSharedSetting(SETTINGS_LS_KEY);
     if (!raw) return empty;
     const p = JSON.parse(raw) as any;
     const warningDropPercent = typeof p?.warningThreshold === "number" && Number.isFinite(p.warningThreshold) && p.warningThreshold > 0 && p.warningThreshold < 100 ? p.warningThreshold : undefined;

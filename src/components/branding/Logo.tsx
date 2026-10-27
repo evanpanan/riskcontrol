@@ -3,13 +3,15 @@
 import { useEffect, useState } from "react";
 import { Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { readSharedSetting, writeSharedSetting } from "@/lib/settingsStore";
+import { WORKSPACE_SYNCED_EVENT } from "@/lib/workspaceStore";
 
 const LOGO_LS_KEY = "risk_control_logo_v1";
 
 export function getStoredLogo(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(LOGO_LS_KEY);
+    return readSharedSetting(LOGO_LS_KEY);
   } catch {
     return null;
   }
@@ -18,8 +20,7 @@ export function getStoredLogo(): string | null {
 export function setStoredLogo(dataUrl: string | null): void {
   if (typeof window === "undefined") return;
   try {
-    if (dataUrl && dataUrl.length > 2) window.localStorage.setItem(LOGO_LS_KEY, dataUrl);
-    else window.localStorage.removeItem(LOGO_LS_KEY);
+    writeSharedSetting(LOGO_LS_KEY, dataUrl && dataUrl.length > 2 ? dataUrl : null);
     window.dispatchEvent(new CustomEvent("risk-control:logo-changed"));
   } catch {
     /* ignore */
@@ -39,12 +40,14 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
     setDataUrl(getStoredLogo());
     const onChange = () => { setFailed(false); setDataUrl(getStoredLogo()); };
     window.addEventListener("risk-control:logo-changed", onChange);
+    window.addEventListener(WORKSPACE_SYNCED_EVENT, onChange);
     const onStorage = (e: StorageEvent) => {
       if (e.key === LOGO_LS_KEY) onChange();
     };
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("risk-control:logo-changed", onChange);
+      window.removeEventListener(WORKSPACE_SYNCED_EVENT, onChange);
       window.removeEventListener("storage", onStorage);
     };
   }, []);

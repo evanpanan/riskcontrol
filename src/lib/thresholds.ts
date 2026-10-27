@@ -1,6 +1,5 @@
 import { DEFAULT_THRESHOLD_OPTS, type ThresholdOpts } from "./riskEngine";
-
-const SETTINGS_LS_KEY = "risk_control_settings";
+import { readSharedSetting } from "./settingsStore";
 
 export interface StoredThresholds extends Required<ThresholdOpts> {}
 
@@ -8,7 +7,7 @@ export function getStoredThresholds(): StoredThresholds {
   const fallback: StoredThresholds = { ...DEFAULT_THRESHOLD_OPTS };
   if (typeof window === "undefined") return fallback;
   try {
-    const raw = window.localStorage.getItem(SETTINGS_LS_KEY);
+    const raw = readSharedSetting("risk_control_settings");
     if (!raw) return fallback;
     const parsed = JSON.parse(raw || "{}") as any;
     const warnRaw = Number(parsed?.warningThreshold);

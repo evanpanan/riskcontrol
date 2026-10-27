@@ -1,4 +1,5 @@
 import { ClientStatus } from "@prisma/client";
+import { isWorkspaceHydrated, readWorkspaceKind, upsertWorkspaceRecord } from "./workspaceStore";
 
 const STORE_KEY = "risk_control_client_status_v1";
 
@@ -10,7 +11,8 @@ export interface ClientStatusRecord {
 
 type StoreShape = Record<string, ClientStatusRecord>;
 
-function getStore(): StoreShape {
+/** 本地镜像读取：仅用于未完成工作区同步（如本地校验脚本）或离线兜底。 */
+function readLocalStore(): StoreShape {
   if (typeof window === "undefined") return {};
   try {
     const raw = window.localStorage.getItem(STORE_KEY);
@@ -20,12 +22,25 @@ function getStore(): StoreShape {
   }
 }
 
-function writeStore(store: StoreShape) {
+/**
+ * 读取客户状态覆盖表。
+ * 工作区已就绪时以服务端数据为准（多端共享）；否则回退本地镜像。
+ */
+function getStore(): StoreShape {
+  if (typeof window === "undefined") return {};
+  if (isWorkspaceHydrated()) return readWorkspaceKind<ClientStatusRecord>("client_status");
+  return readLocalStore();
+}
+
+/** 写入本地镜像，保证跨标签页 storage 事件与本地校验脚本仍可读取。 */
+function mirrorLocal(record: ClientStatusRecord, clientId: string): void {
   if (typeof window === "undefined") return;
   try {
+    const store = readLocalStore();
+    store[clientId] = record;
     window.localStorage.setItem(STORE_KEY, JSON.stringify(store));
   } catch {
-    /* ignore */
+    /* ignore quota / SSR */
   }
 }
 
@@ -34,20 +49,15 @@ export function getClientStatus(clientId: string): ClientStatusRecord | undefine
 }
 
 export function setClientStatus(clientId: string, status: ClientStatus) {
-  const store = getStore();
-  const prev = store[clientId];
-  store[clientId] = {
+  const record: ClientStatusRecord = {
     status,
     settledAt: status === ClientStatus.SETTLED ? new Date().toISOString() : undefined,
     updatedAt: new Date().toISOString(),
   };
-  if (prev) {
-    Object.assign(store[clientId], {
-      status,
-      settledAt: status === ClientStatus.SETTLED ? new Date().toISOString() : undefined,
-    });
+  if (isWorkspaceHydrated()) {
+    upsertWorkspaceRecord("client_status", clientId, record);
   }
-  writeStore(store);
+  mirrorLocal(record, clientId);
 }
 
 export function mergeClientStatusOnClient<T extends { id: string; status?: ClientStatus; settledAt?: Date | null }>(

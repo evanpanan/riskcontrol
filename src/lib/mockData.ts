@@ -33,6 +33,17 @@ import {
 import { mergeClientStatusOnClient } from "./clientStatusStore";
 import { getNYSEInfo, LIVE_QUOTE_SETTINGS_KEY } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
+import {
+  bootstrapWorkspace,
+  clearWorkspace,
+  deleteWorkspaceRecords,
+  flushWorkspaceWrites,
+  isWorkspaceHydrated,
+  readWorkspaceKind,
+  readWorkspaceRecord,
+  registerWorkspaceInvalidator,
+  upsertWorkspaceRecord,
+} from "./workspaceStore";
 
 const money = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 
@@ -698,23 +709,42 @@ function isClientLike(c: unknown): c is { id: string; investmentAmount?: number;
   return !!c && typeof (c as any).id === "string";
 }
 
-function readPatches(): MockPatches | null {
+/** 本地镜像读取补仓补丁（仅用于未同步环境与离线兜底）。 */
+function readLocalPatches(): MockPatches {
+  const empty: MockPatches = { batches: {}, persistedAt: new Date().toISOString() };
+  if (typeof window === "undefined") return empty;
   try {
-    if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
-    const raw = localStorage.getItem(MOCK_PERSIST_KEY);
-    if (!raw) return null;
+    const raw = window.localStorage.getItem(MOCK_PERSIST_KEY);
+    if (!raw) return empty;
     const parsed = JSON.parse(raw) as MockPatches;
-    return parsed && typeof parsed.batches === "object" ? parsed : null;
+    return parsed && typeof parsed.batches === "object" ? parsed : empty;
   } catch {
-    return null;
+    return empty;
   }
 }
 
-function writePatches(p: MockPatches): void {
+/** 逐批读取补仓补丁表：工作区已就绪时以服务端为准，否则读本地镜像。 */
+function readAllBatchPatches(): Record<string, BatchPatch> {
+  if (typeof window === "undefined") return {};
+  if (isWorkspaceHydrated()) return readWorkspaceKind<BatchPatch>("patches");
+  return readLocalPatches().batches;
+}
+
+function readPatches(): MockPatches | null {
+  const batches = readAllBatchPatches();
+  if (Object.keys(batches).length === 0) return null;
+  return { batches, persistedAt: new Date().toISOString() };
+}
+
+/** 写入单批补丁：工作区已就绪时落库并多端共享，同时写本地镜像。 */
+function writePatchForBatch(batchId: string, patch: BatchPatch): void {
+  if (typeof window === "undefined") return;
+  if (isWorkspaceHydrated()) upsertWorkspaceRecord("patches", batchId, patch);
   try {
-    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
-    p.persistedAt = new Date().toISOString();
-    localStorage.setItem(MOCK_PERSIST_KEY, JSON.stringify(p));
+    const mirror = readLocalPatches();
+    mirror.batches[batchId] = patch;
+    mirror.persistedAt = new Date().toISOString();
+    window.localStorage.setItem(MOCK_PERSIST_KEY, JSON.stringify(mirror));
   } catch {
     /* ignore quota / SSR */
   }
@@ -787,12 +817,10 @@ export function persistClientMarginPatch(
       clientLike = (batch as any).clients.find((c: any) => c.id === clientId) ?? null;
     }
   }
-  const existing = readPatches();
-  const next: MockPatches = existing ?? { batches: {}, persistedAt: new Date().toISOString() };
-  if (!next.batches[batchId]) {
-    next.batches[batchId] = { clients: {} };
-  }
-  const bp = next.batches[batchId];
+  const allPatches = readAllBatchPatches();
+  const bp: BatchPatch = allPatches[batchId]
+    ? structuredClone(allPatches[batchId])
+    : { clients: {} };
   const fp = clientLike
     ? clientFingerprint(clientLike, state.initialInvestment)
     : `__compat__|${Number(state.initialInvestment).toFixed(2)}|${Number(state.initialInvestment).toFixed(2)}`;
@@ -806,7 +834,7 @@ export function persistClientMarginPatch(
   if (typeof cumulativeDelta === "number" && cumulativeDelta !== 0) {
     bp.cumulativeMarginCallsDelta = (bp.cumulativeMarginCallsDelta ?? 0) + cumulativeDelta;
   }
-  writePatches(next);
+  writePatchForBatch(batchId, bp);
 }
 
 export function persistBatchLevelTopup(
@@ -820,12 +848,10 @@ export function persistBatchLevelTopup(
     marginState?: any;
   }>
 ): void {
-  const existing = readPatches();
-  const next: MockPatches = existing ?? { batches: {}, persistedAt: new Date().toISOString() };
-  if (!next.batches[batchId]) {
-    next.batches[batchId] = { clients: {} };
-  }
-  const bp = next.batches[batchId];
+  const allPatches = readAllBatchPatches();
+  const bp: BatchPatch = allPatches[batchId]
+    ? structuredClone(allPatches[batchId])
+    : { clients: {} };
   bp.cumulativeMarginCallsDelta = (bp.cumulativeMarginCallsDelta ?? 0) + appliedAmount;
   for (const c of clients) {
     const ms = (c as any).marginState;
@@ -843,14 +869,14 @@ export function persistBatchLevelTopup(
       history: Array.isArray(ms.history) ? ms.history : [],
     };
   }
-  writePatches(next);
+  writePatchForBatch(batchId, bp);
 }
 
 export function clearMockMarginPatches(): void {
+  if (typeof window === "undefined") return;
+  if (isWorkspaceHydrated()) deleteWorkspaceRecords("patches");
   try {
-    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
-      localStorage.removeItem(MOCK_PERSIST_KEY);
-    }
+    window.localStorage.removeItem(MOCK_PERSIST_KEY);
   } catch {
     /* ignore */
   }
@@ -908,6 +934,19 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
   storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
   storage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
   for (const key of keys.slice(1)) storage.removeItem(key);
+  // 工作区已就绪（浏览器多端环境）时，把重建后的账本同步到服务端，保证各端一致。
+  if (isWorkspaceHydrated()) {
+    const entries = Object.entries(store).map(([key, payload]) => ({ kind: "ledger" as const, key, payload }));
+    void (async () => {
+      try {
+        await clearWorkspace(["ledger", "patches", "client_status"], { markEmpty: false });
+        await bootstrapWorkspace(entries);
+        await flushWorkspaceWrites();
+      } catch {
+        /* ignore */
+      }
+    })();
+  }
   resetClientNoAllocator();
   lastClientNoAllocator = ensureClientNosOnBatches(fresh.batches);
   cachedMockData = fresh;
@@ -926,6 +965,10 @@ export const EMPTY_LEDGER_KEY: string = "risk_control_empty_ledger_v1";
 /** 账本是否已处于清空状态（不含任何批次与客户）。 */
 export function isLedgerEmpty(): boolean {
   if (typeof window === "undefined") return false;
+  if (isWorkspaceHydrated()) {
+    const rec = readWorkspaceRecord<{ empty?: boolean }>("meta", "empty");
+    return rec?.payload?.empty === true;
+  }
   try {
     return window.localStorage.getItem(EMPTY_LEDGER_KEY) === "1";
   } catch {
@@ -948,9 +991,10 @@ const BUSINESS_DATA_KEYS: string[] = [
 
 /**
  * 清空全部业务数据（批次、客户、补仓与结算记录），并把系统切换为空账本启动。
- * 执行前先把当前数据整体备份到 localStorage；备份写入失败则不删除任何数据。
+ * 执行前先把当前数据整体备份到 localStorage，再清空服务端工作区；
+ * 服务端清空失败时不改动本地数据，避免出现半清空状态。
  */
-export function clearAllBusinessData(): { batches: number; clients: number; backupKey: string } {
+export async function clearAllBusinessData(): Promise<{ batches: number; clients: number; backupKey: string }> {
   if (typeof window === "undefined") throw new Error("请在已登录的浏览器中执行该操作。");
   const storage = window.localStorage;
   let batchCount = 0;
@@ -965,8 +1009,15 @@ export function clearAllBusinessData(): { batches: number; clients: number; back
   }
   const backupKey = `risk_control_cleared_backup_${Date.now()}`;
   const backup = Object.fromEntries(BUSINESS_DATA_KEYS.map((key) => [key, storage.getItem(key)]));
-  // 先落备份与空账本，再清除其余派生键；任一步抛错都不会留下半清空状态。
+  // 先落备份，任一步抛错都不会丢失原始数据。
   storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+  // 服务端为唯一事实来源：先清空工作区（批次/补仓/客户状态），由服务端置位空账本标记。
+  if (isWorkspaceHydrated()) {
+    const ok = await clearWorkspace(["ledger", "patches", "client_status"]);
+    if (!ok) throw new Error("清空失败，请检查网络后重试。");
+    await flushWorkspaceWrites();
+  }
+  // 本地镜像与派生键清理。
   storage.setItem(FINANCE_STORE_KEY, JSON.stringify({}));
   storage.setItem(EMPTY_LEDGER_KEY, "1");
   for (const key of BUSINESS_DATA_KEYS.slice(1)) storage.removeItem(key);
@@ -1027,8 +1078,16 @@ function migrateFinanceStoreIfNeeded(): void {
   } catch {}
 }
 
+/**
+ * 读取资金账本。
+ * 工作区已就绪时以服务端数据为准（多端共享同一账本）；
+ * 未就绪时（如本地校验脚本、登录前）回退本地镜像。
+ */
 function readFinanceStore(): FinanceStore {
   if (typeof window === "undefined") return {};
+  if (isWorkspaceHydrated()) {
+    return readWorkspaceKind<FinanceRecord>("ledger");
+  }
   migrateFinanceStoreIfNeeded();
   const raw = window.localStorage.getItem(FINANCE_STORE_KEY);
   if (!raw) return {};
@@ -1037,6 +1096,27 @@ function readFinanceStore(): FinanceStore {
     throw new Error("资金账本格式无效，请保留数据并联系管理员核对。");
   }
   return parsed;
+}
+
+/** 写入资金账本：工作区已就绪时逐批落库（多端共享），同时写本地镜像。 */
+function writeFinanceRecords(store: FinanceStore, ids: string[]): void {
+  if (typeof window === "undefined") return;
+  if (isWorkspaceHydrated()) {
+    for (const id of ids) upsertWorkspaceRecord("ledger", id, store[id]);
+    // 服务端已接管持久化，本地镜像尽力而为，写失败不影响记账结果。
+    try {
+      window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+    } catch {
+      /* ignore quota */
+    }
+    return;
+  }
+  // 未同步环境（登录前 / 本地校验脚本）：本地存储即事实来源，写失败必须中止本次记账。
+  try {
+    window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+  } catch {
+    throw new Error("资金记录保存失败，本次操作未入账。请检查浏览器存储空间后重试。");
+  }
 }
 
 function reviveBatch(batch: BatchLike): BatchLike {
@@ -1065,11 +1145,7 @@ export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLik
   initializeBatchFinance(draft);
   draft.finance!.revision = (batch.finance?.revision ?? 0) + 1;
   store[batch.id] = financeRecord(draft);
-  try {
-    window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
-  } catch {
-    throw new Error("资金记录保存失败，本次操作未入账。请检查浏览器存储空间后重试。");
-  }
+  writeFinanceRecords(store, [batch.id]);
   Object.assign(batch, draft);
   window.dispatchEvent(new CustomEvent("risk-control:finance-changed", { detail: { batchId: batch.id } }));
   return result;
@@ -1119,8 +1195,8 @@ export function getMockData(): MockDataSet {
         empty.batches.push(revived);
         seen.add(id);
       }
-      if (seen.size !== Object.keys(store).length) {
-        // 丢弃无法还原的脏记录，避免每次加载重复尝试
+      if (seen.size !== Object.keys(store).length && !isWorkspaceHydrated()) {
+        // 丢弃无法还原的脏记录，避免每次加载重复尝试（仅本地镜像环境）
         const cleaned: FinanceStore = {};
         for (const key of seen) cleaned[key] = store[key];
         try { window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(cleaned)); } catch { /* ignore */ }
@@ -1221,14 +1297,28 @@ export function getMockData(): MockDataSet {
         }
       }
     }
-    // Persist initial round IDs once so concurrent tabs refer to the same obligations.
+    // 首次初始化：把新批次的初始账本（含补仓轮次 ID）落库，保证多端引用同一批义务。
     if (typeof window !== "undefined") {
+      const created: FinanceStore = {};
       for (const batch of loaded.batches) {
-        if (!store[batch.id]) store[batch.id] = financeRecord(batch);
+        if (!store[batch.id]) {
+          store[batch.id] = financeRecord(batch);
+          created[batch.id] = store[batch.id];
+        }
       }
-      const serialized = JSON.stringify(store);
-      if (window.localStorage.getItem(FINANCE_STORE_KEY) !== serialized) {
-        window.localStorage.setItem(FINANCE_STORE_KEY, serialized);
+      const createdIds = Object.keys(created);
+      if (isWorkspaceHydrated()) {
+        // 服务端为唯一事实来源：仅把服务端尚不存在的批次落库（首次启动即写入整套演示账本）。
+        if (createdIds.length) {
+          void bootstrapWorkspace(
+            createdIds.map((id) => ({ kind: "ledger" as const, key: id, payload: created[id] }))
+          );
+        }
+      } else {
+        const serialized = JSON.stringify(store);
+        if (window.localStorage.getItem(FINANCE_STORE_KEY) !== serialized) {
+          window.localStorage.setItem(FINANCE_STORE_KEY, serialized);
+        }
       }
     }
     resetClientNoAllocator();
@@ -1432,10 +1522,17 @@ export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client
   initializeBatchFinance(newBatch);
   (newBatch as any).finance.revision = 1;
   store[newBatch.id] = financeRecord(newBatch);
-  window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
+  writeFinanceRecords(store, [newBatch.id]);
   // 合并现有批次列表并刷新缓存
   cachedMockData = null;
   const fresh = getMockData();
   window.dispatchEvent(new CustomEvent("risk-control:finance-changed", { detail: { batchId: newBatch.id, op: "createBatch" } }));
   return fresh.batches.find((b) => b.id === newBatch.id) || newBatch;
+}
+
+// 远端（其他端/其他用户）数据变更时清空内存缓存，使下次读取重新组装账本。
+if (typeof window !== "undefined") {
+  registerWorkspaceInvalidator(() => {
+    cachedMockData = null;
+  });
 }

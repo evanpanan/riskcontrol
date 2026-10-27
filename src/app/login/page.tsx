@@ -34,6 +34,7 @@ import {
   getBuiltInMockAccountByEmail,
   getCustomMockAccountByEmail,
   verifyPassword,
+  isDevMockAccountsEnabled,
 } from "@/lib/auth/password";
 import { cn } from "@/lib/utils";
 import { logAudit, logAuthDeny } from "@/lib/auth/audit";
@@ -103,58 +104,6 @@ function LoginPageInner() {
     }
   }, [user, router, nextPath]);
 
-  const resolveSessionByCredentials = async (
-    incomingEmail: string,
-    _incomingPwd: string
-  ): Promise<{ kind: "builtIn" | "custom"; session: AppSessionUser } | null> => {
-    const e = incomingEmail.trim();
-
-    const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-      ([, m]) => m.email === e
-    );
-    if (builtIn) {
-      const [, m] = builtIn;
-      const sess: AppSessionUser = {
-        id: m.id,
-        email: m.email,
-        role: m.role,
-        displayName: m.displayName,
-        avatarInitials: m.avatarInitials,
-        avatarDataUrl: m.avatarDataUrl,
-        bdManagerFullName: m.bdManagerFullName,
-      };
-      const rec = await getBuiltInMockAccountByEmail(e);
-      if (!rec || !rec.enabled) return null;
-      if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
-      return { kind: "builtIn", session: sess };
-    }
-
-    try {
-      const custom = Object.values(getCustomMockUsers()).find(
-        (a: any) => a.email === e
-      ) as any;
-      if (custom) {
-        const sess: AppSessionUser = {
-          id: custom.id,
-          email: custom.email,
-          role: custom.role,
-          displayName: custom.displayName,
-          avatarInitials: custom.avatarInitials || (custom.displayName || "??").slice(0, 2).toUpperCase(),
-          avatarDataUrl: custom.avatarDataUrl,
-          bdManagerFullName: custom.bdManagerFullName,
-        };
-        const rec = await getCustomMockAccountByEmail(e);
-        if (!rec || !rec.enabled) return null;
-        if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
-        return { kind: "custom", session: sess };
-      }
-    } catch {
-      /* ignore */
-    }
-
-    return null;
-  };
-
   const handleLoginForm = (e: React.FormEvent) => {
     e.preventDefault();
     const nextErrors: { email?: string; password?: string; form?: string } = {};
@@ -177,9 +126,11 @@ function LoginPageInner() {
       let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
       let localSession: AppSessionUser | null = null;
       const e = identifier;
-      const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-        ([key, m]) => key === e || m.email === e
-      );
+      const builtIn = isDevMockAccountsEnabled()
+        ? (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
+            ([key, m]) => key === e || m.email === e
+          )
+        : undefined;
       if (builtIn) {
         const [key, m] = builtIn;
         const sess: AppSessionUser = {

@@ -1,5 +1,7 @@
 "use client";
 
+import { readSharedSetting, writeSharedSetting } from "./settingsStore";
+
 export interface RiskRecipient {
   id: string;
   name: string;
@@ -16,7 +18,7 @@ let globalRecipients: RiskRecipient[] = [];
 export function getRiskRecipients(): RiskRecipient[] {
   if (typeof window !== "undefined") {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(KEY) || "[]");
+      const saved = JSON.parse(readSharedSetting(KEY) || "[]");
       if (Array.isArray(saved)) globalRecipients = saved.filter((r) =>
         r && typeof r.name === "string" && typeof r.email === "string").map((r) => ({
           ...r, name: r.name.replace(/BD\s*经理/g, "商务经理"),
@@ -28,7 +30,7 @@ export function getRiskRecipients(): RiskRecipient[] {
   return globalRecipients;
 }
 export function setRiskRecipients(recipients: RiskRecipient[]) {
-  if (typeof window !== "undefined") window.localStorage.setItem(KEY, JSON.stringify(recipients));
+  if (typeof window !== "undefined") writeSharedSetting(KEY, JSON.stringify(recipients));
   globalRecipients = [...recipients];
 }
 export function getEnabledRecipientEmails(roles?: RiskRole[] | string[], extra: string[] = []): string[] {

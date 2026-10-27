@@ -8,6 +8,8 @@
  * 仅在此模块提供档位配置和触发判断，供 UI 层和通知层使用。
  */
 
+import { readSharedSetting, writeSharedSetting } from "./settingsStore";
+
 /** 通知渠道 */
 export type NotifyChannel = "email" | "whatsapp" | "sms";
 
@@ -129,7 +131,7 @@ export function validateRiskTiers(tiers: RiskTier[]): { valid: boolean; errors: 
 export function getStoredRiskTiers(): RiskTier[] {
   if (typeof window === "undefined") return [...DEFAULT_RISK_TIERS];
   try {
-    const raw = window.localStorage.getItem(TIERS_LS_KEY);
+    const raw = readSharedSetting(TIERS_LS_KEY);
     if (!raw) return [...DEFAULT_RISK_TIERS];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return [...DEFAULT_RISK_TIERS];
@@ -152,7 +154,7 @@ export function getStoredRiskTiers(): RiskTier[] {
   }
 }
 
-/** 保存档位配置到 localStorage */
+/** 保存档位配置（多端共享） */
 export function saveRiskTiers(tiers: RiskTier[]): boolean {
   const { valid, errors } = validateRiskTiers(tiers);
   if (!valid) {
@@ -160,7 +162,7 @@ export function saveRiskTiers(tiers: RiskTier[]): boolean {
     return false;
   }
   try {
-    window.localStorage.setItem(TIERS_LS_KEY, JSON.stringify(tiers));
+    writeSharedSetting(TIERS_LS_KEY, JSON.stringify(tiers));
     window.dispatchEvent(new CustomEvent("risk-control:tiers-updated"));
     return true;
   } catch {

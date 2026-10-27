@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
-import { hashPassword } from "@/lib/auth/password";
+import { hashPassword, generateSalt } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
 import type { AppSessionUser } from "@/types/auth";
 
@@ -167,30 +167,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if ("bdManagerFullName" in payload) {
     patch.bdManagerFullName = truncate(payload.bdManagerFullName) ?? undefined;
   }
+  if ("enabled" in payload) {
+    if (typeof payload.enabled !== "boolean") return jsonError("enabled 必须为布尔值", 400);
+    patch.enabled = payload.enabled;
+  }
+  // 防止管理员把自己停用导致锁死后台
+  if (patch.enabled === false && guard.actor && id === guard.actor.id) {
+    return jsonError("不能停用当前登录账号", 400);
+  }
 
   const passwordPlain = typeof payload.password === "string" ? payload.password.trim() : "";
   const passwordHashIn = typeof payload.passwordHash === "string" ? payload.passwordHash : null;
 
-  let targetEmailForSalt: string | null = null;
-  if (passwordPlain.length > 0 || passwordHashIn) {
-    if (patch.email) {
-      targetEmailForSalt = patch.email;
-    } else {
-      try {
-        const prisma = await getPrisma();
-        const existing = await prisma.appUser.findUnique({ where: { id }, select: { email: true } });
-        if (existing?.email) targetEmailForSalt = String(existing.email);
-      } catch {}
-    }
-  }
-
   if (passwordPlain.length > 0) {
     if (passwordPlain.length < 6) return jsonError("密码至少 6 位", 400);
-    const deterministicSalt = targetEmailForSalt
-      ? `prisma-${targetEmailForSalt}-${id}-s4lt-v1`
-      : `prisma-pending-email-${id}-s4lt-v1`;
-    const passwordHash = await hashPassword(passwordPlain, deterministicSalt);
-    patch.passwordHash = passwordHash;
+    // 改密时重新生成随机盐，并与哈希一并落库；
+    // 不再用 email/id 推导确定性盐，避免管理员改邮箱后这些账号登录失效。
+    const passwordSalt = generateSalt();
+    patch.passwordHash = await hashPassword(passwordPlain, passwordSalt);
+    patch.passwordSalt = passwordSalt;
   } else if (passwordHashIn) {
     patch.passwordHash = passwordHashIn;
   }
@@ -201,7 +196,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const updated = await prisma.appUser.update({
       where: { id },
       data: patch,
-      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true },
+      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
     });
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", user: updated },

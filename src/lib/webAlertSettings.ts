@@ -1,3 +1,5 @@
+import { readSharedSetting } from "./settingsStore";
+
 export interface WebAlertSettings {
   webAlertEnabled: boolean;
   webAlertSound: boolean;
@@ -5,8 +7,6 @@ export interface WebAlertSettings {
   realtimeTickEnabled: boolean;
   realtimeTickIntervalSec: number;
 }
-
-const LS_KEY = "risk_control_settings";
 
 const DEFAULT: WebAlertSettings = {
   webAlertEnabled: true,
@@ -19,7 +19,7 @@ const DEFAULT: WebAlertSettings = {
 export function getWebAlertSettings(): WebAlertSettings {
   if (typeof window === "undefined") return DEFAULT;
   try {
-    const raw = window.localStorage.getItem(LS_KEY);
+    const raw = readSharedSetting("risk_control_settings");
     if (!raw) return DEFAULT;
     const parsed = JSON.parse(raw);
     return {

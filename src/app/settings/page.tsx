@@ -122,6 +122,7 @@ import {
 } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { QUOTE_PROVIDERS, quoteProviderLabel } from "@/lib/quote/providers";
+import { readSharedSetting, writeSharedSetting } from "@/lib/settingsStore";
 
 const LS_KEY = "risk_control_settings";
 const RECIPIENTS_LS_KEY = "risk_control_recipients";
@@ -399,7 +400,7 @@ export default function SettingsPage() {
   const handleClearAllData = useCallback(async () => {
     setClearingData(true);
     try {
-      const result = clearAllBusinessData();
+      const result = await clearAllBusinessData();
       logAudit({
         action: "ledger_clear",
         resource: "/settings",
@@ -441,7 +442,7 @@ export default function SettingsPage() {
   useEffect(() => {
     setHydrated(true);
     try {
-      const raw = localStorage.getItem(LS_KEY);
+      const raw = readSharedSetting(LS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<SettingsFormState>;
         setForm((prev) => ({ ...prev, ...parsed,
@@ -465,8 +466,8 @@ export default function SettingsPage() {
     if (!hydrated) return;
     try {
       const rates = getProfitSettings();
-      const stored = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-      localStorage.setItem(LS_KEY, JSON.stringify({
+      const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
+      writeSharedSetting(LS_KEY, JSON.stringify({
         ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         emailWebhook: stored.emailWebhook ?? "", whatsappWebhook: stored.whatsappWebhook ?? "",
         defaultRiskEmail: stored.defaultRiskEmail ?? "", emergencyPhone: stored.emergencyPhone ?? "",
@@ -603,7 +604,7 @@ export default function SettingsPage() {
           bdManagerFullName: u.bdManagerFullName || undefined,
           avatarInitials: ai,
           avatarDataUrl: u.avatarDataUrl || undefined,
-          enabled: true,
+          enabled: u.enabled !== false,
           createdAt: u.createdAt ?? new Date().toISOString(),
         };
       });
@@ -1026,7 +1027,7 @@ export default function SettingsPage() {
       return;
     }
     try {
-      const stored = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+      const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       const notificationFields = Object.fromEntries(
         (["emailWebhook", "whatsappWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
@@ -1035,7 +1036,7 @@ export default function SettingsPage() {
       const beforeMargin = Number(stored?.marginThreshold);
       const afterWarn = Number(form.warningThreshold);
       const afterMargin = Number(form.marginThreshold);
-      localStorage.setItem(LS_KEY, JSON.stringify({
+      writeSharedSetting(LS_KEY, JSON.stringify({
         ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         ...notificationFields,
       }));
@@ -1199,7 +1200,7 @@ export default function SettingsPage() {
       setRecipients(nextList);
     }
     try {
-      localStorage.setItem(RECIPIENTS_LS_KEY, JSON.stringify(nextList));
+      writeSharedSetting(RECIPIENTS_LS_KEY, JSON.stringify(nextList));
     } catch (e) {}
     setSaved("recipient");
     setDlgOpen(false);

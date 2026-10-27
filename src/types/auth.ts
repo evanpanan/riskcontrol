@@ -44,16 +44,17 @@ export type MockUserKey =
   | 'bd_zhangzhiq'
   | 'bd_liujia';
 
+// 仅保留账号元信息（邮箱 / 展示名 / 角色）。口令一律不落源码：
+// 开发环境从 RC_DEV_MOCK_PASSWORDS 读取，生产环境内建演示账号整体禁用。
 export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
   key: MockUserKey; email: string; displayName: string; role: AppRole;
-  defaultPassword: string; purpose: string;
+  purpose: string;
 }> = [
   {
     key: 'admin_root',
     email: 'admin@riskcontrol.io',
     displayName: '系统管理员 (Administrator)',
     role: APP_ROLES.ADMIN,
-    defaultPassword: 'Admin@Risk2026',
     purpose: '系统管理员：客户删除 / 账号管理 / 阈值编辑 / 审计查看',
   },
   {
@@ -61,7 +62,6 @@ export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
     email: 'evan.pan@institution.com',
     displayName: 'Evan Pan (风控总监)',
     role: APP_ROLES.RISK_MANAGER,
-    defaultPassword: 'Evan@Risk2026',
     purpose: '风控总监：补仓执行 / 客户结算 / 机构通知 / 阈值查看',
   },
   {
@@ -69,7 +69,6 @@ export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
     email: 'evan.li@institution.com',
     displayName: '李晓明 (Evan Li)',
     role: APP_ROLES.BD_MANAGER,
-    defaultPassword: 'Li@Client2026',
     purpose: '商务经理：仅可见自有客户与对应批次',
   },
   {
@@ -77,7 +76,6 @@ export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
     email: 'sylvia.wang@institution.com',
     displayName: '王思远 (Sylvia Wang)',
     role: APP_ROLES.BD_MANAGER,
-    defaultPassword: 'Wang@Client2026',
     purpose: '商务经理：仅可见自有客户与对应批次',
   },
   {
@@ -85,7 +83,6 @@ export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
     email: 'jack.zhang@institution.com',
     displayName: '张志强 (Jack Zhang)',
     role: APP_ROLES.BD_MANAGER,
-    defaultPassword: 'Zhang@Client2026',
     purpose: '商务经理：仅可见自有客户与对应批次',
   },
   {
@@ -93,7 +90,6 @@ export const MOCK_DEMO_CREDENTIALS: ReadonlyArray<{
     email: 'jennifer.liu@institution.com',
     displayName: '刘佳 (Jennifer Liu)',
     role: APP_ROLES.BD_MANAGER,
-    defaultPassword: 'Liu@Client2026',
     purpose: '商务经理：仅可见自有客户与对应批次',
   },
 ];
