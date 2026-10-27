@@ -31,10 +31,8 @@ import { MOCK_USER_META, APP_ROLES, MOCK_DEMO_CREDENTIALS, type MockUserKey } fr
 import { type AppSessionUser } from "@/types/auth";
 import { getCustomMockUsers } from "@/lib/auth/providers/mockProvider";
 import {
-  getBuiltInMockAccountByEmail,
   getCustomMockAccountByEmail,
   verifyPassword,
-  isDevMockAccountsEnabled,
 } from "@/lib/auth/password";
 import { cn } from "@/lib/utils";
 import { logAudit, logAuthDeny } from "@/lib/auth/audit";
@@ -121,19 +119,21 @@ function LoginPageInner() {
     // setTimeouts for navigation are scheduled in the first synchronous tick
     // of finishLogin so they cannot be lost.
     (async () => {
-      // Step 1: Client-side credential pre-verify for built-in accounts
-      // (keeps toast UX tight; server is authoritative).
+      // Step 1: 身份识别（内建账号 / 本地自定义账号）。口令校验以服务端为准：
+      // 内建账号的演示口令只存在于服务端环境变量，客户端无法校验。
       let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
       let localSession: AppSessionUser | null = null;
       const e = identifier;
-      const builtIn = isDevMockAccountsEnabled()
-        ? (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-            ([key, m]) => key === e || m.email === e
-          )
-        : undefined;
+      // 内建账号目录（邮箱 / 角色 / 展示名）仅用于身份识别，与演示口令是否可用无关：
+      // 浏览器端读不到 RC_DEV_MOCK_PASSWORDS（非 NEXT_PUBLIC_ 变量），客户端无法校验口令，
+      // 因此这里不再做本地口令预校验，一律交由服务端判定。
+      const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
+        ([key, m]) => key === e || m.email === e
+      );
       if (builtIn) {
-        const [key, m] = builtIn;
-        const sess: AppSessionUser = {
+        const [, m] = builtIn;
+        kindHint = "builtIn";
+        localSession = {
           id: m.id,
           email: m.email,
           role: m.role,
@@ -142,11 +142,6 @@ function LoginPageInner() {
           avatarDataUrl: m.avatarDataUrl,
           bdManagerFullName: m.bdManagerFullName,
         };
-        const rec = await getBuiltInMockAccountByEmail(m.email);
-        if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
-          kindHint = "builtIn";
-          localSession = sess;
-        }
       } else {
         try {
           const custom = Object.values(getCustomMockUsers()).find(
