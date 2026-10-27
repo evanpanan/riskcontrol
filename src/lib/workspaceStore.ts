@@ -27,6 +27,23 @@ interface Slot {
   /** 该键正在写入中。 */
   inflight: boolean;
   retries: number;
+  /** 资金操作幂等键：重试沿用同一 opId，服务端据此识别重放而不重复记账。 */
+  opId?: string;
+  /** 与本次资金写入绑定、需在同一服务端事务内提交的审计意图。 */
+  audits?: CommitAuditIntent[];
+}
+
+/** 随资金写入原子提交的审计意图（由调用方在捕获期间收集）。 */
+export interface CommitAuditIntent {
+  action: string;
+  resource?: string;
+  detail?: Record<string, unknown>;
+}
+
+/** 资金写入的提交元信息：幂等键 + 审计意图。 */
+export interface WorkspaceCommitMeta {
+  opId: string;
+  audits?: CommitAuditIntent[];
 }
 
 interface RemoteRecord {
@@ -126,15 +143,33 @@ export function hasWorkspaceKind(kind: WorkspaceKind): boolean {
 /**
  * 乐观写入：本地立即生效，随后异步落库。
  * 同一键的连续写入会合并为最后一次，避免高频操作打满请求。
+ * 资金类写入可携带 commit 元信息：opId 用于幂等（重试不重复记账），audits 与写入同一事务提交。
  */
-export function upsertWorkspaceRecord(kind: WorkspaceKind, key: string, payload: unknown): void {
+export function upsertWorkspaceRecord(
+  kind: WorkspaceKind,
+  key: string,
+  payload: unknown,
+  commit?: WorkspaceCommitMeta
+): void {
   const k = slotKey(kind, key);
   const existing = slots.get(k);
   if (existing) {
     existing.payload = payload;
     existing.dirty = true;
+    existing.opId = commit?.opId;
+    existing.audits = commit?.audits;
   } else {
-    slots.set(k, { kind, key, payload, serverRevision: 0, dirty: true, inflight: false, retries: 0 });
+    slots.set(k, {
+      kind,
+      key,
+      payload,
+      serverRevision: 0,
+      dirty: true,
+      inflight: false,
+      retries: 0,
+      opId: commit?.opId,
+      audits: commit?.audits,
+    });
   }
   scheduleFlush(k);
 }
@@ -158,12 +193,22 @@ async function flushSlot(k: string): Promise<void> {
   slot.dirty = false;
   const snapshot = slot.payload;
   const baseRevision = slot.serverRevision;
+  // 重试沿用同一 opId 与审计意图：服务端据此识别重放，且审计与账本写入同事务提交。
+  const opId = slot.opId;
+  const audits = slot.audits;
   try {
     const res = await fetch('/api/data/store', {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ kind: slot.kind, key: slot.key, payload: snapshot, baseRevision }),
+      body: JSON.stringify({
+        kind: slot.kind,
+        key: slot.key,
+        payload: snapshot,
+        baseRevision,
+        opId: opId ?? undefined,
+        audit: audits && audits.length > 0 ? audits : undefined,
+      }),
     });
     slot.inflight = false;
     if (res.status === 401) {
@@ -183,6 +228,8 @@ async function flushSlot(k: string): Promise<void> {
       }
       slot.dirty = false;
       slot.retries = 0;
+      slot.opId = undefined;
+      slot.audits = undefined;
       workspaceVersion = null;
       dispatch(WORKSPACE_CONFLICT_EVENT, { kind: slot.kind, key: slot.key });
       return;
@@ -191,6 +238,8 @@ async function flushSlot(k: string): Promise<void> {
       // 无权限写入（如商务经理写入他人批次）：重试不会改变结果，直接终止并提示。
       slot.dirty = false;
       slot.retries = 0;
+      slot.opId = undefined;
+      slot.audits = undefined;
       const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
       dispatch(WORKSPACE_ERROR_EVENT, {
         kind: slot.kind,
@@ -218,6 +267,8 @@ async function flushSlot(k: string): Promise<void> {
     if (typeof data?.revision === 'number') slot.serverRevision = data.revision;
     if (typeof data?.version === 'string') workspaceVersion = data.version;
     slot.retries = 0;
+    slot.opId = undefined;
+    slot.audits = undefined;
     if (slot.dirty) scheduleFlush(k);
   } catch {
     slot.inflight = false;

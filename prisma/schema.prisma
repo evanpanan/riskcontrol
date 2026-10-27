@@ -246,3 +246,17 @@ model WorkspaceRecord {
   @@index([kind])
   @@index([updatedAt])
 }
+
+// 资金操作幂等登记：每次资金提交携带客户端生成的 opId。
+// 与账本写入、审计记录在同一事务内提交；重放同一 opId 不再重复记账。
+model FinanceCommit {
+  opId      String   @id
+  actorId   String?
+  kind      String
+  key       String
+  revision  Int
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([key])
+}

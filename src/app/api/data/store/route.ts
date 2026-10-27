@@ -118,6 +118,38 @@ interface PutBody {
   key?: unknown;
   payload?: unknown;
   baseRevision?: unknown;
+  /** 资金操作幂等键：同一次资金操作的网络重试携带同一 opId，服务端不重复记账。 */
+  opId?: unknown;
+  /** 与本次写入同一事务提交的审计记录（由服务端注入权威操作人身份）。 */
+  audit?: unknown;
+}
+
+interface AuditIntent {
+  action: string;
+  resource: string;
+  detail: Record<string, unknown> | null;
+}
+
+const MAX_OP_ID_LENGTH = 128;
+const MAX_AUDIT_ENTRIES = 20;
+/** 审计意图归一化：仅接受业务动作名，操作人身份一律由服务端会话决定。 */
+function normalizeAuditIntents(raw: unknown): AuditIntent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AuditIntent[] = [];
+  for (const item of raw.slice(0, MAX_AUDIT_ENTRIES)) {
+    if (item === null || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    if (typeof rec.action !== 'string') continue;
+    const action = rec.action.slice(0, 64);
+    if (!action) continue;
+    const resource = typeof rec.resource === 'string' ? rec.resource.slice(0, 200) : '';
+    const detail =
+      rec.detail !== null && typeof rec.detail === 'object' && !Array.isArray(rec.detail)
+        ? (rec.detail as Record<string, unknown>)
+        : null;
+    out.push({ action, resource, detail });
+  }
+  return out;
 }
 
 /**
@@ -125,6 +157,7 @@ interface PutBody {
  * - 记录不存在：直接创建，revision = 1。
  * - 记录存在且 baseRevision 与服务端一致：更新并 revision + 1。
  * - 否则返回 409 并回带服务端当前记录，由客户端回滚并以服务端为准。
+ * - 携带 opId 时：幂等登记、账本写入与审计记录在同一事务内提交；重放同一 opId 不再重复记账。
  */
 export async function PUT(req: Request) {
   const session = await resolveSessionUser();
@@ -166,6 +199,11 @@ export async function PUT(req: Request) {
     typeof body.baseRevision === 'number' && Number.isFinite(body.baseRevision)
       ? Math.trunc(body.baseRevision)
       : null;
+  const opId =
+    typeof body.opId === 'string' && body.opId.length > 0 && body.opId.length <= MAX_OP_ID_LENGTH
+      ? body.opId
+      : null;
+  const auditIntents = normalizeAuditIntents(body.audit);
 
   let payload: Prisma.InputJsonValue;
   try {
@@ -180,6 +218,36 @@ export async function PUT(req: Request) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      // 幂等：同一次资金操作的重试携带同一 opId，命中即视为已完成，不重复记账 / 不重复写审计。
+      if (opId) {
+        const done = await tx.financeCommit.findUnique({
+          where: { opId },
+          select: { revision: true },
+        });
+        if (done) return { ok: true as const, revision: done.revision, deduped: true };
+      }
+
+      // 记账、审计与幂等登记必须在同一事务内提交：任一步失败则整体回滚。
+      const commitAuditAndIdempotency = async (finalRevision: number) => {
+        if (auditIntents.length > 0) {
+          await tx.auditLog.createMany({
+            data: auditIntents.map<Prisma.AuditLogCreateManyInput>((a) => ({
+              actorId: session.id,
+              actorEmail: session.email,
+              role: session.role,
+              action: a.action,
+              resource: a.resource || `${kind}:${key}`,
+              detail: a.detail === null ? undefined : (a.detail as Prisma.InputJsonValue),
+            })),
+          });
+        }
+        if (opId) {
+          await tx.financeCommit.create({
+            data: { opId, actorId: session.id, kind, key, revision: finalRevision },
+          });
+        }
+      };
+
       const existing = await tx.workspaceRecord.findUnique({
         where: { kind_key: { kind, key } },
         select: { revision: true, payload: true },
@@ -194,6 +262,7 @@ export async function PUT(req: Request) {
             data: { kind, key, payload, revision: 1, updatedBy: session.id },
             select: { revision: true },
           });
+          await commitAuditAndIdempotency(created.revision);
           return { ok: true as const, revision: created.revision };
         } catch (createErr) {
           // 并发首建：另一请求已抢先创建，改为冲突回带，由客户端以服务端为准重试。
@@ -241,6 +310,7 @@ export async function PUT(req: Request) {
           conflict: { payload: current?.payload ?? null, revision: current?.revision ?? 0 },
         };
       }
+      await commitAuditAndIdempotency(existing.revision + 1);
       return { ok: true as const, revision: existing.revision + 1 };
     });
 
@@ -255,7 +325,12 @@ export async function PUT(req: Request) {
         409
       );
     }
-    return jsonNoStore({ ok: true, revision: result.revision, version: await computeVersion() });
+    return jsonNoStore({
+      ok: true,
+      revision: result.revision,
+      deduped: 'deduped' in result ? result.deduped === true : false,
+      version: result.deduped === true ? undefined : await computeVersion(),
+    });
   } catch (err) {
     console.error('[data:store] PUT failed:', err instanceof Error ? err.message : String(err));
     return jsonNoStore({ ok: false, error: '工作区数据写入失败' }, 500);

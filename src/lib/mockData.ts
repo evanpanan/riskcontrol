@@ -33,6 +33,8 @@ import {
 import { mergeClientStatusOnClient } from "./clientStatusStore";
 import { getNYSEInfo, LIVE_QUOTE_SETTINGS_KEY } from "./liveQuote";
 import { calculateTradingWindows } from "./utils";
+import { beginAuditCapture, endAuditCapture, logAudit } from "./auth/audit";
+import type { WorkspaceCommitMeta } from "./workspaceStore";
 import {
   bootstrapWorkspace,
   clearWorkspace,
@@ -1100,7 +1102,11 @@ function readFinanceStore(): FinanceStore {
 }
 
 /** 写入资金账本：工作区已就绪时逐批落库（多端共享），同时写本地镜像。 */
-function writeFinanceRecords(store: FinanceStore, ids: string[]): void {
+function writeFinanceRecords(
+  store: FinanceStore,
+  ids: string[],
+  commit?: WorkspaceCommitMeta
+): void {
   if (typeof window === "undefined") return;
   if (isWorkspaceHydrated()) {
     // 服务端不可写（未登录 / 会话失效 / 首次同步失败）时必须中止本次记账：
@@ -1108,7 +1114,10 @@ function writeFinanceRecords(store: FinanceStore, ids: string[]): void {
     if (isWorkspaceWriteBlocked()) {
       throw new Error("服务器暂时不可用，本次资金操作未入账。请刷新页面或稍后重试。");
     }
-    for (const id of ids) upsertWorkspaceRecord("ledger", id, store[id]);
+    for (const id of ids) {
+      // 幂等键与审计意图只绑定单批次写入（多批次的每笔记账各自独立）。
+      upsertWorkspaceRecord("ledger", id, store[id], ids.length === 1 ? commit : undefined);
+    }
     // 服务端已接管持久化，本地镜像尽力而为，写失败不影响记账结果。
     try {
       window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
@@ -1122,6 +1131,12 @@ function writeFinanceRecords(store: FinanceStore, ids: string[]): void {
     window.localStorage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
   } catch {
     throw new Error("资金记录保存失败，本次操作未入账。请检查浏览器存储空间后重试。");
+  }
+  // 无服务端写入时，捕获到的审计仍走常规通道上报，避免审计丢失。
+  if (commit?.audits?.length) {
+    for (const a of commit.audits) {
+      logAudit({ action: a.action as Parameters<typeof logAudit>[0]["action"], resource: a.resource, detail: a.detail });
+    }
   }
 }
 
@@ -1147,11 +1162,35 @@ export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLik
     throw new RevisionMismatchError(batch.id);
   }
   const draft = reviveBatch(structuredClone(batch));
-  const result = mutate(draft);
+  // 变更期间捕获审计意图：随账本写入在同一服务端事务内提交，避免「记账成功、审计缺失」。
+  beginAuditCapture();
+  let result: T;
+  try {
+    result = mutate(draft);
+  } catch (err) {
+    // 变更函数抛错：本次未记账，捕获到的审计改走常规通道，避免审计丢失。
+    for (const a of endAuditCapture()) {
+      logAudit({ action: a.action, resource: a.resource, detail: a.detail });
+    }
+    throw err;
+  }
+  const audits = endAuditCapture();
   initializeBatchFinance(draft);
-  draft.finance!.revision = (batch.finance?.revision ?? 0) + 1;
+  const nextRevision = (batch.finance?.revision ?? 0) + 1;
+  draft.finance!.revision = nextRevision;
   store[batch.id] = financeRecord(draft);
-  writeFinanceRecords(store, [batch.id]);
+  try {
+    writeFinanceRecords(store, [batch.id], {
+      // 幂等键：同一次资金操作的网络重试携带同一 opId，服务端不重复记账。
+      opId: `fin-${batch.id}-${nextRevision}-${Math.random().toString(36).slice(2, 10)}`,
+      audits,
+    });
+  } catch (err) {
+    for (const a of audits) {
+      logAudit({ action: a.action, resource: a.resource, detail: a.detail });
+    }
+    throw err;
+  }
   Object.assign(batch, draft);
   window.dispatchEvent(new CustomEvent("risk-control:finance-changed", { detail: { batchId: batch.id } }));
   return result;

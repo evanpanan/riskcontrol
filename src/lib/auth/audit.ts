@@ -205,6 +205,30 @@ function submitServer(entry: AuditLogEntry): void {
   void flushPending(false);
 }
 
+export interface AuditIntent {
+  action: AuditAction;
+  resource?: string;
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * 审计意图捕获缓冲。
+ * 资金操作在提交前开启捕获：期间产生的审计不单独上报，而是随账本写入在同一服务端事务内提交，
+ * 避免出现「账本已改、审计缺失」的中间态。
+ */
+let captureBuffer: AuditIntent[] | null = null;
+
+export function beginAuditCapture(): void {
+  captureBuffer = [];
+}
+
+/** 结束捕获并返回期间的审计意图；未处于捕获状态时返回空数组。 */
+export function endAuditCapture(): AuditIntent[] {
+  const out = captureBuffer ?? [];
+  captureBuffer = null;
+  return out;
+}
+
 export function logAudit(evt: {
   action: AuditAction;
   actorId?: string;
@@ -235,6 +259,15 @@ export function logAudit(evt: {
       } catch (err: any) {
         console.warn('[audit] persist failed', err?.message || err);
       }
+    }
+    if (captureBuffer) {
+      // 捕获中：服务端落库交由此后同一事务的资金写入完成，避免与账本写入不一致。
+      captureBuffer.push({
+        action: entry.action,
+        resource: entry.resource ?? undefined,
+        detail: entry.detail ?? undefined,
+      });
+      return;
     }
     // 服务端双写：不阻塞 localStorage 主流程，失败写入 pending 缓冲
     submitServer(entry);
