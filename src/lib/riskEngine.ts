@@ -1,3 +1,5 @@
+import { addNYSEBusinessDays } from "./tradingCalendar";
+import { contractDates, nextContractExit } from "./contractDates";
 import { Client, Batch, MarginCall, RiskLevel, BatchStatus, ClientStatus } from "@prisma/client";
 import { calculateTradingWindows } from "./utils";
 import { getProfitSettings, DEFAULT_PROFIT_SETTINGS } from "./profitSettings";
@@ -30,14 +32,7 @@ const uid = () => `fin_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
 
 /** 跳过周末（周六、周日）累加自然日，返回新日期。简化版不处理节假日。 */
 export function addBusinessDays(date: Date | string, days: number): Date {
-  const d = new Date(typeof date === "string" ? date : date);
-  let added = 0;
-  while (added < days) {
-    d.setDate(d.getDate() + 1);
-    const day = d.getDay();
-    if (day !== 0 && day !== 6) added++;
-  }
-  return d;
+  return addNYSEBusinessDays(date, days);
 }
 
 /** 计算补仓轮次的 T+2 到期日（触发日 + 2 个交易日）。 */
@@ -256,24 +251,14 @@ export function calculateEarlyExitFee(exitPrincipal: number) {
  * 根据签约日计算合约期限节点
  */
 export function calculateContractDates(signDate: Date | string) {
-  const sign = typeof signDate === "string" ? new Date(signDate) : signDate;
-  const lockUpEnd = new Date(sign);
-  lockUpEnd.setMonth(lockUpEnd.getMonth() + LOCKUP_MONTHS);
-  const finalMaturity = new Date(sign);
-  finalMaturity.setFullYear(finalMaturity.getFullYear() + FINAL_MATURITY_YEARS);
-  return {
-    lockUpEndDate: lockUpEnd,
-    exitWindowMonths: EXIT_WINDOW_MONTHS,
-    noticePeriodDays: NOTICE_PERIOD_DAYS,
-    finalMaturityDate: finalMaturity,
-  };
+  return contractDates(signDate);
 }
 
 /**
  * Phase 3: 获取客户退出资格信息
  * 检查通知期是否已过、是否在开放期内、是否已过最终到期日
  */
-export function getExitEligibility(batch: BatchLike, client: ClientLike): {
+export function getExitEligibility(batch: BatchLike, client: ClientLike, now = new Date()): {
   canExit: boolean;
   reason: string;
   exitEligibleAt: Date | null;
@@ -284,8 +269,7 @@ export function getExitEligibility(batch: BatchLike, client: ClientLike): {
   finalMaturityDate: Date;
 } {
   const signDate = client.signDate ?? batch.signDate;
-  const contract = calculateContractDates(signDate);
-  const now = new Date();
+  const contract = contractDates(signDate, {...batch,...client.contractTerms});
   const noticeDays = contract.noticePeriodDays;
 
   // 锁仓期内不可退出
@@ -318,14 +302,16 @@ export function getExitEligibility(batch: BatchLike, client: ClientLike): {
     };
   }
 
-  const eligibleAt = new Date(requestedAt.getTime() + noticeDays * 86400000);
+  if (!Number.isFinite(requestedAt.getTime())) throw new Error("退出申请日期无效");
+  const noticeEnds = new Date(requestedAt.getTime() + noticeDays * 86400000);
+  const eligibleAt = nextContractExit(contract, new Date(Math.max(now.getTime(), noticeEnds.getTime())));
   const isEarlyExit = now < contract.finalMaturityDate;
 
   if (now < eligibleAt) {
     const daysUntil = Math.ceil((eligibleAt.getTime() - now.getTime()) / 86400000);
     return {
       canExit: false,
-      reason: `通知期内，${daysUntil} 天后可结算`,
+      reason: `通知期或退出窗口未满足，${daysUntil} 天后可结算`,
       exitEligibleAt: eligibleAt,
       noticePeriodDays: noticeDays,
       isEarlyExit,
@@ -364,7 +350,7 @@ export function requestClientExit(batch: BatchLike, clientId: string, opts: { op
   }
 
   const now = new Date();
-  const eligibleAt = new Date(now.getTime() + eligibility.noticePeriodDays * 86400000);
+  const eligibleAt = nextContractExit(contractDates(client.signDate ?? batch.signDate, {...batch,...client.contractTerms}), new Date(now.getTime() + eligibility.noticePeriodDays * 86400000));
 
   client.status = ClientStatus.EXIT_REQUESTED;
   client.exitRequestedAt = now;
@@ -537,7 +523,7 @@ export function getBatchMetrics(batch: BatchLike): BatchRiskMetrics {
   const activeSubsetInitialPrincipal = money(rc + rescue.totalRescueAmount);
   let stored: ThresholdOpts | undefined;
   try {
-    const t = getStoredThresholds();
+    const t = batch.thresholds ?? getStoredThresholds();
     if (t) stored = { warningDropPercent: t.warningDropPercent, marginDropPercent: t.marginDropPercent };
   } catch {
     stored = undefined;

@@ -12,12 +12,17 @@
     "postinstall": "prisma generate",
     "lint": "next lint",
     "verify:preview": "node scripts/check-preview.mjs",
-    "verify:finance": "tsx scripts/check-finance.ts",
-    "verify:test-data": "tsx scripts/check-test-data.ts",
-    "verify:notifications": "tsx scripts/check-notifications.ts",
+    "verify:finance": "node --import tsx scripts/check-finance.ts",
+    "verify:test-data": "node --import tsx scripts/check-test-data.ts",
+    "verify:notifications": "node --import tsx scripts/check-notifications.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "verify:server": "node --import tsx scripts/check-server-workflow.ts",
+    "verify:boundaries": "node --import tsx scripts/check-remediation.ts",
+    "db:bootstrap": "node --import tsx prisma/seed.ts",
+    "test": "node --import tsx scripts/check-remediation.ts && node --import tsx scripts/check-finance.ts && node --import tsx scripts/check-test-data.ts && node --import tsx scripts/check-notifications.ts && node --import tsx test_datascope_rbac.ts && node --import tsx scripts/check-export.ts",
+    "verify:export": "node --import tsx scripts/check-export.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",
@@ -32,16 +37,17 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "dotenv": "16.6.1",
+    "exceljs": "4.4.0",
     "lightweight-charts": "^4.2.3",
     "lucide-react": "^0.439.0",
-    "next": "14.2.8",
+    "next": "15.5.28",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.12.7",
     "sonner": "^2.0.8",
     "tailwind-merge": "^2.5.2",
-    "tailwindcss-animate": "^1.0.7",
-    "xlsx": "^0.18.5"
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",
@@ -49,11 +55,18 @@
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.0",
-    "eslint-config-next": "14.2.8",
-    "postcss": "^8.4.45",
+    "eslint-config-next": "15.5.28",
+    "postcss": "^8.5.23",
     "prisma": "^5.18.0",
     "tailwindcss": "^3.4.10",
     "tsx": "^4.23.13",
     "typescript": "^5.5.4"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "source-map-js": "^1.2.2",
+    "uuid": "^11.1.1",
+    "minimatch@^9": "^9.0.7",
+    "postcss-selector-parser@^6": "^6.1.5"
   }
 }

@@ -1,3 +1,4 @@
+import { applyFinanceCommand, type FinanceCommand } from "./financeCommands";
 import {
   Batch,
   Client,
@@ -48,6 +49,53 @@ export class RevisionMismatchError extends Error {
 export interface MockDataSet {
   batches: (Batch & { clients: Client[]; marginCalls: MarginCall[] })[];
   stockHistory: StockHistory[];
+}
+
+// The production UI holds only a transient, permission-filtered server snapshot.
+let ledgerEpoch = 0;
+let serverData: MockDataSet = { batches: [], stockHistory: [] };
+export function isServerLedgerMode(): boolean {
+  return process.env.NODE_ENV === 'production' || (process.env.NEXT_PUBLIC_RC_DATA_MODE !== 'demo' && typeof window !== 'undefined' && !!window.location);
+}
+export function clearServerLedger(): void { ledgerEpoch++; serverData = { batches: [], stockHistory: [] }; }
+async function ledgerFetch(body?: unknown) {
+  const response = await fetch('/api/ledger', { method: body ? 'POST':'GET', credentials:'include', cache:'no-store', headers: body ? { 'Content-Type':'application/json' }:undefined, body:body ? JSON.stringify(body):undefined });
+  const data = await response.json();
+  if(!response.ok) { if(response.status===409) throw new RevisionMismatchError(undefined,data.error); throw new Error(data.error ?? '账本读取失败'); }
+  return data;
+}
+function publishServerData(data: MockDataSet) {
+  data.batches=data.batches.map(b=>{
+    const existing=serverData.batches.find(x=>x.id===b.id);
+    return existing && ((existing as any).finance?.revision ?? 0) > ((b as any).finance?.revision ?? 0) ? existing:b;
+  });
+  data.batches.forEach(reviveBatch);
+  serverData = data;
+  window.dispatchEvent(new CustomEvent('risk-control:finance-changed', { detail: { serverSnapshot:true } }));
+}
+export async function loadServerLedger(): Promise<void> {
+  if(!isServerLedgerMode()) return;
+  const epoch=ledgerEpoch;
+  const settingsResponse=await fetch('/api/settings',{credentials:'include',cache:'no-store'});
+  if(!settingsResponse.ok) throw new Error('机构配置不可用');
+  const settings=await settingsResponse.json();
+  if(epoch!==ledgerEpoch) return;
+  // Browser preferences remain local; financial parameters are overwritten by server authority.
+  const stored=JSON.parse(window.localStorage.getItem('risk_control_settings') || '{}');
+  window.localStorage.setItem('risk_control_settings',JSON.stringify({...stored,...settings}));
+  const data=await ledgerFetch();
+  if(epoch===ledgerEpoch) publishServerData(data);
+}
+export async function commitBatchCommand<T = any>(batch: BatchLike, command: FinanceCommand): Promise<T> {
+  if(!isServerLedgerMode()) return commitBatchFinance(batch, draft=>applyFinanceCommand(draft,command));
+  const epoch=ledgerEpoch;
+  const response=await ledgerFetch({ commandId:globalThis.crypto.randomUUID(),batchId:batch.id,revision:batch.finance?.revision ?? 0,command });
+  if(epoch!==ledgerEpoch) throw new Error("操作已被服务器处理，请在当前账号刷新确认结果");
+  const updated=reviveBatch(response.batch);
+  Object.assign(batch,updated);
+  serverData.batches=serverData.batches.map(b=>b.id===batch.id ? updated as any:b);
+  window.dispatchEvent(new CustomEvent('risk-control:finance-changed', { detail: { batchId:batch.id,serverSnapshot:true } }));
+  return response.result as T;
 }
 
 // Scenario quote only, not a live market price. Actual symbol comes from settings.
@@ -636,6 +684,8 @@ export function generateMockData(): MockDataSet {
         settleClientPosition(b, client.id, { operatorName: "SYSTEM_MOCK" });
         settledCount++;
       } catch (settleErr: any) {
+        client.status = ClientStatus.ACTIVE;
+        client.exitRequestedAt = null; client.exitEligibleAt = null;
         console.log("[mock settle] fail", b.id, client.name, "price=", settlePrice, "entry=", client.entryStockPrice ?? b.stockPriceAtStart, "err=", settleErr?.message ?? settleErr);
         (b as any).currentStockPrice = origPrice;
         continue;
@@ -1054,6 +1104,7 @@ function reviveBatch(batch: BatchLike): BatchLike {
 
 /** Stage, persist, then publish. Failed storage or a stale tab cannot partially book an action. */
 export function commitBatchFinance<T>(batch: BatchLike, mutate: (draft: BatchLike) => T): T {
+  if (isServerLedgerMode()) throw new Error("请通过服务端账本操作入账");
   if (typeof window === "undefined") throw new Error("请在已登录的浏览器中执行资金操作。");
   const store = readFinanceStore();
   const saved = store[batch.id];
@@ -1104,6 +1155,7 @@ export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: str
 }
 
 export function getMockData(): MockDataSet {
+  if (isServerLedgerMode()) return serverData;
   // 已清空业务数据：只从账本读取管理员后续新建的批次，不再载入演示数据。
   if (typeof window !== "undefined" && isLedgerEmpty()) {
     if (!cachedMockData) {
@@ -1253,6 +1305,13 @@ export function reloadMockData(): MockDataSet {
 }
 
 export function refreshMockDataPrices(): MockDataSet {
+  if (isServerLedgerMode()) {
+    const epoch=ledgerEpoch;
+    void ledgerFetch({operation:'quotes'}).then(data=>{if(epoch===ledgerEpoch)publishServerData(data);}).catch(error => {
+      window.dispatchEvent(new CustomEvent('risk-control:quote-error', { detail:String(error.message) }));
+    });
+    return serverData;
+  }
   const nyse = getNYSEInfo();
   if (!nyse.shouldBreathe) {
     return getMockData();
@@ -1356,7 +1415,16 @@ export interface NewBatchInput {
  * 权限判断放在调用方（客户端）校验：仅 ADMIN / RISK_MANAGER / OPERATIONS 才能调用本函数。
  * 完成后会持久化到账本 & 触发 reloadMockData()，并派发 "risk-control:finance-changed"。
  */
-export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client[]; marginCalls: MarginCall[] }) {
+export async function createNewBatch(input: NewBatchInput): Promise<MockDataSet['batches'][number]> {
+  if(!isServerLedgerMode()) return createDemoBatch(input);
+  const {batch}=await ledgerFetch({operation:'create',input});
+  const revived=reviveBatch(batch) as MockDataSet['batches'][number];
+  serverData.batches.push(revived);
+  window.dispatchEvent(new CustomEvent('risk-control:finance-changed', { detail:{serverSnapshot:true} }));
+  return revived;
+}
+
+function createDemoBatch(input: NewBatchInput): (Batch & { clients: Client[]; marginCalls: MarginCall[] }) {
   if (typeof window === "undefined") {
     throw new Error("请在已登录的浏览器页面中创建批次。");
   }

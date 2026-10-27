@@ -1,3 +1,5 @@
+import { issueServerSession, verifyServerPassword, hashServerPassword } from '@/lib/auth/server';
+import { prisma } from '@/lib/prisma';
 import { NextRequest, NextResponse } from 'next/server';
 import { signSessionJwt, buildSetCookieHeader, buildClearCookieHeader, RC_SESSION_COOKIE } from '@/lib/auth/session';
 import { isAllowedRole, type AppSessionUser } from '@/types/auth';
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
     const body = parsed as LoginRequestBody;
     const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
-    if (!identifier || !password) {
+    if (!identifier || !password || identifier.length > 320 || password.length > 1024) {
       void hitRateLimit(ip, null);
       return NextResponse.json(
         { ok: false, error: GENERIC_DENY_MESSAGE },
@@ -120,7 +122,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const verified = await verifyPassword(password, account.passwordHash, account.salt);
+    const verified = account.passwordHash.startsWith('scrypt$')
+      ? await verifyServerPassword(password, account.passwordHash)
+      : await verifyPassword(password, account.passwordHash, account.salt);
     if (!verified) {
       return NextResponse.json(
         { ok: false, error: GENERIC_DENY_MESSAGE },
@@ -138,7 +142,11 @@ export async function POST(req: NextRequest) {
       bdManagerFullName: account.bdManagerFullName,
     };
 
-    const token = await signSessionJwt(sessionUser);
+    // Legacy passwords are upgraded only after successful verification.
+    if (account.kind === 'prisma' && !account.passwordHash.startsWith('scrypt$')) {
+      await prisma.appUser.update({ where: { id: account.id }, data: { passwordHash: await hashServerPassword(password) } });
+    }
+    const token = await issueServerSession(sessionUser);
     const cookie = buildSetCookieHeader(token);
 
     const res = NextResponse.json({

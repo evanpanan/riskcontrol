@@ -35,7 +35,7 @@ export const AUDIT_ACTION_FILTER_OPTIONS: Array<{ value: AuditFilterValue; label
 ];
 
 export function getAuditActionLabel(action: string): string {
-  return (AUDIT_ACTION_LABELS as Record<string, string>)[action] ?? '其他操作';
+  return (AUDIT_ACTION_LABELS as Record<string, string>)[action] ?? ({client_add:'新增客户',batch_create:'创建批次',batch_update:'修改批次',client_status:'客户状态变更'} as Record<string,string>)[action] ?? '其他操作';
 }
 
 const PAGE_LABELS: Array<{ match: RegExp; label: string }> = [

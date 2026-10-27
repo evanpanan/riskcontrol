@@ -5,6 +5,7 @@ export const RC_SESSION_MAX_AGE_SEC = 60 * 60 * 12; // 12h
 
 export interface RcSessionJwtPayload {
   sub: string; // userId
+  jti: string;
   email: string;
   role: AppRole;
   displayName: string;
@@ -62,33 +63,10 @@ function base64UrlDecodeToString(encoded: string): string | null {
   return decoder.decode(bytes);
 }
 
-function getVercelSessionFallback(): string | null {
-  if (process.env.VERCEL !== '1') return null;
-  const vercelEnv = process.env.VERCEL_ENV?.trim() || 'unknown';
-  const projectRef =
-    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
-    process.env.VERCEL_BRANCH_URL?.trim() ||
-    process.env.VERCEL_URL?.trim();
-  const deploymentRef =
-    process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_REF?.trim() ||
-    process.env.VERCEL_GIT_COMMIT_MESSAGE?.trim();
-  if (!projectRef || !deploymentRef) return null;
-  return `vercel-session-secret-v1::${vercelEnv}::${projectRef}::${deploymentRef}::risk-control`;
-}
-
-function getAuthSecret(override?: string): Uint8Array {
-  const raw = (override ?? process.env.NEXT_RC_AUTH_SECRET) as string | undefined;
-  const fallback: string = process.env.NODE_ENV === 'production'
-    ? (getVercelSessionFallback() ?? '')
-    : `dev-session-secret-v1::${process.env.NODE_ENV ?? 'local'}::do-not-use-in-prod`;
-  const chosen = (raw && raw.trim()) ? raw.trim() : fallback;
-  if (!chosen) {
-    throw new Error('[rc-session] NEXT_RC_AUTH_SECRET is required in production.');
-  }
-  const encoder = new TextEncoder();
-  return encoder.encode(chosen);
+function getAuthSecret(): Uint8Array {
+  const raw = process.env.NEXT_RC_AUTH_SECRET?.trim();
+  if (!raw || raw.length < 32) throw new Error('NEXT_RC_AUTH_SECRET must contain at least 32 characters.');
+  return new TextEncoder().encode(raw);
 }
 
 const JWT_HEADER = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
@@ -121,6 +99,7 @@ export async function signSessionJwt(user: Pick<AppSessionUser, 'id' | 'email' |
   const nowSec = Math.floor(Date.now() / 1000);
   const payload: RcSessionJwtPayload = {
     sub: user.id,
+    jti: globalThis.crypto.randomUUID(),
     email: user.email,
     role: user.role,
     displayName: user.displayName,

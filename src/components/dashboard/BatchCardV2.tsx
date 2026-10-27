@@ -13,7 +13,7 @@ import {
   getLockedBatchRequiredMargin,
   type BatchLike as RiskEngineBatchLike,
 } from "@/lib/riskEngine";
-import { commitBatchFinance, getMockData } from "@/lib/mockData";
+import { commitBatchCommand, getMockData } from "@/lib/mockData";
 import { notifyBatchChannel } from "@/lib/notifier";
 import { toast } from "sonner";
 import { Batch, Client, ClientStatus, MarginCall, MarginCallStatus, RiskLevel } from "@prisma/client";
@@ -642,10 +642,10 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
           }
           const canonical = getMockData().batches.find((b) => b.id === batch.id);
           if (!canonical) throw new Error("批次不存在，请刷新。");
-          const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
+          const applied = await commitBatchCommand<number>(canonical, {type:"topup",input:{
             amount: req, expectedRoundId: marginAgg.roundId,
             operatorName: viewerUser?.displayName ?? viewerUser?.email,
-          }));
+          }});
           if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
           onAction?.("fulfill-mc", batch.id);
           window.dispatchEvent(new CustomEvent("risk-control:margin-fulfilled", {

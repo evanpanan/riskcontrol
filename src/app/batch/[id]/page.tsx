@@ -2,17 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { FINANCE_STORE_KEY, getMockData, reloadMockData, resetMockTestData } from "@/lib/mockData";
 import { BatchDetailContent } from "@/components/batch/BatchDetailContent";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-interface BatchDetailPageProps {
-  params: { id: string };
-}
 
-export default function BatchDetailPage({ params }: BatchDetailPageProps) {
+export default function BatchDetailPage() {
+  const params = useParams<{id:string}>();
   const [batch, setBatch] = useState<ReturnType<typeof getMockData>["batches"][number] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);

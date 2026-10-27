@@ -1,3 +1,4 @@
+import { contractDates, nextContractExit } from "./contractDates";
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { formatDistanceToNow, differenceInMonths, addMonths, differenceInDays, differenceInHours, differenceInMinutes } from "date-fns";
@@ -108,9 +109,11 @@ export function calculateTradingWindows(signDate: Date | string): TradingWindowI
     }
   }
 
-  if (!isLocked && nextTradingDate) {
-    const daysToWindow = Math.abs(differenceInDays(nextTradingDate, now));
-    isTradingWindow = daysToWindow <= 14;
+  const contract = contractDates(sign);
+  if(!isLocked && now < contract.finalMaturityDate) {
+    const permitted = nextContractExit(contract,now);
+    isTradingWindow = permitted.getTime() === now.getTime();
+    nextTradingDate = isTradingWindow ? now : permitted;
   }
 
   let countdownText = "";

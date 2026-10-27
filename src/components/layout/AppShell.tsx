@@ -1,4 +1,5 @@
 "use client";
+import { loadServerLedger, clearServerLedger, isServerLedgerMode } from "@/lib/mockData";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { TopBar } from "@/components/layout/TopBar";
@@ -11,6 +12,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const isAuthRoute = pathname.startsWith("/login");
   const { user, isLoading } = useCurrentUser();
+  const userId = user?.id;
+  const [quoteError,setQuoteError] = useState('');
+  useEffect(()=>{const listener=(e:Event)=>setQuoteError((e as CustomEvent).detail);window.addEventListener('risk-control:quote-error',listener);return()=>window.removeEventListener('risk-control:quote-error',listener);},[]);
+  const [ledgerReady, setLedgerReady] = useState(false);
+  const [ledgerError,setLedgerError] = useState('');
+  useEffect(()=>{
+    if(!userId || isAuthRoute) {clearServerLedger();setLedgerReady(false);return;}
+    let active=true;
+    setLedgerReady(false);setLedgerError('');clearServerLedger();
+    const load=async()=>{try{await loadServerLedger();if(active){setLedgerReady(true);setLedgerError('');}}catch(e){if(active)setLedgerError((e as Error).message);}};
+    void load();const timer=setInterval(()=>void load(),30000);
+    return ()=>{active=false;clearInterval(timer);};
+  },[userId,user?.role,isAuthRoute]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -19,13 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!hydrated || isLoading) return;
-    if (isAuthRoute) {
-      if (user) {
-        const dest = (pathname.split("?next=")[1] as string | undefined) || "/";
-        router.replace(decodeURIComponent(dest));
-      }
-      return;
-    }
+    if (isAuthRoute) return;
     if (!user) {
       const qs = pathname !== "/" ? `?next=${encodeURIComponent(pathname)}` : "";
       router.replace(`/login${qs}`);
@@ -53,11 +61,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
+  if(isServerLedgerMode() && (!ledgerReady || ledgerError)) return <div className="p-8 text-sm">{ledgerError || '加载服务端账本中…'}{ledgerError && <button className="ml-4 underline" onClick={()=>window.location.reload()}>重试</button>}</div>;
   return (
     <div className="flex min-h-screen w-full bg-background">
       <AppSidebar />
       <div className="flex flex-1 flex-col min-w-0">
         <TopBar />
+        {quoteError && <div role="alert" className="px-6 py-2 text-sm text-warning">行情尚未更新：{quoteError}。补仓和结算会检查参考价时效。</div>}
         <main className="flex-1 overflow-y-auto scrollbar-thin p-6">
           {children}
         </main>

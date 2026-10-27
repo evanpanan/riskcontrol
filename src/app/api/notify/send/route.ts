@@ -1,3 +1,4 @@
+import { currentUser } from "@/lib/server/http";
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { notificationReadiness, deliverNotification } from "@/lib/server/notificationDelivery";
@@ -12,6 +13,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const user=await currentUser(req);
+  if(!user) return NextResponse.json({success:false,sentTo:[],error:"未登录"},{status:401});
+  if(!["ADMIN","RISK_MANAGER"].includes(user.role)) return NextResponse.json({success:false,sentTo:[],error:"无权发送通知"},{status:403});
   // The current app has browser-local login only. A separate server-held key protects the paid send API.
   const secret = process.env.NOTIFICATION_SEND_TOKEN?.trim();
   if (!secret || secret.length < 32) {

@@ -175,13 +175,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser((prev) => (prev ? null : prev));
       return null;
     } catch {
-      const cached = cache.get();
-      if (cached) {
-        setSession(cached);
-      } else {
-        setUser((prev) => (prev ? null : prev));
-      }
-      return cached;
+      cache.clear();
+      setSession(null);
+      return null;
     } finally {
       refreshingRef.current = false;
     }

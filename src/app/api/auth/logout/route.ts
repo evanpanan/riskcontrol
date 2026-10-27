@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
+import { tokenDigest } from '@/lib/auth/server';
 import { buildClearCookieHeader, RC_SESSION_COOKIE } from '@/lib/auth/session';
-
 export const runtime = 'nodejs';
-
 export async function POST(req: NextRequest) {
+  const token = req.cookies.get(RC_SESSION_COOKIE)?.value;
   try {
-    const res = NextResponse.json({ ok: true }, { status: 200 });
-    res.headers.set('Set-Cookie', buildClearCookieHeader());
-    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
-    res.headers.append('Clear-Site-Data', '"cookies", "storage"');
-    void req;
-    void RC_SESSION_COOKIE;
-    return res;
+    if (token) await prisma.$transaction(async tx=>{
+      const session=await tx.session.findUnique({where:{token:tokenDigest(token)},include:{user:true}});
+      await tx.session.deleteMany({where:{token:tokenDigest(token)}});
+      if(session) await tx.auditLog.create({data:{actorId:session.userId,actorEmail:session.user.email,role:session.user.role,action:'logout',resource:'auth:logout'}});
+    });
+    return NextResponse.json({ ok: true }, { headers: { 'Set-Cookie': buildClearCookieHeader(), 'Cache-Control': 'no-store' } });
   } catch {
-    return NextResponse.json({ ok: true }, { status: 200, headers: { 'Set-Cookie': buildClearCookieHeader() } });
+    return NextResponse.json({ ok: false, error: '登出失败，请重试' }, { status: 503 });
   }
 }

@@ -35,14 +35,14 @@ import { getStoredThresholds } from "@/lib/thresholds";
 import { getStoredRiskTiers, type RiskTier } from "@/lib/riskTiers";
 import { detectFlashCrash, recordPriceSnapshot, getFlashCrashThresholds } from "@/lib/flashCrash";
 import { LedgerRecovery } from "@/components/batch/LedgerRecovery";
-import { commitBatchFinance, getMockData, FINANCE_STORE_KEY } from "@/lib/mockData";
+import { commitBatchCommand, getMockData, FINANCE_STORE_KEY } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { notifyBatchChannel } from "@/lib/notifier";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime, formatPercent } from "@/lib/utils";
 import { Batch, BatchStatus, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
-import * as XLSX from "xlsx";
+import * as XLSX from "@/lib/excelExport";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/auth/RoleGate";
@@ -409,7 +409,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           credentials: 'include',
           cache: 'no-store',
-          body: JSON.stringify({ clients: baseClientsForFilter }),
+          body: JSON.stringify({ batchId: batch.id, clients: baseClientsForFilter }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as { mergedRows?: (Client | RedactedClientPlaceholder)[] };
@@ -480,7 +480,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     return enriched;
   }, [filteredBase, mv, search, bdFilter, statusFilter, splitFilter, split, batch, metrics]);
 
-  const handleExportDetail = () => {
+  const handleExportDetail = async () => {
     try {
       const visible = filteredClients.filter((c: any) => !c.__redacted);
       if (visible.length === 0) {
@@ -518,7 +518,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       XLSX.utils.book_append_sheet(wb, ws, "批次客户明细");
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const fileName = `批次客户明细_${batch.batchNumber ?? batch.id}_${stamp}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+      await XLSX.writeFile(wb, fileName);
       const redactedSkipped = filteredClients.length - visible.length;
       toast.success(
         `导出成功：${fileName}（共 ${visible.length} 位客户${redactedSkipped > 0 ? `，已跳过 ${redactedSkipped} 条当前角色不可见记录` : ""}）`
@@ -584,14 +584,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     try { toast.success(await notifyBatchChannel(batch as any, channel)); }
     catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
   };
-  const doFulfill = () => {
+  const doFulfill = async () => {
     const canonical = getMockData().batches.find((b) => b.id === batch.id);
     if (!canonical) throw new Error("批次不存在，请刷新。");
-    const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
+    const applied = await commitBatchCommand<number>(canonical, {type:"topup",input:{
       amount: marginSummary.totalPending, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
       collateralType: topupCollateralType,
-    }));
+    }});
     if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
     window.dispatchEvent(
       new CustomEvent("risk-control:margin-fulfilled", {
@@ -603,7 +603,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     onChange?.();
   };
 
-  const handleClientStatusChange = (clientId: string, newStatus: ClientStatus) => {
+  const handleClientStatusChange = async (clientId: string, newStatus: ClientStatus) => {
     if (!batch.clients) return;
     const target = batch.clients.find((c: any) => c.id === clientId);
     if (!target) return;
@@ -618,12 +618,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     try {
       const canonical = getMockData().batches.find((b) => b.id === batch.id);
       if (!canonical) return;
-      commitBatchFinance(canonical, (draft) => {
-        const client = draft.clients!.find((c) => c.id === clientId)!;
-        if (client.status === ClientStatus.SETTLED) throw new Error("已结算快照不可撤销或重新激活。");
-        client.status = newStatus;
-        client.settledAt = null;
-      });
+      await commitBatchCommand(canonical,{type:'client_status',input:{clientId,status:newStatus}});
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "状态更新失败");
       return;
@@ -637,14 +632,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   };
 
   // Phase 3: 客户退出申请
-  const handleRequestExit = (clientId: string) => {
+  const handleRequestExit = async (clientId: string) => {
     try {
       const canonical = getMockData().batches.find((b) => b.id === batch.id);
       if (!canonical) return;
-      commitBatchFinance(canonical, (draft) => {
-        requestClientExit(draft, clientId, { operatorName: user?.displayName });
-      });
-      toast.success("已提交退出申请，等待 15 天通知期后可结算");
+      await commitBatchCommand(canonical,{type:'exit_request',input:{clientId}});
+      toast.success("已提交退出申请，结算时间以合约通知期和退出窗口为准");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "退出申请失败");
       return;
@@ -655,13 +648,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   };
 
   // Phase 3: 取消退出申请
-  const handleCancelExit = (clientId: string) => {
+  const handleCancelExit = async (clientId: string) => {
     try {
       const canonical = getMockData().batches.find((b) => b.id === batch.id);
       if (!canonical) return;
-      commitBatchFinance(canonical, (draft) => {
-        cancelClientExit(draft, clientId, { operatorName: user?.displayName });
-      });
+      await commitBatchCommand(canonical,{type:'exit_cancel',input:{clientId}});
       toast.success("已取消退出申请");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "取消退出失败");
@@ -678,6 +669,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   return (
     <div className={cn("space-y-6", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
+      {(batch as any).quoteSource && <p className="text-xs text-muted-foreground">
+        参考价来源：{(batch as any).quoteSource === 'MANUAL_CONFIRMED' ? '管理员人工确认' : (batch as any).quoteSource} ·
+        {(batch as any).quoteAsOf ? `价格时间：${new Date((batch as any).quoteAsOf).toLocaleString()}` : '来源未提供成交时间，仅供展示；资金操作需先确认有效参考价'}
+      </p>}
       <LedgerRecovery batch={batch as any} open={recoveryOpen} onOpenChange={setRecoveryOpen} />
       {/* Breadcrumb & Back */}
       {!compact ? (
@@ -2009,11 +2004,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             { label: "客户签约分成（原）", value: `${result.splitRatioClient}%` },
           ];
         })()}
-        onConfirm={() => {
+        onConfirm={async () => {
           const canonical = getMockData().batches.find((b) => b.id === batch.id);
           if (!canonical || !settleTarget) throw new Error("客户不存在，请刷新。");
           try {
-            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
+            await commitBatchCommand(canonical, {type:"settle",input:{clientId:settleTarget}});
           } catch (err) {
             if (err instanceof Error && err.name === "RevisionMismatchError") {
               toast.error(err.message);

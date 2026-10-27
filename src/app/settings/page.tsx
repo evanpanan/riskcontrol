@@ -603,38 +603,10 @@ export default function SettingsPage() {
           bdManagerFullName: u.bdManagerFullName || undefined,
           avatarInitials: ai,
           avatarDataUrl: u.avatarDataUrl || undefined,
-          enabled: true,
+          enabled: u.enabled === true,
           createdAt: u.createdAt ?? new Date().toISOString(),
         };
       });
-      // 合并已有 localStorage 自定义 shadow（有 passwordHash 或 whatsapp 非空就用 shadow 版本，保持习惯）
-      try {
-        const raw = localStorage.getItem(USERS_LS_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            const byId = new Map<string, SystemAppUser>();
-            for (const r of merged) byId.set(r.id, r);
-            for (const s of parsed) {
-              if (!s || typeof s !== 'object') continue;
-              const sid = String((s as any).id ?? '');
-              if (!sid) continue;
-              const existing = byId.get(sid);
-              if (existing) {
-                const next: SystemAppUser = { ...existing, whatsapp: (s as any).whatsapp ?? existing.whatsapp, passwordHash: (s as any).passwordHash, salt: (s as any).salt };
-                byId.set(sid, next);
-              } else {
-                byId.set(sid, s as SystemAppUser);
-              }
-            }
-            const list = Array.from(byId.values());
-            setUsers(list);
-            try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(list)); } catch {}
-            setUsersLoadError("");
-            return;
-          }
-        }
-      } catch {}
       setUsers(merged);
       setUsersLoadError("");
       try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(merged)); } catch {}
@@ -700,12 +672,12 @@ export default function SettingsPage() {
     const confirm = (uForm.confirmPassword ?? "").trim();
     if (!editingUserId) {
       if (!pwd) errs.password = "请设置登录密码";
-      else if (pwd.length < 6) errs.password = "密码至少 6 位";
+      else if (pwd.length < 12) errs.password = "密码至少 12 位";
       if (!confirm) errs.confirmPassword = "请再次输入密码";
       else if (pwd && confirm && pwd !== confirm) errs.confirmPassword = "两次输入的密码不一致";
     } else {
       if (pwd || confirm) {
-        if (pwd.length < 6) errs.password = "密码至少 6 位";
+        if (pwd.length < 12) errs.password = "密码至少 12 位";
         if (pwd !== confirm) errs.confirmPassword = "两次输入的密码不一致";
       }
     }
@@ -993,10 +965,10 @@ export default function SettingsPage() {
     })();
   };
 
-  const save = (label: string) => {
+  const save = async (label: string) => {
     if (label === "risk") {
-      if (currentRole !== APP_ROLES.ADMIN && currentRole !== APP_ROLES.RISK_MANAGER) {
-        toast.error("仅系统管理员或风控总监可修改风控阈值。");
+      if (currentRole !== APP_ROLES.ADMIN) {
+        toast.error("仅系统管理员可修改机构风控阈值。");
         return;
       }
       if (Number(form.warningThreshold) <= 0 || Number(form.warningThreshold) >= 100) {
@@ -1031,6 +1003,11 @@ export default function SettingsPage() {
         (["emailWebhook", "whatsappWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
       );
+      if (label === 'risk' || label === '分成配置') {
+        const response = await fetch('/api/settings', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(label === 'risk' ? {warningThreshold:Number(form.warningThreshold),marginThreshold:Number(form.marginThreshold)} : rates)});
+        const result = await response.json();
+        if(!response.ok) throw new Error(result.error || '配置未保存');
+      }
       const beforeWarn = Number(stored?.warningThreshold);
       const beforeMargin = Number(stored?.marginThreshold);
       const afterWarn = Number(form.warningThreshold);
@@ -1054,7 +1031,7 @@ export default function SettingsPage() {
         toast.success(`风控阈值已更新：预警 ${afterWarn.toFixed(2)}% / 补仓 ${afterMargin.toFixed(2)}%`);
       }
     } catch {
-      toast.error("配置保存失败，请稍后重试。");
+      toast.error("配置未保存，请确认权限和数据库连接后重试。");
       return;
     }
     if (label === "分成配置") toast.success("分成配置已保存，仅对新签约客户生效。");
@@ -1090,7 +1067,7 @@ export default function SettingsPage() {
 
   const saveRiskTiersConfig = () => {
     if (currentRole !== APP_ROLES.ADMIN && currentRole !== APP_ROLES.RISK_MANAGER) {
-      toast.error("仅系统管理员或风控总监可修改风控阈值。");
+      toast.error("仅系统管理员可修改机构风控阈值。");
       return;
     }
     const { valid, errors } = validateRiskTiers(riskTiers);
@@ -3149,7 +3126,7 @@ export default function SettingsPage() {
           </Label>
           <Input
             type="password"
-            placeholder="至少 6 位字符"
+            placeholder="至少 12 位字符"
             value={uForm.password ?? ""}
             onChange={(e) => setUForm({ ...uForm, password: e.target.value })}
             className={cn("font-mono text-xs", uErrors.password && "ring-2 ring-danger/60 border-danger")}

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
-import { resetMockTestData } from "@/lib/mockData";
+import { resetMockTestData, isServerLedgerMode } from "@/lib/mockData";
 import type { BatchLike } from "@/lib/riskEngine";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -20,7 +20,7 @@ export function LedgerRecovery({ batch, open, onOpenChange }: {
   const finance = batch.finance;
   const warnings = finance?.legacyWarnings ?? [];
   const institution = ["ADMIN", "RISK_MANAGER", "OPERATIONS"].includes(role);
-  const canReset = process.env.NODE_ENV === "development" && role === "ADMIN";
+  const canReset = !isServerLedgerMode() && process.env.NODE_ENV === "development" && role === "ADMIN";
   const missing = (batch.clients ?? []).filter(c =>
     c.status === "SETTLED" && !c.settlement && !finance?.settlements[c.id]);
   const unpriced = finance?.trades.filter(t => !t.entryPrice || t.needsReconciliation) ?? [];

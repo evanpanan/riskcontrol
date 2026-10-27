@@ -51,7 +51,8 @@ export async function finnhubRealtime(symbol: string): Promise<RealtimeQuote> {
     prevClose,
     volume: Number(j.v ?? 0),
     changePct,
-    updatedAt: Number(j.t ?? 0) * 1000 || Date.now(),
+    updatedAt: Date.now(),
+    marketTimestamp: Number(j.t ?? 0) * 1000 || undefined,
   };
 }
 
@@ -137,6 +138,7 @@ export interface RealtimeQuote {
   volume: number;
   changePct: number;
   updatedAt: number;
+  marketTimestamp?: number;
 }
 
 export interface HistoryCandle {
@@ -286,6 +288,7 @@ export async function yahooFinanceRealtime(symbol: string): Promise<RealtimeQuot
         symbol,
         price, open, high, low, prevClose, volume, changePct,
         updatedAt: Date.now(),
+        marketTimestamp: Number(meta.regularMarketTime ?? 0) * 1000 || undefined,
       };
     } catch (e) { lastErr = e; }
   }

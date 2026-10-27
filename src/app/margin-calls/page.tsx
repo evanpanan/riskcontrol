@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { getMockData, commitBatchFinance } from "@/lib/mockData";
+import { getMockData, commitBatchCommand } from "@/lib/mockData";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import {
   History,
@@ -35,7 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import * as XLSX from "xlsx";
+import * as XLSX from "@/lib/excelExport";
 import {
   summarizeBatchMarginFromClients,
   executeInstitutionTopup,
@@ -243,7 +243,7 @@ export default function MarginCallsPage() {
     ["备注", mc.note || "—"],
   ];
 
-  const handleExport = () => {
+  const handleExport = async () => {
     try {
       if (allCalls.length === 0) {
         toast.error("当前筛选条件下没有可导出的补仓记录。");
@@ -273,7 +273,7 @@ export default function MarginCallsPage() {
       XLSX.utils.book_append_sheet(wb, ws, "补仓记录明细");
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const fileName = `补仓记录明细_${stamp}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+      await XLSX.writeFile(wb, fileName);
       toast.success(`导出成功：${fileName}（共 ${allCalls.length} 条记录）`);
     } catch {
       toast.error("导出失败，请重试。若问题持续请联系管理员。");
@@ -710,9 +710,9 @@ export default function MarginCallsPage() {
           if (b) {
             let applied: number;
             try {
-              applied = commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, {
+              applied = await commitBatchCommand(b, {type:"topup",input:{
                 amount: topupAmount, expectedRoundId: fulfillTarget.mcId,
-              }));
+              }});
             } catch (err) {
               if (err instanceof Error && err.name === "RevisionMismatchError") {
                 toast.error(err.message);

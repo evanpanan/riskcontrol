@@ -62,7 +62,7 @@ import {
   type BatchLike,
   type ClientMarginState,
 } from "@/lib/riskEngine";
-import { commitBatchFinance } from "@/lib/mockData";
+import { commitBatchCommand } from "@/lib/mockData";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 
@@ -1369,10 +1369,10 @@ export function ClientTable({
             }
             let applied: number;
             try {
-              applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
+              applied = await commitBatchCommand(batch, {type:"topup",input:{
                 amount, clientId: c.id, expectedRoundId: mm?.roundId,
                 operatorName: viewerUser?.displayName ?? viewerUser?.email,
-              }));
+              }});
             } catch (err) {
               if (err instanceof Error && err.name === "RevisionMismatchError") {
                 toast.error(err.message);

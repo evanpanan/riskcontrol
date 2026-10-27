@@ -159,7 +159,8 @@ async function postAuditSingle(entry: AuditLogEntry): Promise<boolean> {
       body,
     });
     if (!res.ok) return false;
-    return true;
+    const confirmation = await res.json();
+    return confirmation?.stored === "db" && typeof confirmation?.writtenId === "string";
   } catch {
     return false;
   }
@@ -187,8 +188,9 @@ function flushPending(force = false): void {
         failed.push(e);
       }
     }
-    const rest = list.slice(work.length);
-    setPending([...failed, ...rest]);
+    const failedIds=new Set(failed.map(e=>e.id));
+    const completedIds=new Set(work.filter(e=>!failedIds.has(e.id)).map(e=>e.id));
+    setPending(getPending().filter(e=>!completedIds.has(e.id)));
   })();
 }
 
@@ -237,7 +239,8 @@ export function logAudit(evt: {
       }
     }
     // 服务端双写：不阻塞 localStorage 主流程，失败写入 pending 缓冲
-    submitServer(entry);
+    // Financial/account audit rows are written atomically by the owning server endpoint.
+    if (process.env.NODE_ENV !== 'production' || ['login_failed','page_view','api_mutation','auth_denied'].includes(entry.action)) submitServer(entry);
 
     if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development' && (window.location.hostname === 'localhost' || /^127\.0\.0\.1$|:300[0-9]$/.test(window.location.host))) {
       console.log('[AUDIT]', JSON.stringify(entry));

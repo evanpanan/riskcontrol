@@ -1,4 +1,5 @@
 "use client";
+import { useBdManagers } from "@/lib/useBdManagers";
 
 import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
@@ -40,7 +41,7 @@ import {
   SUBORDINATE_RATIO,
 } from "@/lib/riskEngine";
 import { triggerClientAddedAlert } from "@/lib/notifier";
-import { getMockData, commitBatchFinance, nextClientNo } from "@/lib/mockData";
+import { getMockData, isServerLedgerMode, commitBatchCommand, nextClientNo } from "@/lib/mockData";
 import { ClientStatus } from "@prisma/client";
 import {
   UserPlus,
@@ -65,14 +66,7 @@ interface AddClientDialogProps {
   lockedBdManager?: string;
 }
 
-const BD_OPTIONS = [
-  "李晓明 (Evan Li)",
-  "王思远 (Sylvia Wang)",
-  "张志强 (Jack Zhang)",
-  "刘佳 (Jennifer Liu)",
-  "陈志远 (Daniel Chen)",
-  "林晓雯 (Sharon Lin)",
-];
+
 
 export function AddClientDialog({
   open,
@@ -81,6 +75,7 @@ export function AddClientDialog({
   batchId,
   lockedBdManager,
 }: AddClientDialogProps) {
+  const BD_OPTIONS = useBdManagers();
   const [name, setName] = useState("");
   const [investmentAmount, setInvestmentAmount] = useState<string>("");
   const [bdManager, setBdManager] = useState<string>(lockedBdManager || "");
@@ -127,7 +122,7 @@ export function AddClientDialog({
   const defaultBatchEntryPrice = useMemo(() => {
     const mock = getMockData();
     const batch = mock.batches.find((b) => b.id === batchId);
-    return Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0);
+    return Number(batch?.currentStockPrice ?? batch?.stockPriceAtStart ?? 0);
   }, [batchId]);
 
   useEffect(() => {
@@ -184,7 +179,7 @@ export function AddClientDialog({
     } as any;
     if (batch && batch.clients) {
       try {
-        commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+        await commitBatchCommand(batch, {type:"client_add",input:newClient});
       } catch (err) {
         if (err instanceof Error && err.name === "RevisionMismatchError") {
           toast.error(err.message);
@@ -436,7 +431,8 @@ export function AddClientDialog({
               id="entry-price"
               type="number"
               step="0.0001"
-              value={entryPrice}
+              disabled={isServerLedgerMode()}
+                    value={entryPrice}
               onChange={(e) => setEntryPrice(e.target.value)}
               className={cn(errors.entryPrice && "border-destructive focus-visible:ring-destructive", "font-mono")}
             />

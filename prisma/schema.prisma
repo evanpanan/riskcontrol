@@ -46,6 +46,8 @@ model AppUser {
   id                 String   @id @default(cuid())
   email              String   @unique
   passwordHash       String?
+  enabled            Boolean  @default(true)
+  avatarDataUrl      String?
   displayName        String
   role               AppRole
   avatarInitials     String
@@ -201,4 +203,30 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId])
   @@index([action])
+}
+
+// Authoritative financial snapshots. Updated only by server commands under revision CAS.
+model LedgerBatch {
+  id        String   @id
+  revision  Int      @default(0)
+  snapshot  Json
+  batchNumber String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LedgerCommand {
+  id        String   @id
+  actorId   String
+  requestHash String @default("")
+  batchId   String
+  result    Json
+  createdAt DateTime @default(now())
+  @@index([batchId])
+}
+
+model AppConfig {
+  id String @id
+  value Json
+  updatedAt DateTime @updatedAt
 }

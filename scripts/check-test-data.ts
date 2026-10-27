@@ -77,6 +77,8 @@ for (const original of critical) {
   near(summarizeBatchMarginFromClients(batch).totalPending, 0);
   // Phase 3：结算前需先提交退出申请且通知期已过（走到期退出路径，无提前退出费）
   customer.signDate = new Date("2024-01-01");
+  batch.lockUpEndDate = new Date("2024-07-01");
+  batch.finalMaturityDate = new Date("2026-01-01");
   customer.status = "EXIT_REQUESTED";
   customer.exitRequestedAt = new Date(Date.now() - 20 * 86400000);
   customer.exitEligibleAt = new Date(Date.now() - 5 * 86400000);

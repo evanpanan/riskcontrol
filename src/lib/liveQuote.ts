@@ -1,3 +1,4 @@
+import { isNYSETradingDate, regularCloseMinutes } from "./tradingCalendar";
 import type { RealtimeQuote } from "@/lib/quote/providers";
 
 export const LIVE_QUOTE_SETTINGS_KEY = "risk_control_live_quote_v2";
@@ -46,10 +47,12 @@ export function getNYSEInfo(nowMs: number = Date.now()): {
   const h = d.getUTCHours();
   const m = d.getUTCMinutes();
   const mins = h * 60 + m;
-  const isTradingDay = wd >= 1 && wd <= 5;
-  const inRegular = isTradingDay && mins >= 9 * 60 + 30 && mins <= 16 * 60;
+  const ymd = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  const isTradingDay = isNYSETradingDate(ymd);
+  const closeMinutes = regularCloseMinutes(ymd);
+  const inRegular = isTradingDay && mins >= 9 * 60 + 30 && mins < closeMinutes;
   const inPre = isTradingDay && mins >= 4 * 60 && mins < 9 * 60 + 30;
-  const inAfter = isTradingDay && mins > 16 * 60 && mins <= 20 * 60;
+  const inAfter = isTradingDay && mins >= closeMinutes && mins <= 20 * 60;
   let state: "PRE" | "REGULAR" | "AFTER" | "CLOSED" = "CLOSED";
   if (inRegular) state = "REGULAR";
   else if (inPre) state = "PRE";

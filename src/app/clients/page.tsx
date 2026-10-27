@@ -1,4 +1,5 @@
 "use client";
+import { useBdManagers } from "@/lib/useBdManagers";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
+import { getMockData, isServerLedgerMode, commitBatchCommand, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
 import { quoteProviderLabel } from "@/lib/quote/providers";
@@ -35,7 +36,7 @@ import { filterClientsByRole, type ClientLike, canCreateBatch } from "@/lib/auth
 import { APP_ROLES } from "@/types/auth";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { RoleGate } from "@/components/auth/RoleGate";
-import * as XLSX from "xlsx";
+import * as XLSX from "@/lib/excelExport";
 import {
   Users,
   Search,
@@ -81,16 +82,10 @@ import Link from "next/link";
 import { ClientStatus } from "@prisma/client";
 import { mergeClientStatusesOnClientList } from "@/lib/clientStatusStore";
 
-const BD_OPTIONS_ADD = [
-  "李晓明 (Evan Li)",
-  "王思远 (Sylvia Wang)",
-  "张志强 (Jack Zhang)",
-  "刘佳 (Jennifer Liu)",
-  "陈志远 (Daniel Chen)",
-  "林晓雯 (Sharon Lin)",
-];
+
 
 export default function ClientsPage() {
+  const BD_OPTIONS_ADD = useBdManagers();
   const initialMock = getMockData();
   const [mockTick, setMockTick] = useState(0);
   const batches = useMemo(() => {
@@ -493,7 +488,7 @@ export default function ClientsPage() {
       settledAt: null,
     };
     try {
-      commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+      await commitBatchCommand(batch, {type:"client_add",input:newClient});
     } catch (err) {
       if (err instanceof Error && err.name === "RevisionMismatchError") {
         toast.error(err.message);
@@ -536,7 +531,7 @@ export default function ClientsPage() {
     if (!addClientOpen) return;
     if (!selectedAddBatch) return;
     setAddForm((prev) => {
-      const nextEntryPrice = Number(selectedAddBatch.stockPriceAtStart ?? selectedAddBatch.currentStockPrice ?? 0);
+      const nextEntryPrice = Number(selectedAddBatch.currentStockPrice ?? selectedAddBatch.stockPriceAtStart ?? 0);
       const shouldReplace =
         !prev.entryPrice ||
         prev.entryPrice === Number(selectedAddBatch.currentStockPrice ?? 0).toFixed(4) ||
@@ -780,7 +775,7 @@ export default function ClientsPage() {
         <div className="flex items-center gap-2">
           {!isBdManager && (
             <>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => {
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={async () => {
                 try {
                   const all = allClients;
                   const rows: any[] = [];
@@ -861,7 +856,7 @@ export default function ClientsPage() {
                   ];
                   XLSX.utils.book_append_sheet(wb, sheet2, "客户批次参与明细（每批次一行）");
                   const fileName = `客户档案_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${new Date().toTimeString().slice(0,5).replace(":","")}.xlsx`;
-                  XLSX.writeFile(wb, fileName);
+                  await XLSX.writeFile(wb, fileName);
                   toast.success(`客户表导出成功：${fileName}（共 ${rows.length} 位自然人 / ${detailRows.length} 条批次参与记录）`);
                 } catch (err) {
                   console.error(err);
@@ -881,8 +876,8 @@ export default function ClientsPage() {
                     bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
                     batchId: batches[0]?.id ?? "",
                     signDate: new Date().toISOString().split("T")[0],
-                    entryPrice: Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0) > 0
-                      ? Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0).toFixed(4)
+                    entryPrice: Number(batches[0]?.currentStockPrice ?? batches[0]?.stockPriceAtStart ?? 0) > 0
+                      ? Number(batches[0]?.currentStockPrice ?? batches[0]?.stockPriceAtStart ?? 0).toFixed(4)
                       : "",
                   });
                   setAddErrors({});
@@ -985,12 +980,12 @@ export default function ClientsPage() {
         <Card className="border-border/50">
           <CardContent className="p-5">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs text-muted-foreground">保本机制保护</p>
+              <p className="text-xs text-muted-foreground">结算口径</p>
               <ShieldCheck className="h-4 w-4 text-success" />
             </div>
-            <p className="text-2xl font-bold font-mono text-success">100%</p>
+            <p className="text-2xl font-bold text-primary">核验后结算</p>
             <p className="text-[11px] text-muted-foreground mt-1">
-              所有子账户本金全额保障
+              以确认仓位、可用资产及合同规则为准
             </p>
           </CardContent>
         </Card>
@@ -1177,8 +1172,8 @@ export default function ClientsPage() {
                                       bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
                                       batchId: batch.id,
                                       signDate: new Date().toISOString().split("T")[0],
-                                      entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
-                                        ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
+                                      entryPrice: Number(batch.currentStockPrice ?? batch.stockPriceAtStart ?? 0) > 0
+                                        ? Number(batch.currentStockPrice ?? batch.stockPriceAtStart ?? 0).toFixed(4)
                                         : "",
                                     });
                                     setAddErrors({});
@@ -1308,8 +1303,8 @@ export default function ClientsPage() {
                                 bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
                                 batchId: batch.id,
                                 signDate: new Date().toISOString().split("T")[0],
-                                entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
-                                  ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
+                                entryPrice: Number(batch.currentStockPrice ?? batch.stockPriceAtStart ?? 0) > 0
+                                  ? Number(batch.currentStockPrice ?? batch.stockPriceAtStart ?? 0).toFixed(4)
                                   : "",
                               });
                               setAddErrors({});
@@ -1391,8 +1386,8 @@ export default function ClientsPage() {
                         bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
                         batchId: selectedFilteredBatch.id,
                         signDate: new Date().toISOString().split("T")[0],
-                        entryPrice: Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0) > 0
-                          ? Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0).toFixed(4)
+                        entryPrice: Number(selectedFilteredBatch.currentStockPrice ?? selectedFilteredBatch.stockPriceAtStart ?? 0) > 0
+                          ? Number(selectedFilteredBatch.currentStockPrice ?? selectedFilteredBatch.stockPriceAtStart ?? 0).toFixed(4)
                           : "",
                       });
                       setAddErrors({});
@@ -1958,8 +1953,8 @@ export default function ClientsPage() {
                                   setAddForm({
                                     ...addForm,
                                     batchId: b.id,
-                                    entryPrice: Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0) > 0
-                                      ? Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0).toFixed(4)
+                                    entryPrice: Number(b.currentStockPrice ?? b.stockPriceAtStart ?? 0) > 0
+                                      ? Number(b.currentStockPrice ?? b.stockPriceAtStart ?? 0).toFixed(4)
                                       : "",
                                   });
                                   setBatchPickerOpen(false);
@@ -2026,6 +2021,7 @@ export default function ClientsPage() {
                   <Input
                     type="number"
                     step="0.0001"
+                    disabled={isServerLedgerMode()}
                     value={addForm.entryPrice}
                     onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value })}
                     placeholder="默认为批次建仓价，可修改为约定认购价"
@@ -2304,15 +2300,13 @@ export default function ClientsPage() {
                   const batch = mock.batches.find((x) => x.id === editClientOpen.batchId);
                   if (!batch) return;
                   try {
-                    commitBatchFinance(batch, (draft) =>
-                      updateClientPosition(draft, editClientOpen.id, {
+                    await commitBatchCommand(batch, {type:"client_update",input:{clientId:editClientOpen.id,patch: {
                         name: editForm.name.trim(),
                         investmentAmount: numAmt,
                         bdManager: editForm.bdManager,
                         signDate: new Date(editForm.signDate),
                         status: editForm.status,
-                      } as any)
-                    );
+                      } as any}});
                     const beforeClient = batch.clients?.find((c: any) => c?.id === editClientOpen.id);
                     try {
                       const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
@@ -2420,7 +2414,7 @@ export default function ClientsPage() {
                 const batch = mock.batches.find((x) => x.id === deleteClientConfirm.batchId);
                 if (!batch) return;
                 try {
-                  commitBatchFinance(batch, (draft) => removeClientPosition(draft, deleteClientConfirm.id));
+                  await commitBatchCommand(batch, {type:"client_remove",input:{clientId:deleteClientConfirm.id}});
                   const beforeClient = batch.clients?.find((c: any) => c?.id === deleteClientConfirm.id);
                   try {
                     const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
@@ -3122,7 +3116,7 @@ export default function ClientsPage() {
                   return (
                     <span className="block mt-1 font-mono text-[11.5px] text-foreground/80">
                       批次参考建仓价 ≈ <b>{valid ? formatCurrency(basePrice) : "—"}</b>，
-                      后续客户可直接继承该批次价格，也可按单个客户单独指定更早锁定的入场价
+                      后续客户可直接继承该批次价格，新认购采用服务器当前有效参考价
                     </span>
                   );
                 })()}
@@ -3139,7 +3133,7 @@ export default function ClientsPage() {
               type="button"
               size="sm"
               className="gap-1.5"
-              onClick={() => {
+              onClick={async () => {
                 const errors: Record<string, string> = {};
                 const bn = String(createBatchForm.batchNumber || "").trim();
                 if (!bn) errors.batchNumber = "请填写批次号";
@@ -3163,7 +3157,7 @@ export default function ClientsPage() {
                   )
                     .trim()
                     .toUpperCase();
-                  const created = createNewBatch({
+                  const created = await createNewBatch({
                     batchNumber: bn,
                     signDate: sd!,
                     maturityDate: md!,
@@ -3289,7 +3283,7 @@ export default function ClientsPage() {
               type="button"
               size="sm"
               className="gap-1.5"
-              onClick={() => {
+              onClick={async () => {
                 if (!editingBatch) return;
                 const errors: Record<string, string> = {};
                 const batchNumber = String(editBatchForm.batchNumber || "").trim();
@@ -3311,25 +3305,9 @@ export default function ClientsPage() {
                 setEditBatchErrors(errors);
                 if (Object.keys(errors).length > 0) return;
                 try {
-                  commitBatchFinance(editingBatch, (draft) => {
-                    draft.batchNumber = batchNumber;
-                    draft.stockName = String(editBatchForm.stockName || "").trim() || draft.stockSymbol;
-                    draft.signDate = signDate!;
-                    draft.maturityDate = maturityDate!;
-                    draft.currentStockPrice = currentPrice;
-                    draft.currentMarketValue = calculateCurrentMarketValue(
-                      draft.stockPriceAtStart,
-                      draft.currentStockPrice,
-                      draft.totalShares
-                    );
-                    const metrics = getBatchMetrics(draft);
-                    draft.totalPnL = metrics.totalPnL;
-                    draft.totalPnLPercent = metrics.totalPnLPercent;
-                    draft.riskLevel = metrics.riskLevel;
-                    draft.status = calculateBatchStatus(draft as any);
-                    draft.nextTradingWindow = calculateTradingWindows(draft.signDate).nextTradingDate;
-                    draft.updatedAt = new Date();
-                  });
+                  await commitBatchCommand(editingBatch,{type:'batch_update',input:{
+                    batchNumber,stockName:String(editBatchForm.stockName || '').trim(),signDate,maturityDate,currentStockPrice:currentPrice,
+                  }});
                   setEditBatchOpen(null);
                   setManagementTab("batches");
                   toast.success(`批次 ${batchNumber} 基础信息已更新`);

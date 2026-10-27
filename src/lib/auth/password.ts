@@ -173,19 +173,12 @@ export async function resolvePrismaAccountByIdentifier(
     })();
     const row = await prisma.appUser.findFirst({
       where,
-      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true },
+      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, enabled: true, bdManagerFullName: true, passwordHash: true },
     });
-    if (!row) return null;
+    if (!row || !row.enabled || !row.passwordHash) return null;
     if (!isAllowedRole(row.role)) return null;
-    // 注意：hashPassword(salt+::+password) — passwordHash 里已经包含了 salt 信息，因此把 passwordHash 的前 32 位当做固定 salt 构造假 salt 即可；
-    // 真实 verifyPassword(candidate, expectedHash=row.passwordHash, salt=构造salt) → hashPassword(candidate, salt) 与 expectedHash 做 XOR。
-    // 为了兼容「自定义用户通过浏览器端 hashCustomUserPassword(pwd) 得到 passwordHash+salt 上传」模式，我们约定 salt 字段缺失时，用 email+suffix 作为固定 salt，
-    // 但为了更兼容直接校验，这里在 db 侧再引入一个单独的 resolve 约定：
-    // 把 passwordHash 前 16 字符（hex）+ email+`${row.id}-s4lt` 组合为统一 salt；登录/register 两侧都用此约定，从而保证 hashPassword(pwd, salt) 与 expectedHash 相等。
     const deterministicSalt = `prisma-${row.email}-${row.id}-s4lt-v1`;
-    const passwordHashRaw: string = typeof row.passwordHash === 'string' && row.passwordHash.length > 0
-      ? row.passwordHash
-      : await hashPassword(`${row.displayName}@${String(row.id).slice(-4)}`, deterministicSalt);
+    const passwordHashRaw = row.passwordHash;
     return {
       kind: 'prisma',
       id: String(row.id),
@@ -208,7 +201,7 @@ export async function resolvePrismaAccountByIdentifier(
 export async function resolveAnyAccountByIdentifier(identifier: string): Promise<ResolvedAnyAccount | null> {
   const prisma = await resolvePrismaAccountByIdentifier(identifier);
   if (prisma) return prisma;
-  return resolveMockAccountByIdentifier(identifier);
+  return null;
 }
 
 export async function resolveMockAccountByIdentifier(

@@ -27,14 +27,10 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { useAuthContext } from "@/lib/auth/authProvider";
-import { MOCK_USER_META, APP_ROLES, MOCK_DEMO_CREDENTIALS, type MockUserKey } from "@/types/auth";
+import { APP_ROLES } from "@/types/auth";
 import { type AppSessionUser } from "@/types/auth";
 import { getCustomMockUsers } from "@/lib/auth/providers/mockProvider";
-import {
-  getBuiltInMockAccountByEmail,
-  getCustomMockAccountByEmail,
-  verifyPassword,
-} from "@/lib/auth/password";
+
 import { cn } from "@/lib/utils";
 import { logAudit, logAuthDeny } from "@/lib/auth/audit";
 
@@ -53,7 +49,7 @@ function validatePassword(v: string): { ok: boolean; hint?: string } {
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, switchToMockRole, loginAsCustom } = useCurrentUser();
+  const { user } = useCurrentUser();
   const { serverLoginCredentials } = useAuthContext();
 
   const [hydrated, setHydrated] = useState(false);
@@ -69,6 +65,7 @@ function LoginPageInner() {
     displayName: string;
     role: AppSessionUser["role"];
     email: string;
+    onComplete?: () => void;
   } | null>(null);
 
   const [customAccounts] = useState<Array<{
@@ -96,349 +93,37 @@ function LoginPageInner() {
 
   // 已登录直接回来源页
   useEffect(() => {
-    if (user && user.email && window.location.pathname === "/login") {
-      const dest = nextPath ? decodeURIComponent(nextPath) : "/";
+    if (user && user.email && !isSubmitting && window.location.pathname === "/login") {
+      const dest = nextPath?.startsWith('/') && !nextPath.startsWith('//') && !nextPath.includes('\\') ? nextPath : '/';
       const t = setTimeout(() => router.replace(dest), 0);
       return () => clearTimeout(t);
     }
-  }, [user, router, nextPath]);
+  }, [user, router, nextPath, isSubmitting]);
 
-  const resolveSessionByCredentials = async (
-    incomingEmail: string,
-    _incomingPwd: string
-  ): Promise<{ kind: "builtIn" | "custom"; session: AppSessionUser } | null> => {
-    const e = incomingEmail.trim();
-
-    const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-      ([, m]) => m.email === e
-    );
-    if (builtIn) {
-      const [, m] = builtIn;
-      const sess: AppSessionUser = {
-        id: m.id,
-        email: m.email,
-        role: m.role,
-        displayName: m.displayName,
-        avatarInitials: m.avatarInitials,
-        avatarDataUrl: m.avatarDataUrl,
-        bdManagerFullName: m.bdManagerFullName,
-      };
-      const rec = await getBuiltInMockAccountByEmail(e);
-      if (!rec || !rec.enabled) return null;
-      if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
-      return { kind: "builtIn", session: sess };
-    }
-
-    try {
-      const custom = Object.values(getCustomMockUsers()).find(
-        (a: any) => a.email === e
-      ) as any;
-      if (custom) {
-        const sess: AppSessionUser = {
-          id: custom.id,
-          email: custom.email,
-          role: custom.role,
-          displayName: custom.displayName,
-          avatarInitials: custom.avatarInitials || (custom.displayName || "??").slice(0, 2).toUpperCase(),
-          avatarDataUrl: custom.avatarDataUrl,
-          bdManagerFullName: custom.bdManagerFullName,
-        };
-        const rec = await getCustomMockAccountByEmail(e);
-        if (!rec || !rec.enabled) return null;
-        if (!(await verifyPassword(_incomingPwd, rec.passwordHash, rec.salt))) return null;
-        return { kind: "custom", session: sess };
-      }
-    } catch {
-      /* ignore */
-    }
-
-    return null;
-  };
-
-  const handleLoginForm = (e: React.FormEvent) => {
+  const loginInFlight = useRef(false);
+  const safeDestination = nextPath?.startsWith('/') && !nextPath.startsWith('//') && !nextPath.includes('\\') ? nextPath : '/';
+  const handleLoginForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const nextErrors: { email?: string; password?: string; form?: string } = {};
-    const identifier = email.trim();
-    if (!identifier) nextErrors.email = "请输入企业邮箱或账号";
-    const pwd = validatePassword(password);
-    if (!pwd.ok) nextErrors.password = pwd.hint;
+    if(loginInFlight.current) return;
+    const nextErrors: {email?:string;password?:string} = {};
+    if(!email.trim()) nextErrors.email='请输入企业邮箱';
+    if(!password) nextErrors.password='请输入密码';
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
-    setIsSubmitting(true);
-    // NOTE: run synchronously.  The former `setTimeout(..., 320)` wrapper
-    // caused navigation timers to be lost whenever React / Fast Refresh
-    // remounted the component between submission and the timer firing.  All
-    // setTimeouts for navigation are scheduled in the first synchronous tick
-    // of finishLogin so they cannot be lost.
-    (async () => {
-      // Step 1: Client-side credential pre-verify for built-in accounts
-      // (keeps toast UX tight; server is authoritative).
-      let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
-      let localSession: AppSessionUser | null = null;
-      const e = identifier;
-      const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-        ([key, m]) => key === e || m.email === e
-      );
-      if (builtIn) {
-        const [key, m] = builtIn;
-        const sess: AppSessionUser = {
-          id: m.id,
-          email: m.email,
-          role: m.role,
-          displayName: m.displayName,
-          avatarInitials: m.avatarInitials,
-          avatarDataUrl: m.avatarDataUrl,
-          bdManagerFullName: m.bdManagerFullName,
-        };
-        const rec = await getBuiltInMockAccountByEmail(m.email);
-        if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
-          kindHint = "builtIn";
-          localSession = sess;
-        }
-      } else {
-        try {
-          const custom = Object.values(getCustomMockUsers()).find(
-            (a: any) => a.email === e
-          ) as any;
-          if (custom) {
-            const sess: AppSessionUser = {
-              id: custom.id,
-              email: custom.email,
-              role: custom.role,
-              displayName: custom.displayName,
-              avatarInitials: custom.avatarInitials || (custom.displayName || "??").slice(0, 2).toUpperCase(),
-              avatarDataUrl: custom.avatarDataUrl,
-              bdManagerFullName: custom.bdManagerFullName,
-            };
-            const rec = await getCustomMockAccountByEmail(e);
-            if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
-              kindHint = "custom";
-              localSession = sess;
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      if (!localSession) {
-        setErrors({ password: "账号或密码不正确，请重试" });
-        setIsSubmitting(false);
-        logAudit({
-          action: "login_failed",
-          actorEmail: identifier,
-          resource: "auth:login",
-          detail: { reason: "local_verify_failed", email: identifier },
-        });
-        toast.error("登录失败：账号或密码不正确", {
-          description: "如忘记密码，请联系系统管理员重置。",
-        });
-        return;
-      }
-
-      // Step 2: builtIn accounts → call serverLoginCredentials (service-side
-      // password re-verify + HttpOnly cookie).  custom accounts → optimistic local.
-      // NOTE: use `let session` because serverLoginCredentials can enrich the
-      // identity with server-returned authoritative fields.
-      let session = localSession;
-      const kind = kindHint;
-      const onSuccessAudit = () => {
-        logAudit({
-          action: "login_success",
-          actorId: session.id,
-          actorEmail: session.email,
-          role: session.role,
-          resource: "auth:login",
-          detail: { kind, role: session.role, displayName: session.displayName },
-        });
-      };
-
-      const finishLogin = async () => {
-        onSuccessAudit();
-        // ============================================================
-        // FIRST: register navigation timers BEFORE rendering the welcome
-        // overlay.  Even if the overlay render throws a runtime error during
-        // React commit / CSS-in-JS style injection, these setTimeouts are
-        // already scheduled on the event loop and will still fire.
-        //
-        // **HARD RULE (v2.9)**: navigation is ALWAYS window.location
-        // replace/href, NEVER next/router.  Next router.push('') on a login
-        // route still in AppShell spinner path → AppShell effect detects
-        // !hydrated || isLoading || !user → router.replace('/login') →
-        // flips back → user sees "闪烁一下" and stays on /login.
-        // Using window.location bypasses AppShell entirely: the next load
-        // is a fresh document request with the new HttpOnly cookie.
-        //
-        // **HARD RULE (v3.1 — 用户需求 #2)**: 登录动画必须播放完毕才允许跳转后台。
-        // WelcomeTransitionOverlay 内部 rc-spin-slow(1.2s) + rc-progress-fill(720ms)
-        // + 各 stagger 总计 ≥1650ms 才能完整播放；onAnimationComplete 回调将在
-        // WelcomeTransitionOverlay 组件内部 useEffect 1650ms 到期时调用一次。
-        // ============================================================
-        let effectiveDestination: string = "/";
-        if (nextPath) {
-          try { effectiveDestination = decodeURIComponent(nextPath) || "/"; } catch { effectiveDestination = "/"; }
-        }
-        const finalDest = effectiveDestination.startsWith("/") ? effectiveDestination : "/";
-        // 用 ref + 闭包，WelcomeTransitionOverlay.onAnimationComplete / setTimeouts / 立即导航三者共享
-        const navStateRef = { canNavigateAt: 0, alreadyNavigated: false, animationFinishedAt: Number.POSITIVE_INFINITY, cookieIssuedAt: Number.POSITIVE_INFINITY,  };
-        const navigateHard = () => {
-          if (typeof window === "undefined") return;
-          if (navStateRef.alreadyNavigated) return;
-          // 动画播放完成标记（WelcomeTransitionOverlay 1650ms 后会把 animationFinishedAt 写入）
-          const now = Date.now();
-          if (now < navStateRef.animationFinishedAt) {
-            // 动画还没播完，不能跳 → 把导航延迟到刚好播完的那一刻（或 failsafeTimer 兜底）
-            const delay = navStateRef.animationFinishedAt - now;
-            if (delay > 0 && delay < 6000) {
-              window.setTimeout(navigateHard, delay + 10);
-              return;
-            }
-          }
-          navStateRef.alreadyNavigated = true;
-          const abs = `${window.location.protocol}//${window.location.host}${finalDest}`;
-          try { window.location.replace(abs); } catch { window.location.href = abs; }
-        };
-        // 注册 navigation 状态初始化：动画必须播完才能导航
-        navStateRef.animationFinishedAt = Date.now() + 1700; // WelcomeTransitionOverlay useEffect 1650ms + 50ms 安全裕度
-        // Primary: navigate after the welcome animation + 动画播完 (1700ms total, 与 WelcomeTransitionOverlay 对齐)
-        const primaryTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
-          try { navigateHard(); } catch { /* ignore */ }
-        }, 1750);
-        // Failsafe (HARD GUARANTEE): if pathname is still /login at 4.0s (v3.1 多给动画 1s 裕度), force
-        // navigate.  This works even if the welcome overlay rendered with
-        // errors, or Fast Refresh unmounted the component.  **This timer is
-        // NEVER cleaned up by catch / failure branches** — it must always
-        // fire at 4.0s so we never stall on /login after submission.
-        const failsafeTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
-          try {
-            if (typeof window !== "undefined" && window.location.pathname === "/login") {
-              // failsafe 不再等动画直接跳
-              navStateRef.animationFinishedAt = 0;
-              navigateHard();
-            }
-          } catch { /* ignore */ }
-        }, 4000);
-        const cleanupPrimaryOnly = () => {
-          try {
-            if (typeof window !== "undefined" && primaryTimer !== null) clearTimeout(primaryTimer);
-          } catch { /* ignore */ }
-        };
-        // 把 WelcomeTransitionOverlay.onAnimationComplete 注入 welcomeState，setWelcomeState 时传进去
-        const pendingOnAnimComplete = () => {
-          try {
-            navStateRef.animationFinishedAt = Date.now();
-            // 如果 cookie 已签发，动画刚结束立即导航
-            if (navStateRef.cookieIssuedAt !== Number.POSITIVE_INFINITY && navStateRef.cookieIssuedAt <= Date.now()) {
-              navigateHard();
-            }
-          } catch { /* ignore */ }
-        };
-        (window as any).__RC_LOGIN_ANIM_COMPLETE__ = pendingOnAnimComplete;
-
-        try {
-          // Note: intentionally call setWelcomeState AFTER timer registration.
-          // If overlay render explodes, timers still fire.
-          try {
-            setWelcomeState({
-              visible: true,
-              displayName: session.displayName,
-              role: session.role,
-              email: session.email,
-              __onAnimationComplete: pendingOnAnimComplete,
-            } as any);
-          } catch {
-            /* ignore: welcome state error must not stop navigation */
-          }
-          let cookieIssued = false;
-          if (kind === "builtIn") {
-            const serverUser = await serverLoginCredentials(identifier, password);
-            if (serverUser && serverUser.email) {
-              session = {
-                ...session,
-                id: serverUser.id,
-                email: serverUser.email,
-                role: serverUser.role,
-                displayName: serverUser.displayName || session.displayName,
-                avatarInitials: serverUser.avatarInitials || session.avatarInitials,
-                avatarDataUrl: serverUser.avatarDataUrl || session.avatarDataUrl,
-                bdManagerFullName: serverUser.bdManagerFullName || session.bdManagerFullName,
-              };
-              cookieIssued = true;
-            } else {
-              // Server rejected credentials — keep failsafeTimer so we still navigate to
-              // next(/) even if serverLoginCredentials didn't set cookie yet (i.e.
-              // wrong password — this branch is an explicit user feedback branch, so
-              // we DO NOT navigate away; only clean primaryTimer only. failsafeTimer
-              // MUST live to 3s to guarantee UI doesn't freeze.
-              cleanupPrimaryOnly();
-              try { setWelcomeState(null); } catch { /* ignore */ }
-              setErrors({ form: "账号或密码校验失败，请稍后重试。" });
-              setIsSubmitting(false);
-              logAuthDeny({
-                action: 'login_denied',
-                resource: 'auth:login',
-                reason: 'server_password_verify_rejected',
-                userId: session.id,
-                role: session.role,
-              });
-              try { toast.error("登录失败", { description: "账号或密码不正确，请重新输入。" }); } catch { /* ignore */ }
-              return false;
-            }
-          } else {
-            loginAsCustom(session);
-          }
-          if (remember) {
-            try {
-              if (typeof window !== "undefined") {
-                window.localStorage.setItem("risk_control_remember_email", session.email);
-                window.localStorage.setItem(
-                  "risk_control_last_login_at",
-                  new Date().toISOString().slice(0, 16).replace("T", " ")
-                );
-              }
-            } catch { /* ignore */ }
-          } else {
-            try {
-              if (typeof window !== "undefined") window.localStorage.removeItem("risk_control_remember_email");
-            } catch { /* ignore */ }
-          }
-          const dest = nextPath ? (() => { try { return decodeURIComponent(nextPath) || "/"; } catch { return "/"; } })() : "/";
-          effectiveDestination = dest;
-          try {
-            if (typeof window !== "undefined") {
-              window.setTimeout(() => {
-                try { toast.success(`欢迎回来，${session.displayName}`); } catch { /* ignore */ }
-              }, 80);
-            }
-          } catch { /* ignore */ }
-          // v3.1 用户需求 #2：登录动画必须播放完毕才能进入后台。
-          // 立即注册 cookieIssuedAt 时间戳，动画播放完毕（WelcomeTransitionOverlay
-          // onAnimationComplete 回调，约 1650ms）触发 pendingOnAnimComplete → 立即导航。
-          // 若 cookie 还在途中 1750ms primaryTimer + 4000ms failsafeTimer 仍会兜底。
-          if (cookieIssued && typeof window !== "undefined") {
-            navStateRef.cookieIssuedAt = Date.now();
-            // 不再立刻 navigateHard（防止跳过动画）；交给 onAnimationComplete 触发
-            // 如果 onAnimationComplete 没触发（例如 WelcomeTransitionOverlay 没渲），primaryTimer(1750ms) 兜底。
-          }
-          return true;
-        } catch (err) {
-          // Any runtime error → **DO NOT CLEAN FAILSAFETIMER** (3s will fire
-          // regardless).  Primary timer may have already fired; at this point
-          // we also try an inline final navigation attempt so user doesn't
-          // wait 3 full seconds.
-          cleanupPrimaryOnly();
-          try {
-            if (typeof window !== "undefined" && window.location.pathname === "/login") {
-              const dest = nextPath ? decodeURIComponent(nextPath) : "/";
-              const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-              try { window.location.replace(abs); } catch { window.location.href = abs; }
-            }
-          } catch { /* ignore */ }
-          return true;
-        }
-      };
-
-      void finishLogin().finally(() => setIsSubmitting(false));
-    })();
+    if(Object.keys(nextErrors).length) return;
+    loginInFlight.current=true;setIsSubmitting(true);
+    const session=await serverLoginCredentials(email.trim(),password);
+    if(!session) {
+      setErrors({password:'账号或密码不正确，或服务暂不可用，请重试'});
+      setIsSubmitting(false);loginInFlight.current=false;return;
+    }
+    try {
+      window.localStorage.setItem('risk_control_last_login_at',new Date().toISOString());
+      if(remember)window.localStorage.setItem('risk_control_remember_email',email.trim());
+      else window.localStorage.removeItem('risk_control_remember_email');
+    } catch { /* Preferences never gate a verified server login. */ }
+    const navigate=()=>window.location.replace(safeDestination);
+    setWelcomeState({visible:true,displayName:session.displayName,role:session.role,email:session.email,onComplete:navigate});
+    window.setTimeout(navigate,2200);
   };
 
   return (
@@ -469,7 +154,7 @@ function LoginPageInner() {
           displayName={welcomeState.displayName}
           role={welcomeState.role}
           email={welcomeState.email}
-          onAnimationComplete={(welcomeState as any).__onAnimationComplete}
+          onAnimationComplete={welcomeState.onComplete}
         />
       )}
 

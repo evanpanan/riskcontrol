@@ -56,6 +56,7 @@ function isBd(role: AppRole): boolean {
 }
 
 function matchesBd(c: ClientLike, user: AppSessionUser): boolean {
+  if (c.bdUserId) return c.bdUserId === user.id;
   if (!user.bdManagerFullName) return false;
   return c.bdManager === user.bdManagerFullName;
 }

@@ -1,32 +1,14 @@
+import { verifyServerSession } from '@/lib/auth/server';
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { RC_SESSION_COOKIE, verifySessionJwt } from "@/lib/auth/session";
+import { RC_SESSION_COOKIE } from "@/lib/auth/session";
 import type { AppSessionUser } from "@/types/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const AUDIT_ACTION_ALLOWLIST = new Set<string>([
-  "login_success",
-  "login_failed",
-  "logout",
-  "page_view",
-  "api_mutation",
-  "threshold_update",
-  "account_create",
-  "account_delete",
-  "account_update",
-  "client_edit",
-  "client_delete",
-  "margin_topup",
-  "client_settle",
-  "client_exit_request",
-  "client_exit_cancel",
-  "batch_notify",
-  "ledger_clear",
-  "auth_denied",
-]);
+const AUDIT_ACTION_ALLOWLIST = new Set(['login_failed','page_view','api_mutation','auth_denied']);
 
 const MAX_BODY_BYTES = 2 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -102,8 +84,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   remaining.push({ at: now });
   RATE_BUCKET.set(ip, remaining);
 
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
+  const session: AppSessionUser | null = token ? await verifyServerSession(token) : null;
 
   let raw: Buffer;
   try { raw = await readLimited(req); }
@@ -215,14 +197,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       dbError,
       authenticatedActor: { actorId, actorEmail, role },
     },
-    { status: stored === "db" ? 200 : 202, headers: baseHeaders },
+    { status: stored === "db" ? 200 : 503, headers: baseHeaders },
   );
   return resp;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
-  const session: AppSessionUser | null = token ? await verifySessionJwt(token) : null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
+  const session: AppSessionUser | null = token ? await verifyServerSession(token) : null;
   if (!session) {
     return NextResponse.json({ ok: false, error: "未登录" }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }
