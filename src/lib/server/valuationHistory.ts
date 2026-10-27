@@ -3,13 +3,16 @@ import { prisma } from '@/lib/prisma';
 import { viewBatch } from './ledgerProjection';
 import { getAccountMarketValue,calculateBatchPnLSplit,getClientProfitSplit,type BatchLike } from '@/lib/riskEngine';
 import type { AppSessionUser } from '@/types/auth';
-export interface ValuationMetrics { value:number;clientValue:number;institutionValue:number;pnl:number;priceStale:boolean; }
+export interface ValuationMetrics { value:number;clientValue:number;institutionValue:number;pnl:number;priceStale:boolean;capital?:number;priorityCapital?:number;institutionCapital?:number;clientPnl?:number;institutionPnl?:number; }
 interface StoredValuation { all:ValuationMetrics; owners:Record<string,ValuationMetrics>; }
 function metrics(batch:BatchLike,now:Date):ValuationMetrics {
   const value=getAccountMarketValue(batch);const price=batch.currentStockPrice ?? batch.stockPriceAtStart;
   const clientValue=(batch.clients ?? []).filter(c=>c.status!=='SETTLED').reduce((sum,c)=>sum+c.investmentAmount+Math.max(0,c.investmentAmount*(price/(c.entryStockPrice ?? batch.stockPriceAtStart)-1))*getClientProfitSplit(c).client,0);
   const split=calculateBatchPnLSplit(batch,value);const priceTime=new Date(batch.quoteAsOf ?? 0).getTime();
-  return {value,clientValue,institutionValue:value-clientValue,pnl:split.clientTotalPnL+split.institutionTotalPnL,priceStale:!Number.isFinite(priceTime)||now.getTime()-priceTime>15*60000||priceTime>now.getTime()+60000};
+  const capital=batch.finance?.originalCapital ?? batch.initialTotalAmount;
+  const priorityCapital=capital*0.7;
+  const institutionCapital=capital*0.3+(batch.finance?.trades.reduce((sum,t)=>sum+t.amount,0) ?? 0);
+  return {capital,priorityCapital,institutionCapital,clientPnl:split.clientTotalPnL,institutionPnl:split.institutionTotalPnL,value,clientValue,institutionValue:value-clientValue,pnl:split.clientTotalPnL+split.institutionTotalPnL,priceStale:!Number.isFinite(priceTime)||now.getTime()-priceTime>15*60000||priceTime>now.getTime()+60000};
 }
 export async function recordValuation(tx:Prisma.TransactionClient,batch:BatchLike,now=new Date()) {
   const owners:StoredValuation['owners']={};
@@ -30,7 +33,12 @@ export function aggregateValuations(records:HistoryRecord[],user:AppSessionUser)
     for(const record of group){const stored=record.metrics as StoredValuation;const value=user.role==='BD_MANAGER'?stored.owners[user.id]:stored.all;if(value){latest.set(record.batchId,{...value,recordedAt:record.recordedAt.getTime()});time=Math.max(time,record.recordedAt.getTime());}}
     if(!time)continue;
     const total=[...latest.values()].reduce((a,b)=>({value:a.value+b.value,clientValue:a.clientValue+b.clientValue,institutionValue:a.institutionValue+b.institutionValue,pnl:a.pnl+b.pnl,priceStale:a.priceStale||b.priceStale||time-b.recordedAt>15*60000}),{value:0,clientValue:0,institutionValue:0,pnl:0,priceStale:false});
-    points.push({...total,time:new Date(time).toISOString(),recordedBatchCount:latest.size});
+    const optional:Partial<ValuationMetrics>={};
+    for(const key of ['capital','priorityCapital','institutionCapital','clientPnl','institutionPnl'] as const){
+      const values=[...latest.values()].map(v=>v[key]);
+      if(values.every((v):v is number=>typeof v==='number'&&Number.isFinite(v)))optional[key]=values.reduce((sum,v)=>sum+v,0);
+    }
+    points.push({...total,...optional,time:new Date(time).toISOString(),recordedBatchCount:latest.size});
   }
   return points;
 }

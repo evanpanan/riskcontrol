@@ -10,3 +10,9 @@ const bd=aggregateValuations(records,user('A','BD_MANAGER'));assert.deepEqual(bd
 console.log('PASS history uses only observed points, carries known batches with stale warning, counts coverage, isolates owners and does not mutate stored records');
 assert(!authorizedCron('Bearer short',{CRON_SECRET:'short'}));assert(!monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'invalid'}).valid);assert(!monitorRecipients({}).valid);assert(monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'a@example.invalid,a@example.invalid'}).valid);assert.equal(monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'a@example.invalid,a@example.invalid'}).emails.length,1);assert(!monitorRecipients({MONITOR_NOTIFICATION_EMAILS:Array.from({length:21},(_,i)=>`${i}@example.invalid`).join(',')}).valid);
 console.log('PASS scheduler requires strong credentials; monitoring rejects absent, invalid or excessive recipients');
+const rated=[row('one',8,100,40),row('two',8,200,80)];
+(rated[0].metrics as any).all={...m(100),capital:100,priorityCapital:70,institutionCapital:30,clientPnl:2,institutionPnl:8};
+(rated[1].metrics as any).all={...m(200),capital:200,priorityCapital:140,institutionCapital:60,clientPnl:4,institutionPnl:16};
+const combined=aggregateValuations(rated,user('root','ADMIN'))[0];assert.equal(combined.capital,300);assert.equal(combined.priorityCapital,210);assert.equal(combined.institutionCapital,90);assert.equal(combined.clientPnl,6);assert.equal(combined.institutionPnl,24);
+const mixed=aggregateValuations([rated[0],row('legacy',8,200)],user('root','ADMIN'))[0];assert.equal(mixed.capital,undefined,'do not fabricate historical return bases for older records');
+console.log('PASS return history sums actual capital and PnL before computing rates; legacy records without bases remain unavailable');
