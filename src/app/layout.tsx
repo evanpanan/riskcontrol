@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Inter as FontSans } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { AppShell } from "@/components/layout/AppShell";
@@ -6,6 +7,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth/authProvider";
 import { Toaster } from "sonner";
 import { FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
+
+const fontSans = FontSans({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "优先劣后股票产品全景风控预警系统 | Risk Control",
@@ -133,7 +140,7 @@ export default function RootLayout({
       <body
         className={cn(
           "min-h-screen bg-background font-sans antialiased",
-          "font-sans"
+          fontSans.variable
         )}
       >
         <AuthProvider>
