@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { resolveSessionUser, unauthorized, forbidden, jsonNoStore } from '@/lib/server/apiAuth';
@@ -132,6 +133,37 @@ interface AuditIntent {
 
 const MAX_OP_ID_LENGTH = 128;
 const MAX_AUDIT_ENTRIES = 20;
+
+/** 读取账本中的资金版本号；用于判定本次写入是否属于「资金写入」。 */
+function financeRevisionOf(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const fin = (payload as { batch?: { finance?: { revision?: unknown } } }).batch?.finance;
+  return typeof fin?.revision === 'number' && Number.isFinite(fin.revision) ? fin.revision : null;
+}
+
+/** 规范化 JSON：对象键排序，保证同一请求内容的摘要稳定（不受键序影响）。 */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const rec = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(rec).sort()) out[key] = canonicalize(rec[key]);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * 幂等键摘要：绑定「操作人 + 业务对象 + 操作类型 + 规范化请求内容」。
+ * 只有完全相同的请求才可重放成功；同一 opId 携带不同内容一律拒绝。
+ */
+function requestDigest(actorId: string, kind: string, key: string, payload: unknown): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify([actorId, kind, key, canonicalize(payload)]))
+    .digest('hex');
+}
+
 /** 审计意图归一化：仅接受业务动作名，操作人身份一律由服务端会话决定。 */
 function normalizeAuditIntents(raw: unknown): AuditIntent[] {
   if (!Array.isArray(raw)) return [];
@@ -218,14 +250,42 @@ export async function PUT(req: Request) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // 幂等：同一次资金操作的重试携带同一 opId，命中即视为已完成，不重复记账 / 不重复写审计。
+      const existing = await tx.workspaceRecord.findUnique({
+        where: { kind_key: { kind, key } },
+        select: { revision: true, payload: true },
+      });
+      // 商务经理无建批次权限：不得创建账本记录（杜绝注入他人批次账本）。
+      if (!existing && bdWrite && kind === 'ledger') {
+        return { ok: false as const, forbidden: '仅可修改已存在的本人名下批次账本' };
+      }
+
+      // 资金写入必须携带幂等标识。是否属于资金写入由服务端依据 finance.revision 是否推进判定，
+      // 不依赖客户端声明，杜绝「账本被改但无幂等登记、无审计」的写入。
+      const financialWrite =
+        kind === 'ledger' &&
+        (existing === null || financeRevisionOf(payload) !== financeRevisionOf(existing.payload));
+      if (financialWrite && !opId) {
+        return { ok: false as const, missingOpId: true as const };
+      }
+
+      // 幂等：以「操作人 + 业务对象 + 操作类型 + 请求内容摘要」绑定 opId。
+      // 仅完全相同的请求可重放成功；同键不同内容视为冲突，避免把未执行的新金额当成已完成。
+      const digest = opId ? requestDigest(session.id, kind, key, payload) : null;
       if (opId) {
         const done = await tx.financeCommit.findUnique({
           where: { opId },
-          select: { revision: true },
+          select: { actorId: true, kind: true, key: true, revision: true, digest: true },
         });
-        if (done) return { ok: true as const, revision: done.revision, deduped: true };
+        if (done) {
+          const sameRequest =
+            done.actorId === session.id && done.kind === kind && done.key === key && done.digest === digest;
+          if (sameRequest) return { ok: true as const, revision: done.revision, deduped: true };
+          return { ok: false as const, idempotencyConflict: true as const };
+        }
       }
+
+      // 被白名单拦截的受保护字段（商务经理试图改动资金 / 结算 / 归属字段）。
+      let blockedFields: Array<{ clientId: string; field: string }> = [];
 
       // 记账、审计与幂等登记必须在同一事务内提交：任一步失败则整体回滚。
       const commitAuditAndIdempotency = async (finalRevision: number) => {
@@ -242,21 +302,52 @@ export async function PUT(req: Request) {
           });
         }
         if (opId) {
+          // 服务端自行生成资金写入审计：不依赖客户端上送，每次账本变更都有一条权威记录。
+          await tx.auditLog.create({
+            data: {
+              actorId: session.id,
+              actorEmail: session.email,
+              role: session.role,
+              action: 'finance_commit',
+              resource: `${kind}:${key}`,
+              detail: {
+                opId,
+                revision: finalRevision,
+                record: `${kind}:${key}`,
+              } as Prisma.InputJsonValue,
+            },
+          });
           await tx.financeCommit.create({
-            data: { opId, actorId: session.id, kind, key, revision: finalRevision },
+            data: { opId, actorId: session.id, kind, key, revision: finalRevision, digest: digest ?? undefined },
+          });
+        }
+        if (blockedFields.length > 0) {
+          // 受保护字段已被服务端按白名单拦截：逐客户留痕，供审计追溯。
+          const byClient = new Map<string, string[]>();
+          for (const item of blockedFields) {
+            const list = byClient.get(item.clientId) ?? [];
+            list.push(item.field);
+            byClient.set(item.clientId, list);
+          }
+          await tx.auditLog.createMany({
+            data: [...byClient.entries()].map<Prisma.AuditLogCreateManyInput>(([clientId, fields]) => ({
+              actorId: session.id,
+              actorEmail: session.email,
+              role: session.role,
+              action: 'client_edit',
+              resource: `client:${clientId}:blocked`,
+              detail: {
+                clientId,
+                batchId: key,
+                blockedFields: fields,
+                result: '受保护字段由服务端拦截，未生效',
+              } as Prisma.InputJsonValue,
+            })),
           });
         }
       };
 
-      const existing = await tx.workspaceRecord.findUnique({
-        where: { kind_key: { kind, key } },
-        select: { revision: true, payload: true },
-      });
       if (!existing) {
-        // 商务经理无建批次权限：不得创建账本记录（杜绝注入他人批次账本）。
-        if (bdWrite && kind === 'ledger') {
-          return { ok: false as const, forbidden: '仅可修改已存在的本人名下批次账本' };
-        }
         try {
           const created = await tx.workspaceRecord.create({
             data: { kind, key, payload, revision: 1, updatedBy: session.id },
@@ -293,6 +384,7 @@ export async function PUT(req: Request) {
           return { ok: false as const, forbidden: merged.error ?? '当前角色不可修改该账本' };
         }
         nextPayload = JSON.parse(JSON.stringify(merged.payload)) as Prisma.InputJsonValue;
+        blockedFields = merged.blocked ?? [];
       }
       // 版本比较必须落在 UPDATE 的 WHERE 条件里，仅靠事务内「先读后比」在并发下会丢失更新：
       // 两个事务读到同一 revision 时都能通过 check，最终只有一份 payload 生效。
@@ -316,6 +408,18 @@ export async function PUT(req: Request) {
 
     if (!result.ok) {
       if ('forbidden' in result) return forbidden(result.forbidden);
+      if ('missingOpId' in result) {
+        return jsonNoStore(
+          { ok: false, error: 'financial_write_requires_op_id', message: '资金写入缺少幂等标识，已拒绝' },
+          400
+        );
+      }
+      if ('idempotencyConflict' in result) {
+        return jsonNoStore(
+          { ok: false, error: 'idempotency_key_conflict', message: '同一幂等标识携带了不同内容，已拒绝' },
+          409
+        );
+      }
       return jsonNoStore(
         {
           ok: false,

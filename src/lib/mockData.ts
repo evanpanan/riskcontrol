@@ -1567,7 +1567,10 @@ export function createNewBatch(input: NewBatchInput): (Batch & { clients: Client
   initializeBatchFinance(newBatch);
   (newBatch as any).finance.revision = 1;
   store[newBatch.id] = financeRecord(newBatch);
-  writeFinanceRecords(store, [newBatch.id]);
+  // 建批次会创建资金账本（属于资金写入）：必须携带幂等键，否则服务端拒绝落库。
+  writeFinanceRecords(store, [newBatch.id], {
+    opId: `fin-${newBatch.id}-1-${Math.random().toString(36).slice(2, 10)}`,
+  });
   // 合并现有批次列表并刷新缓存
   cachedMockData = null;
   const fresh = getMockData();

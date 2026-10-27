@@ -180,12 +180,13 @@ export function buildCollateralLedger(batches: BatchLike[]): CollateralLedgerSum
       status: remainingInitialShares < 1e-6 ? "fully_released" : "active",
     });
 
-    // 每笔补仓（救援）条目
+    // 每笔补仓（救援）条目：核销已在成交层按客户归属完成（remainingFraction），
+    // 不能再按 settledWeight 二次扣减，否则会重复释放并低估剩余担保价值。
     for (const perCall of rescue.perCall) {
-      const releasedRescueShares = perCall.shares * settledWeight;
-      const releasedRescueAmount = perCall.amount * settledWeight;
-      const remainingRescueShares = Math.max(0, perCall.shares - releasedRescueShares);
-      const remainingRescuePrincipal = Math.max(0, perCall.amount - releasedRescueAmount);
+      const remainingRescueShares = perCall.shares;
+      const remainingRescuePrincipal = perCall.amount;
+      const releasedRescueShares = Math.max(0, perCall.originalShares - perCall.shares);
+      const releasedRescueAmount = Math.max(0, perCall.originalAmount - perCall.amount);
       const currentValue = remainingRescueShares * price;
       entries.push({
         id: `${batch.id}-${perCall.id}`,

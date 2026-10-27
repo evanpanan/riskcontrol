@@ -11,6 +11,7 @@ import {
   getClientProfitSplit,
   isVipClient,
   calculateRescueStats,
+  calculateClientRescueStats,
   getLockedBatchRequiredMargin,
   summarizeBatchMarginFromClients,
   executeInstitutionTopup,
@@ -1964,8 +1965,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             : 0;
           // ① 初始投资总金额 = 客户本金 + 对应归属的 WIN100 担保本金
           const institutionInitialCapitalAttributed = (batch.subordinateAmount ?? 0) * weight;
-          const rescueStats = calculateRescueStats(batch, priceFinal);
-          const institutionRescueAttributed = rescueStats.totalRescueAmount * weight;
+          // 补仓按客户归属计量：只计归属本客户的补仓，不按本金权重分摊整批补仓。
+          const rescueStats = calculateClientRescueStats(batch, priceFinal, client.id, weight);
+          const institutionRescueAttributed = rescueStats.totalRescueAmount;
           const initialInvestmentTotal = money(client.investmentAmount + institutionInitialCapitalAttributed + institutionRescueAttributed);
           // ② 当前总价值 = 客户实收 + 机构实收（两边合计）
           const totalCurrentValue = money(result.clientReceives + result.institutionReceives);

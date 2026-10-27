@@ -214,7 +214,8 @@ export interface RescueStats {
   rescueCurrentValue: number;
   rescuePnL: number;
   rescuePnLPercent: number;
-  perCall: Array<{ id: string; amount: number; entryPrice: number; shares: number; currentValue: number; pnl: number; pnlPercent: number }>;
+  /** originalAmount/originalShares 为核销前的原始成交，供台账区分「已释放」与「剩余」。 */
+  perCall: Array<{ id: string; amount: number; entryPrice: number; shares: number; currentValue: number; pnl: number; pnlPercent: number; originalAmount: number; originalShares: number }>;
   unpricedAmount?: number;
 }
 
@@ -496,20 +497,33 @@ export function calculateTotalShares(initialTotalAmount: number, stockPriceAtSta
   return stockPriceAtStart > 0 ? initialTotalAmount / stockPriceAtStart : 0;
 }
 
-export function calculateRescueStats(batch: BatchLike, currentStockPrice: number): RescueStats {
+/**
+ * 补仓成交按客户归属筛选。
+ * - clientId 为字符串：只取归属该客户的成交；
+ * - clientId 为 null：只取「无归属」的历史成交（legacy，无法对应到具体客户）；
+ * - 省略（undefined）：取全部成交（批次口径，用于批次级指标与担保比例）。
+ */
+function selectRescueTrades(trades: InstitutionTrade[], clientId?: string | null): InstitutionTrade[] {
+  if (clientId === undefined) return trades;
+  if (clientId === null) return trades.filter((t) => !t.clientId);
+  return trades.filter((t) => t.clientId === clientId);
+}
+
+export function calculateRescueStats(batch: BatchLike, currentStockPrice: number, clientId?: string | null): RescueStats {
   const finance = (batch as BatchLike).finance;
-  const trades: InstitutionTrade[] = finance?.trades ?? (batch.marginCalls ?? []).filter((m) => (m.fulfilledAmount ?? 0) > 0).map((m: any) => ({
+  const allTrades: InstitutionTrade[] = finance?.trades ?? (batch.marginCalls ?? []).filter((m) => (m.fulfilledAmount ?? 0) > 0).map((m: any) => ({
     id: m.id, roundId: m.id, amount: m.fulfilledAmount, entryPrice: m.averageEntryPrice || null,
     shares: m.rescueShares || (m.averageEntryPrice > 0 ? m.fulfilledAmount / m.averageEntryPrice : 0),
     remainingFraction: 1, createdAt: String(m.fulfilledDate), source: "legacy",
   }));
+  const trades = selectRescueTrades(allTrades, clientId);
   const perCall = trades.map((t) => {
     const amount = t.amount * t.remainingFraction;
     const shares = t.shares * t.remainingFraction;
     // Missing historical execution data is held at cost, never assigned a fabricated return.
     const currentValue = t.needsReconciliation || !t.entryPrice ? amount : shares * currentStockPrice;
     const pnl = currentValue - amount;
-    return { id: t.id, amount, entryPrice: t.entryPrice ?? 0, shares, currentValue, pnl, pnlPercent: amount > 0 ? pnl / amount * 100 : 0 };
+    return { id: t.id, amount, entryPrice: t.entryPrice ?? 0, shares, currentValue, pnl, pnlPercent: amount > 0 ? pnl / amount * 100 : 0, originalAmount: t.amount, originalShares: t.shares };
   });
   const totalRescueAmount = perCall.reduce((s, t) => s + t.amount, 0);
   const totalRescueShares = perCall.reduce((s, t) => s + t.shares, 0);
@@ -519,6 +533,36 @@ export function calculateRescueStats(batch: BatchLike, currentStockPrice: number
   return {
     totalRescueAmount, totalRescueShares, rescueCurrentValue, rescuePnL, perCall, unpricedAmount,
     weightedAverageEntryPrice: totalRescueShares > 0 ? (totalRescueAmount - unpricedAmount) / totalRescueShares : 0,
+    rescuePnLPercent: totalRescueAmount > 0 ? rescuePnL / totalRescueAmount * 100 : 0,
+  };
+}
+
+/**
+ * 结算 / 退出某客户时，机构补仓对该客户的归属口径。
+ * - 有 clientId 归属的成交只归其客户本人：客户无权分享其他客户补仓的本金及其收益；
+ * - 无归属的历史成交（legacy）无法定位到具体客户，按本金权重分摊 ——
+ *   该分摊必须与退出时的核销口径完全一致，否则跨客户资产守恒会被破坏。
+ */
+export function calculateClientRescueStats(
+  batch: BatchLike,
+  currentStockPrice: number,
+  clientId: string,
+  weight: number
+): RescueStats {
+  const own = calculateRescueStats(batch, currentStockPrice, clientId);
+  const unattributed = calculateRescueStats(batch, currentStockPrice, null);
+  if (unattributed.totalRescueAmount <= 0.005) return own;
+  const scale = Math.max(0, weight);
+  const totalRescueAmount = money(own.totalRescueAmount + unattributed.totalRescueAmount * scale);
+  const rescueCurrentValue = money(own.rescueCurrentValue + unattributed.rescueCurrentValue * scale);
+  const rescuePnL = money(rescueCurrentValue - totalRescueAmount);
+  return {
+    ...own,
+    totalRescueAmount,
+    totalRescueShares: own.totalRescueShares + unattributed.totalRescueShares * scale,
+    rescueCurrentValue,
+    rescuePnL,
+    unpricedAmount: (own.unpricedAmount ?? 0) + (unattributed.unpricedAmount ?? 0) * scale,
     rescuePnLPercent: totalRescueAmount > 0 ? rescuePnL / totalRescueAmount * 100 : 0,
   };
 }
@@ -961,14 +1005,33 @@ export function calculateClientSettlement(client: ClientLike, batch: BatchLike, 
   const shares = client.investmentAmount / entryPrice;
   const initialPnL = shares * finalStockPrice - client.investmentAmount;
   const clientPnL = money(Math.max(0, initialPnL) * split.client);
-  const rescue = calculateRescueStats(batch, finalStockPrice);
-  const accountSlice = shares / PRIORITY_RATIO * finalStockPrice + rescue.rescueCurrentValue * weight;
+  // 补仓按客户归属核销：只计入归属本客户的补仓，绝不按本金权重把整批补仓分摊给单个客户。
+  const rescue = calculateClientRescueStats(batch, finalStockPrice, client.id, weight);
+  const accountSlice = shares / PRIORITY_RATIO * finalStockPrice + rescue.rescueCurrentValue;
   const clientReceives = money(client.investmentAmount + clientPnL);
   const institutionReceives = money(accountSlice - clientReceives);
-  const marginCallReturned = money(rescue.totalRescueAmount * weight);
+  const marginCallReturned = money(rescue.totalRescueAmount);
   return { clientReceives, institutionReceives, clientPnL,
     institutionPnL: money(institutionReceives - batch.subordinateAmount * weight - marginCallReturned),
     splitRatioClient: split.client * 100, isLoss: initialPnL < 0, marginCallReturned };
+}
+
+/**
+ * 客户退出时核销「该客户自身」未履约的补仓义务。
+ * 只删除该客户在未结轮次中的分配，并从轮次所需 / 已缴金额中扣减该客户部分；
+ * 其他客户的分配、轮次状态与原始期限保持不变。
+ * 绝不可取消整个轮次（会让其他客户的补仓义务凭空消失，被重建为新轮次从而重置期限）。
+ */
+function releaseClientObligation(batch: BatchLike, clientId: string): void {
+  for (const round of batch.finance?.rounds ?? []) {
+    if (round.status !== "PENDING" && round.status !== "OVERDUE") continue;
+    const state = round.allocations?.[clientId];
+    if (!state) continue;
+    round.requiredAmount = money(Math.max(0, round.requiredAmount - state.required));
+    round.fulfilledAmount = money(Math.max(0, round.fulfilledAmount - state.fulfilled));
+    delete round.allocations[clientId];
+    if (round.requiredAmount - round.fulfilledAmount <= 0.005) round.status = "FULLFILLED";
+  }
 }
 
 export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string } = {}): SettlementSnapshot {
@@ -988,10 +1051,8 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     throw new Error(eligibility.reason);
   }
 
-  const pendingRound = openObligationRound(batch);
-  if (pendingRound) {
-    pendingRound.status = "CANCELLED";
-  }
+  // 只核销本客户未履约的补仓义务，其他客户的补仓轮次与原始期限保持不变。
+  releaseClientObligation(batch, clientId);
   if (f.trades.some((t) => t.remainingFraction > 0 && t.needsReconciliation)) throw new Error("历史补仓成交信息待核对，暂不能结算。");
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
   if (!(price > 0)) throw new Error("结算价格无效。");
@@ -1008,7 +1069,7 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   // 客户实收 = 结算金额 - 提前退出手续费
   const clientReceivesAfterFee = money(Math.max(0, result.clientReceives - earlyExitFee));
 
-  const rescue = calculateRescueStats(batch, price);
+  const rescue = calculateClientRescueStats(batch, price, clientId, weight);
   const entryPrice = client.entryStockPrice ?? batch.stockPriceAtStart;
   const initialPosPnl = client.investmentAmount * (price / entryPrice - 1);
   const snapshot: SettlementSnapshot = {
@@ -1017,10 +1078,10 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     id: uid(), settledAt: new Date().toISOString(), stockPrice: price, principal: client.investmentAmount,
     originalAccountCapital: money(f.remainingCapital * weight),
     institutionInitialCapital: money(batch.subordinateAmount * weight),
-    institutionRescueValue: money(rescue.rescueCurrentValue * weight),
+    institutionRescueValue: money(rescue.rescueCurrentValue),
     institutionInitialPnL: money(initialPosPnl * SUBORDINATE_RATIO / PRIORITY_RATIO),
     institutionClientShare: money(initialPosPnl - result.clientPnL),
-    institutionRescuePnL: money(rescue.rescuePnL * weight),
+    institutionRescuePnL: money(rescue.rescuePnL),
     operatorName: opts.operatorName,
     settleReason: opts.reason,
     // Phase 3: 退出全流程字段
@@ -1032,7 +1093,12 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   f.settlements[clientId] = snapshot;
   f.remainingCapital = money(f.remainingCapital - snapshot.originalAccountCapital);
   f.remainingShares = Math.max(0, f.remainingShares - client.investmentAmount / PRIORITY_RATIO / entryPrice);
-  for (const t of f.trades) t.remainingFraction *= Math.max(0, 1 - weight);
+  // 补仓成交按客户归属核销：只清除归属本客户的成交，机构为其他客户买入的补仓份额绝不被削减。
+  // 无归属的历史成交无法定位到具体客户，沿用按本金权重核销的口径（与结算归属分摊完全一致）。
+  for (const t of f.trades) {
+    if (t.clientId === clientId) t.remainingFraction = 0;
+    else if (!t.clientId) t.remainingFraction *= Math.max(0, 1 - weight);
+  }
   client.status = ClientStatus.SETTLED;
   client.settledAt = new Date(snapshot.settledAt);
   client.settlement = snapshot;

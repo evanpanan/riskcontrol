@@ -255,6 +255,8 @@ model FinanceCommit {
   kind      String
   key       String
   revision  Int
+  /// 请求内容摘要（操作人 + 业务对象 + 操作类型 + 规范化请求内容）：同键不同内容视为冲突。
+  digest    String?
   createdAt DateTime @default(now())
 
   @@index([createdAt])

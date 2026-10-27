@@ -2191,7 +2191,9 @@ export default function ClientsPage() {
                   ) : null}
                 </p>
                 <DialogDescription className="text-[11px] text-muted-foreground mt-0.5">
-                  允许修改姓名 / 本金 / 商务经理 / 签约日期 / 状态；已结算客户不能再修改
+                  {isBdManager
+                    ? "商务经理仅可修改客户姓名；本金 / 商务经理 / 签约日期 / 状态由机构端维护"
+                    : "允许修改姓名 / 本金 / 商务经理 / 签约日期 / 状态；已结算客户不能再修改"}
                 </DialogDescription>
               </div>
             </DialogTitle>
@@ -2229,9 +2231,13 @@ export default function ClientsPage() {
                       }}
                       placeholder="500000.00"
                       className="pl-7 font-mono tabular-nums"
+                      disabled={isBdManager}
                     />
                   </div>
                   {editErrors.investment && <p className="text-[10px] text-danger font-mono">{editErrors.investment}</p>}
+                  {isBdManager && (
+                    <p className="text-[10px] text-muted-foreground">本金由机构端维护，不可修改</p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px]">商务经理*</Label>
@@ -2256,6 +2262,7 @@ export default function ClientsPage() {
                   <Select
                     value={editForm.status || ClientStatus.ACTIVE}
                     onValueChange={(v) => setEditForm({ ...editForm, status: v as ClientStatus })}
+                    disabled={isBdManager}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="选择签约状态" />
@@ -2273,6 +2280,7 @@ export default function ClientsPage() {
                     type="date"
                     value={editForm.signDate}
                     onChange={(e) => setEditForm({ ...editForm, signDate: e.target.value })}
+                    disabled={isBdManager}
                   />
                 </div>
               </div>
@@ -2295,23 +2303,27 @@ export default function ClientsPage() {
                 onClick={async () => {
                   const errs: Record<string, string> = {};
                   if (!editForm.name.trim() || editForm.name.trim().length < 2) errs.name = "至少 2 个字符";
+                  // 商务经理仅可修改姓名：本金 / 商务经理 / 签约日期 / 状态属服务端白名单保护的字段。
                   const numAmt = Number(editForm.investment.replace(/[^0-9.]/g, ""));
-                  if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
-                  if (!editForm.bdManager) errs.bdManager = "请选择 商务经理";
+                  if (!isBdManager) {
+                    if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
+                    if (!editForm.bdManager) errs.bdManager = "请选择 商务经理";
+                  }
                   setEditErrors(errs);
                   if (Object.keys(errs).length > 0 || !editClientOpen) return;
+                  const patch: Record<string, unknown> = { name: editForm.name.trim() };
+                  if (!isBdManager) {
+                    patch.investmentAmount = numAmt;
+                    patch.bdManager = editForm.bdManager;
+                    patch.signDate = new Date(editForm.signDate);
+                    patch.status = editForm.status;
+                  }
                   const mock = getMockData();
                   const batch = mock.batches.find((x) => x.id === editClientOpen.batchId);
                   if (!batch) return;
                   try {
                     commitBatchFinance(batch, (draft) =>
-                      updateClientPosition(draft, editClientOpen.id, {
-                        name: editForm.name.trim(),
-                        investmentAmount: numAmt,
-                        bdManager: editForm.bdManager,
-                        signDate: new Date(editForm.signDate),
-                        status: editForm.status,
-                      } as any)
+                      updateClientPosition(draft, editClientOpen.id, patch as any)
                     );
                     const beforeClient = batch.clients?.find((c: any) => c?.id === editClientOpen.id);
                     try {
@@ -2330,13 +2342,11 @@ export default function ClientsPage() {
                           } : null,
                           after: {
                             name: editForm.name.trim(),
-                            investmentAmount: numAmt,
-                            bdManager: editForm.bdManager,
-                            status: editForm.status,
+                            investmentAmount: isBdManager ? beforeClient?.investmentAmount : numAmt,
+                            bdManager: isBdManager ? beforeClient?.bdManager : editForm.bdManager,
+                            status: isBdManager ? beforeClient?.status : editForm.status,
                           },
-                          changedKeys: [
-                            "name","investmentAmount","bdManager","signDate","status",
-                          ],
+                          changedKeys: Object.keys(patch),
                         },
                       });
                     } catch {

@@ -131,16 +131,46 @@ test("写合并：批次级与财务账本一律以服务端为准，仅保留 r
   assert.equal(fin.version, 2);
 });
 
-test("写合并：自有客户修改被接受，归属被强制回本人", () => {
+test("写合并：自有客户仅接受白名单字段，本金 / 结算状态 / 归属一律拦截", () => {
   const incoming = structuredClone(serverLedger);
   const b = incoming.batch.clients as any[];
-  b[0].status = "EXIT_REQUESTED";
+  b[0].name = "客户-改名";
+  b[0].brokerAccount = "ACC-1";
+  b[0].status = "SETTLED";
   b[0].bdManager = BD_B;
+  b[0].investmentAmount = 1;
+  b[0].settlement = { institutionPnL: -1 };
   const merged = mergeLedgerWriteForBd(serverLedger, incoming, BD_A);
   assert.equal(merged.ok, true);
   const out = readLedgerShape(merged.payload)!;
-  assert.equal(out.clients[0].status, "EXIT_REQUESTED");
+  // 白名单字段接受
+  assert.equal(out.clients[0].name, "客户-改名");
+  assert.equal(out.clients[0].brokerAccount, "ACC-1");
+  // 受保护字段一律以服务端为准
+  assert.equal(out.clients[0].status, "ACTIVE");
   assert.equal(out.clients[0].bdManager, BD_A);
+  assert.equal(out.clients[0].investmentAmount, 350000);
+  assert.deepEqual(out.clients[0].settlement, { institutionPnL: 999 });
+  // 被拦截字段留痕，供服务端写审计
+  const blocked = (merged.blocked ?? []).map((x) => `${x.clientId}:${x.field}`).sort();
+  assert.deepEqual(blocked, ["a:bdManager", "a:investmentAmount", "a:settlement", "a:status"]);
+});
+
+test("读脱敏：他人客户的嵌套财务明细（结算 / 成交 / 补仓分配）不下发", () => {
+  const src = ledger([client("a", BD_A, 350000), client("b", BD_B, 650000)]);
+  const batch = src.batch as any;
+  batch.finance.settlements = { a: { institutionPnL: 1 }, b: { principal: 70000 } };
+  batch.finance.trades = [
+    { id: "t1", clientId: "a", amount: 100 },
+    { id: "t2", clientId: "b", amount: 900 },
+  ];
+  batch.finance.rounds = [{ id: "r1", allocations: { a: { required: 1 }, b: { required: 2 } } }];
+  const redacted = readLedgerShape(redactLedgerForBd(src, BD_A))!;
+  const fin = redacted.batch.finance as any;
+  assert.deepEqual(Object.keys(fin.settlements), ["a"]);
+  assert.equal(fin.settlements.b, undefined);
+  assert.deepEqual(fin.trades.map((t: any) => t.id), ["t1"]);
+  assert.deepEqual(Object.keys(fin.rounds[0].allocations), ["a"]);
 });
 
 test("写合并：注入新客户 / 越权写入无自有客户的批次被拒绝", () => {

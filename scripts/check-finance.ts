@@ -288,4 +288,45 @@ test("an overdue round keeps its original deadline, is not rebuilt, and stays fu
   assert.equal(b.finance!.rounds[0].dueDate, dueBefore);
 });
 
+test("institution topup is attributed per client and never spread onto another client", () => {
+  const b = batch();
+  // 只有 b 有机构补仓成交，a 未获得任何补仓
+  near(executeInstitutionTopup(b, { amount: 100000, clientId: "b" }), 100000);
+  b.currentStockPrice = 110;
+  syncBatchFinance(b);
+  const before = b.currentMarketValue!;
+  markExitReady(b, "a");
+  const result = settleClientPosition(b, "a");
+  // a 无权分享 b 的补仓本金与收益
+  near(result.marginCallReturned, 0, "a 无补仓成交，不得分摊他人补仓本金");
+  const aTrades = b.finance!.trades.filter((t) => t.clientId === "a");
+  assert.equal(aTrades.length, 0, "a 不应产生补仓成交");
+  // b 的补仓成交不因 a 退出被削减
+  const bTrade = b.finance!.trades.find((t) => t.clientId === "b")!;
+  near(bTrade.remainingFraction, 1, "他人补仓成交不得因本客户退出被削减");
+  // 资产守恒：客户实收 + 机构实收 + 剩余市值 = 结算前总市值
+  near(result.clientReceives + result.institutionReceives + b.currentMarketValue!, before, "资产守恒");
+});
+
+test("partial exit voids only the exiting client's obligation and keeps others' round and deadline", () => {
+  const b = batch();
+  const roundId = summarizeBatchMarginFromClients(b).roundId;
+  const dueBefore = b.finance!.rounds[0].dueDate;
+  // b 已补仓、a 仍欠缴
+  near(executeInstitutionTopup(b, { amount: 100000, clientId: "b" }), 100000);
+  assert.equal(b.finance!.rounds.length, 1);
+  near(b.finance!.rounds[0].allocations.b.fulfilled, 100000);
+  near(b.finance!.rounds[0].allocations.a.fulfilled, 0);
+  b.currentStockPrice = 110;
+  syncBatchFinance(b);
+  markExitReady(b, "a");
+  settleClientPosition(b, "a");
+  assert.equal(b.finance!.rounds.length, 1, "a 退出不得重建补仓轮次");
+  assert.equal(b.finance!.rounds[0].id, roundId, "轮次不得被替换");
+  assert.equal(b.finance!.rounds[0].dueDate, dueBefore, "轮次期限不得被重置");
+  assert.equal(b.finance!.rounds[0].allocations.a, undefined, "a 的义务应被核销");
+  near(b.finance!.rounds[0].allocations.b.fulfilled, 100000, "b 的补仓不应被核销");
+  near(b.finance!.rounds[0].fulfilledAmount, 100000);
+});
+
 process.stdout.write(`Finance regression: ${count} scenarios passed.\n`);

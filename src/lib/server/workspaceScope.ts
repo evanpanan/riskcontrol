@@ -18,6 +18,36 @@ import { APP_ROLES, type AppSessionUser } from '@/types/auth';
 export const REDACTED_CLIENT_NAME = '— 其他商务经理 客户（已脱敏）—';
 export const REDACTED_BD_LABEL = '（已隐藏）';
 
+/**
+ * 商务经理可维护的自有客户字段白名单。
+ * 本金、分成条款、签约日期、结算状态与结算快照等一律由服务端权威数据决定，
+ * 禁止通过账本写入直接改写，避免绕过财务核算制造不一致账本。
+ */
+export const BD_EDITABLE_CLIENT_FIELDS = ['name', 'brokerAccount'] as const;
+
+/** 商务经理不可通过账本写入改写的客户字段（财务 / 合同 / 结算）。 */
+export const BD_PROTECTED_CLIENT_FIELDS = [
+  'investmentAmount',
+  'profitSplitClient',
+  'profitSplitInstitution',
+  'signDate',
+  'status',
+  'settledAt',
+  'settlement',
+  'marginState',
+  'marginHistory',
+  'entryStockPrice',
+  'exitRequestedAt',
+  'exitEligibleAt',
+  'earlyExitFee',
+  'exitAmount',
+  'clientNo',
+  'bdUserId',
+  'subAccountNo',
+  'realtimePnL',
+  'estimatedExitAmount',
+] as const;
+
 type Json = Record<string, unknown>;
 
 function asRecord(v: unknown): Json | null {
@@ -119,8 +149,42 @@ export function isRedactionPlaceholder(c: Json): boolean {
 }
 
 /**
+ * 嵌套财务账本脱敏：按客户归属逐层过滤 settlements / trades / rounds.allocations，
+ * 仅保留本人名下客户的数据，避免主行脱敏后仍从嵌套明细泄露他人本金与操作人信息。
+ */
+function redactFinanceForBd(finance: Json, ownIds: Set<string>): Json {
+  const next: Json = { ...finance };
+  const settlements = asRecord(finance.settlements);
+  if (settlements) {
+    const kept: Json = {};
+    for (const [id, value] of Object.entries(settlements)) if (ownIds.has(id)) kept[id] = value;
+    next.settlements = kept;
+  }
+  if (Array.isArray(finance.trades)) {
+    next.trades = finance.trades.filter((t) => {
+      const rec = asRecord(t);
+      if (!rec) return false;
+      // 无归属（clientId 缺失）的历史成交不指向具体他人，保留；有归属的仅保留本人客户。
+      return typeof rec.clientId !== 'string' || ownIds.has(rec.clientId);
+    });
+  }
+  if (Array.isArray(finance.rounds)) {
+    next.rounds = finance.rounds.map((r) => {
+      const rec = asRecord(r);
+      if (!rec) return r;
+      const allocations = asRecord(rec.allocations);
+      if (!allocations) return rec;
+      const kept: Json = {};
+      for (const [id, value] of Object.entries(allocations)) if (ownIds.has(id)) kept[id] = value;
+      return { ...rec, allocations: kept };
+    });
+  }
+  return next;
+}
+
+/**
  * 读脱敏：他人客户行替换为占位行（保留数组长度，避免前端按客户数取值错位）。
- * 指纹表中的他人键一并剔除，避免泄露客户 ID。
+ * 指纹表与嵌套财务明细中的他人键一并剔除，避免泄露客户 ID、本金与操作人信息。
  */
 export function redactLedgerForBd(payload: unknown, bdName: string): unknown {
   const shape = readLedgerShape(payload);
@@ -135,7 +199,10 @@ export function redactLedgerForBd(payload: unknown, bdName: string): unknown {
     return redactedClient(c, i);
   });
   const fingerprints = asRecord(shape.root.clientFingerprints);
-  const nextRoot: Json = { ...shape.root, batch: { ...shape.batch, clients } };
+  const finance = asRecord(shape.batch.finance);
+  const nextBatch: Json = { ...shape.batch, clients };
+  if (finance) nextBatch.finance = redactFinanceForBd(finance, ownIds);
+  const nextRoot: Json = { ...shape.root, batch: nextBatch };
   if (fingerprints) {
     const kept: Json = {};
     for (const [id, value] of Object.entries(fingerprints)) {
@@ -150,11 +217,14 @@ export interface ScopeMergeResult {
   ok: boolean;
   payload?: unknown;
   error?: string;
+  /** 被服务端拦截的自有客户改写尝试（字段级），用于审计留痕。 */
+  blocked?: Array<{ clientId: string; field: string }>;
 }
 
 /**
- * 写合并：商务经理仅可提交自有客户条目的变更。
- * 批次级字段、财务账本、他人客户行、指纹一律以服务端为准。
+ * 写合并：商务经理仅可提交自有客户条目的变更，且仅限业务字段白名单。
+ * 批次级字段、财务账本、他人客户行、指纹，以及自有客户的本金/分成/签约/结算字段
+ * 一律以服务端为准；被拦截的改写尝试回传用于审计。
  */
 export function mergeLedgerWriteForBd(
   serverPayload: unknown,
@@ -190,13 +260,24 @@ export function mergeLedgerWriteForBd(
     incomingById.set(id, c);
   }
 
+  const blocked: Array<{ clientId: string; field: string }> = [];
   const mergedClients = server.clients.map((sc) => {
     const id = clientIdOf(sc);
     if (!id || !ownServerIds.has(id)) return sc; // 他人客户：以服务端为准
     const inc = incomingById.get(id);
     if (!inc || isRedactionPlaceholder(inc)) return sc; // 缺失即视为未变更（不可删除客户）
-    const bd = clientBdOf(inc);
-    return bd === bdName ? inc : { ...inc, bdManager: bdName }; // 客户归属不可被改写
+    // 自有客户同样按白名单合并：只接受业务字段，财务/合同/结算字段以服务端为准。
+    const next: Json = { ...sc };
+    for (const field of BD_EDITABLE_CLIENT_FIELDS) {
+      if (!(field in inc)) continue;
+      if (JSON.stringify(inc[field]) !== JSON.stringify(sc[field])) next[field] = inc[field];
+    }
+    if (clientBdOf(inc) !== bdName) blocked.push({ clientId: id, field: 'bdManager' });
+    for (const field of BD_PROTECTED_CLIENT_FIELDS) {
+      if (!(field in inc)) continue;
+      if (JSON.stringify(inc[field]) !== JSON.stringify(sc[field])) blocked.push({ clientId: id, field });
+    }
+    return next; // 客户归属不可被改写（next 基于服务端 sc 构造）
   });
 
   const serverFinance = asRecord(server.batch.finance);
@@ -212,5 +293,5 @@ export function mergeLedgerWriteForBd(
           : serverFinance.revision,
     };
   }
-  return { ok: true, payload: { ...server.root, batch } };
+  return { ok: true, payload: { ...server.root, batch }, blocked };
 }

@@ -21,6 +21,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   client_exit_cancel: '撤销退出申请',
   batch_notify: '批次通知客户',
   ledger_clear: '清空业务数据',
+  finance_commit: '资金账本提交',
   auth_denied: '权限校验未通过',
 };
 
@@ -113,6 +114,10 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   stored: '已落库',
   apiError: '接口错误',
   denyAction: '被拒操作',
+  opId: '操作编号',
+  revision: '账本版本',
+  blockedFields: '被拦截字段',
+  result: '结果',
   before: '变更前',
   after: '变更后',
   warningDropPercent: '预警跌幅',
@@ -299,6 +304,8 @@ export function describeAuditLog(log: AuditLogEntry): string {
       ].filter(Boolean).join('、');
       return `清空全部业务数据${scope ? `（${scope}）` : ''}`;
     }
+    case 'finance_commit':
+      return `资金账本提交并登记幂等${s('opId') ? `（${s('opId')}）` : ''}`;
     case 'auth_denied':
       return `权限校验未通过：${s('reason') || s('denyAction') || '无权限'}`;
     default: {

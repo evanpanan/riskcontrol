@@ -16,21 +16,32 @@ export const WORKSPACE_ERROR_EVENT = 'risk-control:workspace-error';
 /** 服务端判定会话已失效（过期 / 被撤销 / 账号被停用）：通知上层登出。 */
 export const WORKSPACE_UNAUTHORIZED_EVENT = 'risk-control:session-invalid';
 
+/**
+ * 待落库写入项：payload 与提交元信息（幂等键 / 审计意图）绑定为一个不可变整体。
+ * 每次写入独立入队，发送与确认一一对应，绝不被后续写入覆盖或清除。
+ */
+interface PendingWrite {
+  payload: unknown;
+  /** 资金操作幂等键；普通（非资金）写入为空，可与相邻普通写入合并。 */
+  opId?: string;
+  audits?: CommitAuditIntent[];
+}
+
 interface Slot {
   kind: WorkspaceKind;
   key: string;
+  /** 本地最新视图（供同步读取）。 */
   payload: unknown;
   /** 最近一次被服务端确认的版本号。 */
   serverRevision: number;
-  /** 本地有未落库的修改。 */
-  dirty: boolean;
   /** 该键正在写入中。 */
   inflight: boolean;
   retries: number;
-  /** 资金操作幂等键：重试沿用同一 opId，服务端据此识别重放而不重复记账。 */
-  opId?: string;
-  /** 与本次资金写入绑定、需在同一服务端事务内提交的审计意图。 */
-  audits?: CommitAuditIntent[];
+  /**
+   * 待落库写入队列：按序发送，队列项一旦入队即不可变。
+   * 资金操作的 opId / 审计意图随该项一起发送与确认，不会因同键的后续写入而丢失。
+   */
+  queue: PendingWrite[];
 }
 
 /** 随资金写入原子提交的审计意图（由调用方在捕获期间收集）。 */
@@ -142,8 +153,9 @@ export function hasWorkspaceKind(kind: WorkspaceKind): boolean {
 
 /**
  * 乐观写入：本地立即生效，随后异步落库。
- * 同一键的连续写入会合并为最后一次，避免高频操作打满请求。
- * 资金类写入可携带 commit 元信息：opId 用于幂等（重试不重复记账），audits 与写入同一事务提交。
+ * - 资金写入（携带 commit.opId）作为独立不可变队列项入队，幂等键与审计意图随该项一起发送与确认；
+ *   与普通写入不同，它绝不与后续写入合并，避免「连续操作丢失后一次提交的元信息」。
+ * - 普通写入（无 opId）与相邻的普通写入合并为最后一次，避免高频操作打满请求。
  */
 export function upsertWorkspaceRecord(
   kind: WorkspaceKind,
@@ -152,24 +164,26 @@ export function upsertWorkspaceRecord(
   commit?: WorkspaceCommitMeta
 ): void {
   const k = slotKey(kind, key);
-  const existing = slots.get(k);
-  if (existing) {
-    existing.payload = payload;
-    existing.dirty = true;
-    existing.opId = commit?.opId;
-    existing.audits = commit?.audits;
-  } else {
-    slots.set(k, {
+  let slot = slots.get(k);
+  if (!slot) {
+    slot = {
       kind,
       key,
       payload,
       serverRevision: 0,
-      dirty: true,
       inflight: false,
       retries: 0,
-      opId: commit?.opId,
-      audits: commit?.audits,
-    });
+      queue: [],
+    };
+    slots.set(k, slot);
+  }
+  slot.payload = payload;
+  if (commit?.opId) {
+    slot.queue.push({ payload, opId: commit.opId, audits: commit.audits });
+  } else {
+    const last = slot.queue[slot.queue.length - 1];
+    if (last && !last.opId) last.payload = payload;
+    else slot.queue.push({ payload });
   }
   scheduleFlush(k);
 }
@@ -188,14 +202,15 @@ function scheduleFlush(k: string): void {
 
 async function flushSlot(k: string): Promise<void> {
   const slot = slots.get(k);
-  if (!slot || slot.inflight || !slot.dirty) return;
+  if (!slot || slot.inflight || slot.queue.length === 0) return;
   slot.inflight = true;
-  slot.dirty = false;
-  const snapshot = slot.payload;
+  // 只消费队首队列项；该队列项不可变，其 opId / 审计意图不会被同键的后续写入改写。
+  const item = slot.queue[0];
+  const snapshot = item.payload;
   const baseRevision = slot.serverRevision;
   // 重试沿用同一 opId 与审计意图：服务端据此识别重放，且审计与账本写入同事务提交。
-  const opId = slot.opId;
-  const audits = slot.audits;
+  const opId = item.opId;
+  const audits = item.audits;
   try {
     const res = await fetch('/api/data/store', {
       method: 'PUT',
@@ -212,8 +227,8 @@ async function flushSlot(k: string): Promise<void> {
     });
     slot.inflight = false;
     if (res.status === 401) {
+      // 保留队列项：会话恢复后按原样重试，幂等键不变，不会重复记账。
       writeBlocked = true;
-      slot.dirty = true;
       dispatch(WORKSPACE_UNAUTHORIZED_EVENT, {});
       return;
     }
@@ -226,20 +241,17 @@ async function flushSlot(k: string): Promise<void> {
         slot.payload = current.payload;
         slot.serverRevision = typeof current.revision === 'number' ? current.revision : slot.serverRevision;
       }
-      slot.dirty = false;
+      // 服务端为准：放弃本地未落库的整个队列（后续队列项都基于已过期的服务端版本）。
+      slot.queue = [];
       slot.retries = 0;
-      slot.opId = undefined;
-      slot.audits = undefined;
       workspaceVersion = null;
       dispatch(WORKSPACE_CONFLICT_EVENT, { kind: slot.kind, key: slot.key });
       return;
     }
     if (res.status === 403) {
       // 无权限写入（如商务经理写入他人批次）：重试不会改变结果，直接终止并提示。
-      slot.dirty = false;
+      slot.queue = [];
       slot.retries = 0;
-      slot.opId = undefined;
-      slot.audits = undefined;
       const data = (await res.json().catch(() => null)) as { error?: unknown } | null;
       dispatch(WORKSPACE_ERROR_EVENT, {
         kind: slot.kind,
@@ -252,7 +264,6 @@ async function flushSlot(k: string): Promise<void> {
       return;
     }
     if (!res.ok) {
-      slot.dirty = true;
       slot.retries += 1;
       if (slot.retries > 3) {
         slot.retries = 0;
@@ -267,12 +278,11 @@ async function flushSlot(k: string): Promise<void> {
     if (typeof data?.revision === 'number') slot.serverRevision = data.revision;
     if (typeof data?.version === 'string') workspaceVersion = data.version;
     slot.retries = 0;
-    slot.opId = undefined;
-    slot.audits = undefined;
-    if (slot.dirty) scheduleFlush(k);
+    // 该队列项已被服务端确认（或幂等命中）：出队后继续消费后续写入。
+    slot.queue.shift();
+    if (slot.queue.length > 0) scheduleFlush(k);
   } catch {
     slot.inflight = false;
-    slot.dirty = true;
     slot.retries += 1;
     if (slot.retries > 3) {
       slot.retries = 0;
@@ -302,14 +312,14 @@ function applyRemoteRecords(records: RemoteRecord[], replaceAll: boolean): boole
         key: rec.key,
         payload: rec.payload,
         serverRevision: rec.revision,
-        dirty: false,
         inflight: false,
         retries: 0,
+        queue: [],
       });
       changed = true;
       continue;
     }
-    if (slot.dirty || slot.inflight) continue; // 本地有未落库修改，保留本地
+    if (slot.queue.length > 0 || slot.inflight) continue; // 本地有未落库修改，保留本地
     if (slot.serverRevision !== rec.revision) {
       slot.payload = rec.payload;
       slot.serverRevision = rec.revision;
@@ -319,7 +329,7 @@ function applyRemoteRecords(records: RemoteRecord[], replaceAll: boolean): boole
   if (replaceAll) {
     for (const [k, slot] of slots.entries()) {
       if (seen.has(k)) continue;
-      if (slot.dirty || slot.inflight) continue;
+      if (slot.queue.length > 0 || slot.inflight) continue;
       slots.delete(k);
       changed = true;
     }
@@ -441,9 +451,9 @@ export async function bootstrapWorkspace(
         key: rec.key,
         payload: rec.payload,
         serverRevision: 1,
-        dirty: false,
         inflight: false,
         retries: 0,
+        queue: [],
       });
     }
   }
