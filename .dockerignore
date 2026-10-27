@@ -1,0 +1,17 @@
+node_modules
+.next
+.next-dev
+.git
+.gitignore
+.env
+.env.local
+.env*.local
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.md
+*.pdf
+.vscode
+.trae
+coverage
+test-report-*.html

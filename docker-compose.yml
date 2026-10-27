@@ -1,0 +1,50 @@
+# RiskControl 单机部署编排：PostgreSQL + 应用
+# 用法：
+#   1) 在服务器上创建 .env（参考 .env.production.example），至少设置
+#      POSTGRES_PASSWORD、NEXT_RC_AUTH_SECRET、RC_SEED_DEFAULT_PASSWORD
+#   2) docker compose up -d --build
+#
+# 说明：本地未安装 Docker，本文件尚未在本机验证，首次部署请留意容器日志。
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: risk_control
+      POSTGRES_USER: rc_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+    volumes:
+      - rc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rc_app -d risk_control"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # 仅容器网络内可达，不对公网暴露 5432
+    expose:
+      - "5432"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
+      DIRECT_DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
+      NEXT_RC_AUTH_SECRET: ${NEXT_RC_AUTH_SECRET:?请在 .env 中设置 NEXT_RC_AUTH_SECRET}
+      RC_ENABLE_DEV_MOCK_ACCOUNTS: "0"
+      RC_SEED_DEFAULT_PASSWORD: ${RC_SEED_DEFAULT_PASSWORD:?请在 .env 中设置 RC_SEED_DEFAULT_PASSWORD（首次初始化账号口令）}
+      RC_SEED_PASSWORDS: ${RC_SEED_PASSWORDS:-}
+      EMAIL_WEBHOOK_URL: ${EMAIL_WEBHOOK_URL:-}
+      WHATSAPP_WEBHOOK_URL: ${WHATSAPP_WEBHOOK_URL:-}
+      NOTIFICATION_SEND_TOKEN: ${NOTIFICATION_SEND_TOKEN:-}
+      NEXT_PUBLIC_STOCK_API_KEY: ${NEXT_PUBLIC_STOCK_API_KEY:-}
+    ports:
+      - "3000:3000"
+
+volumes:
+  rc_pgdata:

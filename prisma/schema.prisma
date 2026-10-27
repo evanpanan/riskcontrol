@@ -46,10 +46,13 @@ model AppUser {
   id                 String   @id @default(cuid())
   email              String   @unique
   passwordHash       String?
+  passwordSalt       String?
   displayName        String
   role               AppRole
   avatarInitials     String
+  avatarDataUrl      String?
   bdManagerFullName  String?  @unique
+  enabled            Boolean  @default(true)
   lastLoginAt        DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -201,4 +204,45 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId])
   @@index([action])
+}
+
+enum NotificationStatus {
+  SENT
+  PARTIAL
+  FAILED
+}
+
+// 通知投递记录：预警发送成功/部分/失败均落库，便于失败追溯与补发
+model NotificationLog {
+  id         String             @id @default(cuid())
+  channel    String
+  provider   String?
+  title      String
+  recipients String
+  status     NotificationStatus
+  error      String?
+  batchId    String?
+  type       String?
+  createdAt  DateTime           @default(now())
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+// 业务工作区记录：批次/客户/补仓/结算等运行态数据的服务端唯一事实来源。
+// 以 (kind, key) 复合主键承载多端共享的工作区状态，revision 用于乐观锁并发控制。
+//   kind: ledger（批次资金账本快照）| patches（补仓补丁）| client_status（客户状态覆盖）| meta（工作区元信息）
+//   key : 批次 ID / 客户 ID / 单例键
+model WorkspaceRecord {
+  kind      String
+  key       String
+  payload   Json
+  revision  Int      @default(0)
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([kind, key])
+  @@index([kind])
+  @@index([updatedAt])
 }
