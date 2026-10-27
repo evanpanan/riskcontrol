@@ -21,8 +21,14 @@
     "verify:server": "node --import tsx scripts/check-server-workflow.ts",
     "verify:boundaries": "node --import tsx scripts/check-remediation.ts",
     "db:bootstrap": "node --import tsx prisma/seed.ts",
-    "test": "node --import tsx scripts/check-remediation.ts && node --import tsx scripts/check-finance.ts && node --import tsx scripts/check-test-data.ts && node --import tsx scripts/check-notifications.ts && node --import tsx test_datascope_rbac.ts && node --import tsx scripts/check-export.ts",
-    "verify:export": "node --import tsx scripts/check-export.ts"
+    "test": "node --import tsx scripts/check-remediation.ts && node --import tsx scripts/check-finance.ts && node --import tsx scripts/check-test-data.ts && node --import tsx scripts/check-notifications.ts && node --import tsx test_datascope_rbac.ts && node --import tsx scripts/check-export.ts && npm run verify:ownership && npm run verify:history",
+    "verify:export": "node --import tsx scripts/check-export.ts",
+    "verify:ownership": "node --import tsx scripts/check-lot-ownership.ts",
+    "verify:operations": "node --import tsx scripts/check-operations.ts",
+    "risk:worker": "node --import tsx scripts/risk-worker.ts",
+    "db:backup": "node --import tsx scripts/backup-ledger.ts",
+    "db:reconcile": "node --import tsx scripts/reconcile-ledger.ts",
+    "verify:history": "node --import tsx scripts/check-history.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",

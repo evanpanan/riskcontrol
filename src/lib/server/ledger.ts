@@ -1,9 +1,11 @@
+import { viewBatch } from './ledgerProjection';
+import { recordValuation } from './valuationHistory';
 import { financialSettings } from "./settings";
 import { randomUUID, createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { applyFinanceCommand, type FinanceCommand } from '@/lib/financeCommands';
-import { initializeBatchFinance, syncBatchFinance, PRIORITY_RATIO, MIN_INVESTMENT_AMOUNT, type BatchLike } from '@/lib/riskEngine';
+import { initializeBatchFinance, syncBatchFinance, PRIORITY_RATIO, MIN_INVESTMENT_AMOUNT, type BatchLike, clientAccountCapital, clientAccountShares, assertTradeOwnership, getBatchMetrics } from '@/lib/riskEngine';
 import { contractDates, validDate } from '@/lib/contractDates';
 import type { AppSessionUser } from '@/types/auth';
 import { fetchRealtimeWithFallback } from '@/lib/quote/providers';
@@ -17,32 +19,7 @@ function positive(v: unknown, label: string) {
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1e12) throw new LedgerError(`${label}无效`);
   return v;
 }
-export function viewBatch(snapshot: BatchLike, user: AppSessionUser): BatchLike | null {
-  const b = structuredClone(snapshot);
-  if (user.role !== 'BD_MANAGER') return b;
-  const all = b.clients ?? [];
-  // Stable user IDs are required; display names cannot grant ownership.
-  const own = all.filter(c => c.bdUserId === user.id);
-  if (!own.length) return null;
-  const ids = new Set(own.map(c => c.id));
-  const activeTotal = all.filter(c => c.status !== 'SETTLED').reduce((n,c) => n + c.investmentAmount, 0);
-  const ownTotal = own.filter(c => c.status !== 'SETTLED').reduce((n,c) => n + c.investmentAmount, 0);
-  const factor = activeTotal > 0 ? ownTotal / activeTotal : 0;
-  b.clients = own;
-  if (b.finance) {
-    const f = b.finance;
-    for (const key of ['originalCapital','originalShares','originalPriority','remainingCapital','remainingShares'] as const) f[key] *= factor;
-    f.trades = f.trades.filter(t => !t.clientId || ids.has(t.clientId)).map(t => t.clientId ? t : { ...t, amount: t.amount * factor, shares: t.shares * factor });
-    f.rounds = f.rounds.map(r => {
-      const allocations = Object.fromEntries(Object.entries(r.allocations).filter(([id]) => ids.has(id)));
-      return { ...r, allocations, requiredAmount: Object.values(allocations).reduce((n,a)=>n+a.required,0), fulfilledAmount: Object.values(allocations).reduce((n,a)=>n+a.fulfilled,0), triggerMarketValue: r.triggerMarketValue * factor };
-    });
-    f.settlements = Object.fromEntries(Object.entries(f.settlements).filter(([id]) => ids.has(id)));
-  }
-  for (const key of ['initialTotalAmount','priorityAmount','subordinateAmount','totalShares','currentMarketValue','totalPnL','cumulativeMarginCalls'] as const) if (typeof b[key] === 'number') (b as any)[key] *= factor;
-  b.marginCalls = [];
-  return b;
-}
+export { viewBatch } from './ledgerProjection';
 export async function readLedger(user: AppSessionUser) {
   const rows = await prisma.ledgerBatch.findMany({ orderBy: { createdAt: 'desc' } });
   const settings=await financialSettings();
@@ -60,7 +37,7 @@ async function prepareCommand(b: BatchLike, c: FinanceCommand, user: AppSessionU
   if (c.type === 'topup' || c.type === 'settle' || c.type === 'client_add') {
     requireRole(user,['ADMIN','RISK_MANAGER','OPERATIONS']);
     const at = new Date(b.quoteAsOf ?? 0).getTime();
-    if (!Number.isFinite(at) || Date.now()-at > 15*60000) throw new LedgerError('参考价格已过期，请先刷新行情或由管理员确认参考价',409);
+    if (!Number.isFinite(at) || Date.now()-at > 15*60000 || at > Date.now()+60000) throw new LedgerError('参考价格已过期，请先刷新行情或由管理员确认参考价',409);
   }
   switch(c.type) {
     case 'topup': return { type: c.type, input: { amount: positive(p.amount,'补仓金额'), clientId: p.clientId, expectedRoundId: p.expectedRoundId, collateralType: p.collateralType === 'stock' ? 'stock':'cash', operatorName: user.displayName } };
@@ -131,6 +108,7 @@ export async function mutateLedger(user: AppSessionUser, body: any) {
     return await prisma.$transaction(async tx=>{
       const updated=await tx.ledgerBatch.updateMany({where:{id:batchId,revision:row.revision},data:{revision:{increment:1},snapshot:jsonValue(draft),batchNumber:draft.batchNumber}});
       if(updated.count!==1) throw new LedgerError('批次已更新，请刷新后重新确认',409);
+      await recordValuation(tx,draft);
       await tx.ledgerCommand.create({data:{id:commandId,actorId:user.id,requestHash,batchId,result:response}});
       await tx.auditLog.create({data:{actorId:user.id,actorEmail:user.email,role:user.role,action:({topup:'margin_topup',settle:'client_settle',client_update:'client_edit',exit_request:'client_exit_request',exit_cancel:'client_exit_cancel'} as Record<string,string>)[command.type] ?? command.type,resource:batchId,detail:jsonValue({commandId,revision:row.revision+1,input:command.input})}});
       return response;
@@ -152,6 +130,7 @@ export async function createLedgerBatch(user: AppSessionUser, input: any) {
   initializeBatchFinance(batch);batch.finance!.revision=0;
   await prisma.$transaction(async tx=>{
     await tx.ledgerBatch.create({data:{id:batch.id,batchNumber:batch.batchNumber,snapshot:jsonValue(batch)}});
+    await recordValuation(tx,batch);
     await tx.auditLog.create({data:{actorId:user.id,actorEmail:user.email,role:user.role,action:'batch_create',resource:batch.id}});
   });return batch;
 }
@@ -163,8 +142,9 @@ export async function refreshLedgerQuotes(user: AppSessionUser) {
     if(!quotes.has(symbol)) { try { quotes.set(symbol,await fetchRealtimeWithFallback(symbol)); } catch { quotes.set(symbol,null); } }
     const q=quotes.get(symbol); if(!q || !Number.isFinite(q.price) || q.price<=0) continue;
     b.currentStockPrice=q.price;b.currentDayChange=q.changePct;b.quoteFetchedAt=new Date(q.updatedAt).toISOString();b.quoteAsOf=q.marketTimestamp ? new Date(q.marketTimestamp).toISOString():null;b.quoteSource=q.provider;
+    const config=await financialSettings();b.thresholds={warningDropPercent:config.warningThreshold,marginDropPercent:config.marginThreshold};
     syncBatchFinance(b);b.finance!.revision=row.revision+1;
-    await prisma.ledgerBatch.updateMany({where:{id:row.id,revision:row.revision},data:{snapshot:jsonValue(b),revision:{increment:1}}});
+    await prisma.$transaction(async tx=>{const saved=await tx.ledgerBatch.updateMany({where:{id:row.id,revision:row.revision},data:{snapshot:jsonValue(b),revision:{increment:1}}});if(saved.count===1)await recordValuation(tx,b);});
   }
   if(rows.length && [...quotes.values()].every(q=>q===null)) throw new LedgerError('行情源不可用，保留原价；补仓和结算仍受价格时效校验',502);
   return readLedger(user);

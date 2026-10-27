@@ -11,6 +11,13 @@ async function main(){
  const tag=randomUUID().slice(0,8);
  async function user(role:string,name:string){const email=`${tag}-${name.replaceAll(" ","-")}@example.invalid`;const r=await call('/api/auth/manage',{email,displayName:name,role,bdManagerFullName:role==='BD_MANAGER'?`${name}-${tag}`:null,password:'LocalUser2026!Only'},admin);assert.equal(r.status,200,JSON.stringify(r.data));const l=await call('/api/auth/login',{identifier:email,password:'LocalUser2026!Only'});assert.equal(l.status,200);return{...r.data.user,cookie:l.cookie};}
  const bd=await user('BD_MANAGER','BD One');const other=await user('BD_MANAGER','BD Two');const ops=await user('OPERATIONS','Ops');const risk=await user('RISK_MANAGER','Risk');assert.equal((await call('/api/ledger',undefined,risk.cookie)).status,200);pass('new database accounts create and login');
+ assert.equal((await call('/api/ledger/history')).status,401);
+ assert.equal((await call('/api/internal/risk-monitor')).status,401);
+ assert.equal((await call('/api/health',undefined,bd.cookie)).status,403);
+ assert.equal((await call('/api/monitor/notifications',undefined,bd.cookie)).status,403);
+ assert.equal((await call('/api/health',undefined,admin)).status,503,'Disabled monitor must not look ready');
+ assert.equal((await call('/api/ledger/history?since=invalid',undefined,admin)).status,400);
+ pass('history/monitor/health require authorization; disabled monitoring reports not ready');
  assert.equal((await call('/api/auth/manage',undefined,bd.cookie)).status,403);
  const created=await call('/api/ledger',{operation:'create',input:{batchNumber:'FIX-'+tag,stockSymbol:'TEST',currentStockPrice:100,signDate:'2024-01-01',maturityDate:'2028-01-01'}},admin);assert.equal(created.status,200,JSON.stringify(created.data));let batch=created.data.batch;
  async function refresh(){const r=await call('/api/ledger',undefined,admin);assert.equal(r.status,200);batch=r.data.batches.find((x:any)=>x.id===batch.id);return batch;}
@@ -18,6 +25,7 @@ async function main(){
  for(const b of [bd,other]){const r=await cmd('client_add',{name:'Synthetic '+b.displayName,investmentAmount:70000,bdUserId:b.id,signDate:'2024-01-01'});assert.equal(r.status,200,JSON.stringify(r.data));await refresh();}
  assert.equal(batch.priorityAmount,140000);assert.equal(batch.initialTotalAmount,200000);pass('two subscriptions booked on server with institution matching capital');
  const late=await cmd('client_add',{name:'Synthetic Later Subscriber',investmentAmount:70000,bdUserId:bd.id,signDate:'2025-01-01'});assert.equal(late.status,200,JSON.stringify(late.data));await refresh();assert.equal(batch.clients.find((x:any)=>x.name==='Synthetic Later Subscriber').contractTerms.lockUpEndDate.slice(0,10),'2025-07-01');pass('later subscription has its own lock-up and preserves batch maturity');
+ const recorded=await call('/api/ledger/history',undefined,bd.cookie);assert.equal(recorded.status,200);assert(recorded.data.points.length>0);assert.equal(recorded.data.source,'RECORDED_LEDGER_VALUATIONS');pass('authenticated history endpoint returns persisted owner valuations');
  const own=batch.clients.find((x:any)=>x.bdUserId===bd.id);const theirs=batch.clients.find((x:any)=>x.bdUserId===other.id);
  const visible=await call('/api/ledger',undefined,bd.cookie);const text=JSON.stringify(visible.data);assert(text.includes(own.id));assert(!text.includes(theirs.id));assert(!text.includes(theirs.name));
  const filtered=await call('/api/data/clients/filter',{clients:[{id:'forged',name:'forged',bdManager:bd.bdManagerFullName}]},bd.cookie);assert(!JSON.stringify(filtered.data).includes('forged'));pass('BD ownership enforced before data leaves server; supplied rows ignored');

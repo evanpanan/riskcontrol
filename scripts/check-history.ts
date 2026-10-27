@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {aggregateValuations,type HistoryRecord} from '../src/lib/server/valuationHistory';
+import {authorizedCron,monitorRecipients} from '../src/lib/server/riskMonitor';
+const user=(id:string,role:'ADMIN'|'BD_MANAGER')=>({id,role,email:'fixture@example.invalid',displayName:'Fixture',avatarInitials:'FX'});
+const m=(value:number)=>({value,clientValue:value*0.7,institutionValue:value*0.3,pnl:0,priceStale:false});
+const row=(id:string,hour:number,all:number,own?:number):HistoryRecord=>({batchId:id,bucketAt:new Date(Date.UTC(2026,9,27,hour)),recordedAt:new Date(Date.UTC(2026,9,27,hour,10)),metrics:{all:m(all),owners:own===undefined?{}:{A:m(own)}}});
+const records=[row('first',8,100,40),row('second',9,200),row('first',10,120,50)];
+const admin=aggregateValuations(records,user('root','ADMIN'));assert.deepEqual(admin.map(p=>p.value),[100,300,320]);assert.deepEqual(admin.map(p=>p.recordedBatchCount),[1,2,2]);assert.equal(admin[1].priceStale,true,'old carried observation must be marked stale');assert.equal(admin[0].priceStale,false);
+const bd=aggregateValuations(records,user('A','BD_MANAGER'));assert.deepEqual(bd.map(p=>p.value),[40,50]);assert.deepEqual(aggregateValuations(records,user('B','BD_MANAGER')),[]);assert.deepEqual(aggregateValuations([],user('root','ADMIN')),[]);assert.equal(records[0].metrics && (records[0].metrics as any).all.priceStale,false);
+console.log('PASS history uses only observed points, carries known batches with stale warning, counts coverage, isolates owners and does not mutate stored records');
+assert(!authorizedCron('Bearer short',{CRON_SECRET:'short'}));assert(!monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'invalid'}).valid);assert(!monitorRecipients({}).valid);assert(monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'a@example.invalid,a@example.invalid'}).valid);assert.equal(monitorRecipients({MONITOR_NOTIFICATION_EMAILS:'a@example.invalid,a@example.invalid'}).emails.length,1);assert(!monitorRecipients({MONITOR_NOTIFICATION_EMAILS:Array.from({length:21},(_,i)=>`${i}@example.invalid`).join(',')}).valid);
+console.log('PASS scheduler requires strong credentials; monitoring rejects absent, invalid or excessive recipients');

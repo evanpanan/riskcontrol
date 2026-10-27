@@ -230,3 +230,41 @@ model AppConfig {
   value Json
   updatedAt DateTime @updatedAt
 }
+
+// One actual last-observed valuation per UTC hour. No backfilled synthetic history.
+model LedgerValuation {
+  id String @id
+  batchId String
+  bucketAt DateTime
+  recordedAt DateTime
+  metrics Json
+  @@index([bucketAt])
+  @@index([batchId, bucketAt])
+}
+
+model OperationalLease {
+  id String @id
+  token String
+  expiresAt DateTime
+}
+
+model MonitorRun {
+  id String @id
+  startedAt DateTime @default(now())
+  completedAt DateTime?
+  status String
+  detail Json?
+  @@index([startedAt])
+}
+
+model RiskNotification {
+  id String @id
+  batchId String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  error String?
+  @@index([status, createdAt])
+}

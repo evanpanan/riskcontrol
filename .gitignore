@@ -63,3 +63,8 @@ next-env.d.ts
 /.trae-html-share-packages/
 /scripts/xmax-6m-history.json
 /scripts/xmax-6m.log
+
+# Operational backup/reconciliation artifacts
+/backups/
+*.rcbackup
+*.partial-*
