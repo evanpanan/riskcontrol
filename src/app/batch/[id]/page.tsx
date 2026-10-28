@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { FINANCE_STORE_KEY, getMockData, reloadMockData, resetMockTestData } from "@/lib/mockData";
 import { BatchDetailContent } from "@/components/batch/BatchDetailContent";
@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 interface BatchDetailPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default function BatchDetailPage({ params }: BatchDetailPageProps) {
+  const { id } = use(params);
   const [batch, setBatch] = useState<ReturnType<typeof getMockData>["batches"][number] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -22,7 +23,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
     const load = (fromStorage: boolean) => {
       try {
         const data = fromStorage ? reloadMockData() : getMockData();
-        setBatch(data.batches.find((b) => b.id === params.id) ?? null);
+        setBatch(data.batches.find((b) => b.id === id) ?? null);
         setLoadError("");
         setTick((x) => x + 1);
       } catch (error) {
@@ -34,7 +35,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
           try {
             (window as any).__RISK_RESET_TEST_DATA__(true);
             const data = reloadMockData();
-            setBatch(data.batches.find((b) => b.id === params.id) ?? null);
+            setBatch(data.batches.find((b) => b.id === id) ?? null);
             setLoadError("");
             setTick((x) => x + 1);
             return;
@@ -57,7 +58,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("risk-control:finance-changed", onFinance);
     };
-  }, [params.id]);
+  }, [id]);
 
   if (loading) return <p role="status" className="p-6 text-muted-foreground">正在读取最新账本...</p>;
 
@@ -71,7 +72,7 @@ export default function BatchDetailPage({ params }: BatchDetailPageProps) {
       <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-6 space-y-4">
         <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
         <h2 className="text-xl font-bold mb-2">{loadError ? "账本读取失败" : "批次未找到"}</h2>
-        <p role={loadError ? "alert" : undefined} className="text-muted-foreground whitespace-pre-wrap mb-6">{loadError || `ID: ${params.id}`}</p>
+        <p role={loadError ? "alert" : undefined} className="text-muted-foreground whitespace-pre-wrap mb-6">{loadError || `ID: ${id}`}</p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {loadError && devMode && (
           <Button variant="destructive" className="mr-3" onClick={() => {

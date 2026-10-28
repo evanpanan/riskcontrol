@@ -14,50 +14,23 @@
  */
 
 import { readSharedSetting, writeSharedSetting } from "./settingsStore";
+import {
+  DEFAULT_FLASH_CRASH_THRESHOLDS,
+  evaluateFlashCrash,
+  sanitizeFlashCrashThresholds,
+  type FlashCrashDetail,
+  type FlashCrashStatus,
+  type FlashCrashThreshold,
+  type PriceSnapshot,
+} from "./flashCrashCore";
 
-/** 单条价格快照 */
-export interface PriceSnapshot {
-  /** 毫秒时间戳 */
-  ts: number;
-  /** 当前股价 */
-  price: number;
-}
-
-/** 闪跌阈值配置 */
-export interface FlashCrashThreshold {
-  /** 时间窗口（分钟） */
-  windowMinutes: number;
-  /** 跌幅阈值（百分比，如 10 表示 10%） */
-  dropPercent: number;
-  /** 是否启用 */
-  enabled: boolean;
-}
-
-/** 闪跌检测结果 */
-export interface FlashCrashStatus {
-  /** 是否触发闪跌预警 */
-  triggered: boolean;
-  /** 触发的阈值详情 */
-  triggeredThresholds: Array<{
-    windowMinutes: number;
-    dropPercent: number;
-    /** 实际窗口内跌幅% */
-    actualDropPercent: number;
-    /** 窗口内最高价 */
-    highPrice: number;
-    /** 当前价 */
-    currentPrice: number;
-  }>;
-  /** 所有阈值的检测明细 */
-  details: Array<{
-    windowMinutes: number;
-    dropPercent: number;
-    actualDropPercent: number;
-    highPrice: number;
-    currentPrice: number;
-    triggered: boolean;
-  }>;
-}
+export type {
+  FlashCrashDetail,
+  FlashCrashStatus,
+  FlashCrashThreshold,
+  PriceSnapshot,
+};
+export { DEFAULT_FLASH_CRASH_THRESHOLDS };
 
 const FLASH_CRASH_LS_KEY = "risk_control_flash_crash_thresholds";
 const PRICE_HISTORY_LS_KEY = "risk_control_price_history";
@@ -65,12 +38,6 @@ const PRICE_HISTORY_LS_KEY = "risk_control_price_history";
 const HISTORY_TTL_MS = 2 * 60 * 60 * 1000;
 /** 单批次最多保留快照数（防止内存膨胀） */
 const MAX_SNAPSHOTS_PER_BATCH = 2000;
-
-/** 默认闪跌阈值 */
-export const DEFAULT_FLASH_CRASH_THRESHOLDS: FlashCrashThreshold[] = [
-  { windowMinutes: 5, dropPercent: 10, enabled: true },
-  { windowMinutes: 15, dropPercent: 15, enabled: true },
-];
 
 /**
  * 获取已配置的闪跌阈值（机构级共享配置）
@@ -80,9 +47,7 @@ export function getFlashCrashThresholds(): FlashCrashThreshold[] {
   try {
     const raw = readSharedSetting(FLASH_CRASH_LS_KEY);
     if (!raw) return DEFAULT_FLASH_CRASH_THRESHOLDS;
-    const parsed = JSON.parse(raw) as FlashCrashThreshold[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_FLASH_CRASH_THRESHOLDS;
-    return parsed;
+    return sanitizeFlashCrashThresholds(JSON.parse(raw));
   } catch {
     return DEFAULT_FLASH_CRASH_THRESHOLDS;
   }
@@ -93,11 +58,7 @@ export function getFlashCrashThresholds(): FlashCrashThreshold[] {
  */
 export function saveFlashCrashThresholds(thresholds: FlashCrashThreshold[]): void {
   if (typeof window === "undefined") return;
-  // 校验
-  const valid = thresholds
-    .filter((t) => t.windowMinutes > 0 && t.dropPercent > 0 && t.dropPercent <= 100)
-    .sort((a, b) => a.windowMinutes - b.windowMinutes);
-  writeSharedSetting(FLASH_CRASH_LS_KEY, JSON.stringify(valid));
+  writeSharedSetting(FLASH_CRASH_LS_KEY, JSON.stringify(sanitizeFlashCrashThresholds(thresholds)));
 }
 
 /**
@@ -182,65 +143,16 @@ export function clearPriceHistory(): void {
 }
 
 /**
- * 检测闪跌：回溯指定时间窗口，计算从窗口内最高价到当前价的跌幅
+ * 检测闪跌：回溯指定时间窗口，计算从窗口内最高价到当前价的跌幅。
+ * 判定逻辑与服务端监控任务共用 evaluateFlashCrash，保证两端口径一致。
  * @param batchId 批次 ID
  * @param currentPrice 当前股价
- * @param thresholds 阈值列表，默认读取 localStorage
+ * @param thresholds 阈值列表，默认读取共享配置
  */
 export function detectFlashCrash(
   batchId: string,
   currentPrice: number,
   thresholds: FlashCrashThreshold[] = getFlashCrashThresholds()
 ): FlashCrashStatus {
-  const history = getPriceHistory(batchId);
-  const now = Date.now();
-  const details: FlashCrashStatus["details"] = [];
-  const triggeredThresholds: FlashCrashStatus["triggeredThresholds"] = [];
-
-  for (const t of thresholds) {
-    if (!t.enabled) continue;
-    const windowMs = t.windowMinutes * 60 * 1000;
-    const windowStart = now - windowMs;
-    // 窗口内的快照（含当前价参与比较）
-    const inWindow = history.filter((s) => s.ts >= windowStart);
-    if (inWindow.length === 0) {
-      details.push({
-        windowMinutes: t.windowMinutes,
-        dropPercent: t.dropPercent,
-        actualDropPercent: 0,
-        highPrice: currentPrice,
-        currentPrice,
-        triggered: false,
-      });
-      continue;
-    }
-    // 窗口内最高价
-    const highPrice = Math.max(...inWindow.map((s) => s.price), currentPrice);
-    const actualDropPercent =
-      highPrice > 0 ? ((highPrice - currentPrice) / highPrice) * 100 : 0;
-    const triggered = actualDropPercent + Number.EPSILON >= t.dropPercent - 1e-8;
-    details.push({
-      windowMinutes: t.windowMinutes,
-      dropPercent: t.dropPercent,
-      actualDropPercent,
-      highPrice,
-      currentPrice,
-      triggered,
-    });
-    if (triggered) {
-      triggeredThresholds.push({
-        windowMinutes: t.windowMinutes,
-        dropPercent: t.dropPercent,
-        actualDropPercent,
-        highPrice,
-        currentPrice,
-      });
-    }
-  }
-
-  return {
-    triggered: triggeredThresholds.length > 0,
-    triggeredThresholds,
-    details,
-  };
+  return evaluateFlashCrash(getPriceHistory(batchId), currentPrice, thresholds, Date.now());
 }

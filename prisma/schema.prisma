@@ -262,3 +262,49 @@ model FinanceCommit {
   @@index([createdAt])
   @@index([key])
 }
+
+// 登录限流：进程内 Map 在多实例部署时各算各的，无法拦住分布式撞库。
+// 落库后所有实例共享同一份计数窗口。
+model AuthThrottle {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime
+  updatedAt   DateTime @updatedAt
+
+  @@index([windowStart])
+}
+
+// 服务端行情采集点：闪跌监控必须独立于浏览器持续运行，
+// 因此价格历史落库，浏览器关闭期间仍可连续检测。
+model QuotePricePoint {
+  id        String   @id @default(cuid())
+  batchId   String
+  symbol    String
+  price     Float
+  source    String
+  asOf      DateTime
+  createdAt DateTime @default(now())
+
+  @@index([batchId, asOf])
+  @@index([createdAt])
+}
+
+// 闪跌告警：dedupeKey 保证同一批次同一阈值在冷却期内只告警一次，
+// delivered 记录实际送达结果，失败可由下一轮重试。
+model FlashCrashAlert {
+  id                String   @id @default(cuid())
+  batchId           String
+  symbol            String
+  windowMinutes     Int
+  dropPercent       Float
+  actualDropPercent Float
+  highPrice         Float
+  currentPrice      Float
+  dedupeKey         String   @unique
+  delivered         Boolean  @default(false)
+  deliveryNote      String?
+  createdAt         DateTime @default(now())
+
+  @@index([batchId, createdAt])
+  @@index([delivered])
+}

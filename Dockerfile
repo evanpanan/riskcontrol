@@ -1,4 +1,4 @@
-# RiskControl 生产镜像（Next.js 14 + Prisma）
+# RiskControl 生产镜像（Next.js 15 + Prisma）
 # 说明：本地未安装 Docker，本文件尚未在本机构建验证，首次在服务器构建时请留意日志。
 
 FROM node:20-bookworm-slim AS base
@@ -38,5 +38,7 @@ COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
 EXPOSE 3000
 
-# 启动前先跑迁移 + 账号初始化 + 上线自检，再启动服务
-CMD ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed && npm run preflight && npm run start"]
+# 启动前先跑迁移 + 上线自检，再启动服务。
+# 账号初始化（seed）改为一次性、需显式授权：默认不执行，仅当 RC_ALLOW_SEED=1 时运行，
+# 避免容器每次启动都把演示账号 / 默认口令重新写回生产库。
+CMD ["sh", "-c", "npx prisma migrate deploy && if [ \"$RC_ALLOW_SEED\" = \"1\" ]; then npx prisma db seed; else echo '[seed] skipped (RC_ALLOW_SEED != 1)'; fi && npm run preflight && npm run start"]

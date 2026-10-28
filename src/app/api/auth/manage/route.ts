@@ -86,7 +86,7 @@ async function requireAdminSession(req: NextRequest): Promise<{ ok: boolean; res
   remaining.push({ at: now });
   RATE_BUCKET.set(ip, remaining);
 
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
   const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return {

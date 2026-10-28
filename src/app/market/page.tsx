@@ -58,7 +58,7 @@ import { useCallback, useState, useEffect, useMemo, useRef } from "react";
 import { Reveal } from "@/components/ui/Reveal";
 import { RiskLevel } from "@prisma/client";
 import { getWebAlertSettings } from "@/lib/webAlertSettings";
-import { getLiveQuoteSettings, DEFAULT_LIVE_QUOTE, type BrowserQuote, fetchQuoteBrowser } from "@/lib/liveQuote";
+import { getLiveQuoteSettings, DEFAULT_LIVE_QUOTE, type BrowserQuote, fetchQuoteBrowser, quoteSourceLabel } from "@/lib/liveQuote";
 import { BD_MANAGERS } from "@/lib/mockData";
 import { MonthlyBatchesTrend } from "@/components/dashboard/MonthlyBatchesTrend";
 
@@ -621,7 +621,7 @@ export default function MarketPage() {
                 ? quoteProviderLabel(realtime.provider)
                 : "实时行情"}
               <span className="text-[10px] opacity-70 font-mono">
-                [{realtime?.source === "LIVE" ? "实时" : realtime?.source === "CACHE" ? "缓存" : realtime?.source === "OFFLINE" ? "离线" : "—"}]
+                [{quoteSourceLabel(realtime)}]
               </span>
             </Badge>
             <Button

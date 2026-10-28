@@ -129,16 +129,52 @@ export function setLiveQuoteSettings(next: LiveQuoteSettings): void {
 }
 
 export interface BrowserQuote {
-  source: "LIVE" | "CACHE" | "OFFLINE";
+  source: "LIVE" | "CACHE" | "STALE" | "OFFLINE";
   price: number;
   changePct: number;
   up: boolean;
   provider?: string;
   updatedAt: number;
+  /** 行情失效标记：缓存超期或退回离线价时为 true，禁止进入关键风控计算。 */
+  stale: boolean;
   data?: RealtimeQuote;
 }
 
-const FALLBACK_PRICES: Record<string, { price: number; prevClose: number }> = {};
+/**
+ * 缓存行情有效期。超过该时长视为失效：可以继续展示（并明确标注），
+ * 但不得作为批次价格 / 风控判定的输入。
+ */
+export const QUOTE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** 行情是否可用于关键计算：必须是实时行情，或仍在有效期内的缓存。 */
+export function isQuoteUsableForRiskDecision(q: BrowserQuote | null | undefined): boolean {
+  if (!q) return false;
+  if (q.stale) return false;
+  return q.source === "LIVE" || q.source === "CACHE";
+}
+
+/** 行情新鲜度（毫秒）；用于界面展示「多久之前」。 */
+export function quoteAgeMs(q: BrowserQuote | null | undefined, nowMs: number = Date.now()): number | null {
+  if (!q || !Number.isFinite(q.updatedAt) || q.updatedAt <= 0) return null;
+  return Math.max(0, nowMs - q.updatedAt);
+}
+
+/** 行情来源中文标签，用于界面明确标注数据可信度。 */
+export function quoteSourceLabel(q: BrowserQuote | null | undefined): string {
+  if (!q) return "未知";
+  switch (q.source) {
+    case "LIVE":
+      return "实时行情";
+    case "CACHE":
+      return "最近成功缓存";
+    case "STALE":
+      return "缓存已过期";
+    case "OFFLINE":
+      return "离线占位价";
+    default:
+      return "未知";
+  }
+}
 
 function loadCached(symbol: string): BrowserQuote | null {
   try {
@@ -148,7 +184,9 @@ function loadCached(symbol: string): BrowserQuote | null {
     const parsed = JSON.parse(raw) as Record<string, BrowserQuote>;
     const entry = parsed?.[symbol.trim().toUpperCase()];
     if (!entry) return null;
-    return entry;
+    // 旧版本缓存可能没有 stale 字段，读取时按时间戳补齐，避免把超期缓存当实时价使用。
+    const fresh = Date.now() - Number(entry.updatedAt || 0) <= QUOTE_CACHE_TTL_MS;
+    return { ...entry, stale: !fresh };
   } catch {
     return null;
   }
@@ -165,13 +203,24 @@ function saveCached(symbol: string, q: BrowserQuote): void {
   } catch {}
 }
 
+function offlineQuote(reason: string): BrowserQuote {
+  const fallback = { price: 41.88, prevClose: 41.73 };
+  const chg = ((fallback.price - fallback.prevClose) / fallback.prevClose) * 100;
+  // 离线价仅用于占位展示，一律标记失效；调用方不得据此做风控判定。
+  void reason;
+  return {
+    source: "OFFLINE",
+    price: fallback.price,
+    changePct: chg,
+    up: chg >= 0,
+    updatedAt: Date.now(),
+    stale: true,
+  };
+}
+
 export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
   const s = (symbol || "").trim().toUpperCase();
-  if (!s) {
-    const fallback = { price: 41.88, prevClose: 41.73 };
-    const chg = ((fallback.price - fallback.prevClose) / fallback.prevClose) * 100;
-    return { source: "OFFLINE", price: fallback.price, changePct: chg, up: chg >= 0, updatedAt: Date.now() };
-  }
+  if (!s) return offlineQuote("empty-symbol");
   try {
     const res = await fetch(`/api/quote/realtime?symbol=${encodeURIComponent(s)}`, {
       headers: { Accept: "application/json" },
@@ -182,6 +231,9 @@ export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
       throw new Error((d as { error?: string }).error || "empty");
     }
     const live = d as RealtimeQuote;
+    if (!Number.isFinite(Number(live.price)) || Number(live.price) <= 0) {
+      throw new Error("invalid-price");
+    }
     const q: BrowserQuote = {
       source: "LIVE",
       price: Number(live.price),
@@ -189,6 +241,7 @@ export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
       up: Number(live.changePct) >= 0,
       provider: live.provider,
       updatedAt: Date.now(),
+      stale: false,
       data: live,
     };
     saveCached(s, q);
@@ -196,17 +249,10 @@ export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
   } catch {
     const cached = loadCached(s);
     if (cached) {
-      return { ...cached, source: "CACHE" };
+      // 缓存未超期沿用（标注为 CACHE）；超期则以 STALE 返回，界面提示失效、计算侧拦截。
+      return { ...cached, source: cached.stale ? "STALE" : "CACHE", stale: cached.stale };
     }
-    const fallback = FALLBACK_PRICES[s] ?? { price: 41.88, prevClose: 41.73 };
-    const chg = ((fallback.price - fallback.prevClose) / fallback.prevClose) * 100;
-    return {
-      source: "OFFLINE",
-      price: fallback.price,
-      changePct: chg,
-      up: chg >= 0,
-      updatedAt: Date.now(),
-    };
+    return offlineQuote("no-cache");
   }
 }
 

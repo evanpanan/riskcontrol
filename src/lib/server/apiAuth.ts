@@ -73,7 +73,7 @@ export async function resolveSessionUserFromToken(
 
 /** 从 HttpOnly 会话 Cookie 解析当前登录用户；未登录返回 null。 */
 export async function resolveSessionUser(): Promise<AppSessionUser | null> {
-  const token = cookies().get(RC_SESSION_COOKIE)?.value;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value;
   return resolveSessionUserFromToken(token);
 }
 

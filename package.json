@@ -15,7 +15,9 @@
     "preflight": "tsx scripts/preflight.ts",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:backup": "tsx scripts/backup-ledger.ts",
     "verify:finance": "tsx scripts/check-finance.ts",
+    "verify:hardening": "tsx scripts/check-hardening.ts",
     "verify:test-data": "tsx scripts/check-test-data.ts",
     "verify:notifications": "tsx scripts/check-notifications.ts",
     "db:generate": "prisma generate",
@@ -35,16 +37,16 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "exceljs": "^4.4.0",
     "lightweight-charts": "^4.2.3",
     "lucide-react": "^0.439.0",
-    "next": "14.2.35",
+    "next": "15.5.28",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.12.7",
     "sonner": "^2.0.8",
     "tailwind-merge": "^2.5.2",
-    "tailwindcss-animate": "^1.0.7",
-    "xlsx": "^0.18.5"
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
     "@types/node": "^20.16.5",
@@ -52,11 +54,18 @@
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.0",
-    "eslint-config-next": "14.2.35",
-    "postcss": "^8.4.45",
+    "eslint-config-next": "15.5.28",
+    "postcss": "^8.5.23",
     "prisma": "^5.18.0",
     "tailwindcss": "^3.4.10",
     "tsx": "^4.23.13",
     "typescript": "^5.5.4"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "source-map-js": "^1.2.2",
+    "uuid": "^11.1.1",
+    "minimatch@^9": "^9.0.7",
+    "postcss-selector-parser@^6": "^6.1.5"
   }
 }

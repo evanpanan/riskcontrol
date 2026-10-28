@@ -43,7 +43,7 @@ import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { notifyBatchChannel } from "@/lib/notifier";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime, formatPercent } from "@/lib/utils";
 import { Batch, BatchStatus, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
-import * as XLSX from "xlsx";
+import * as XLSX from "@/lib/excelExport";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/auth/RoleGate";
@@ -481,7 +481,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     return enriched;
   }, [filteredBase, mv, search, bdFilter, statusFilter, splitFilter, split, batch, metrics]);
 
-  const handleExportDetail = () => {
+  const handleExportDetail = async () => {
     try {
       const visible = filteredClients.filter((c: any) => !c.__redacted);
       if (visible.length === 0) {
@@ -519,7 +519,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       XLSX.utils.book_append_sheet(wb, ws, "批次客户明细");
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const fileName = `批次客户明细_${batch.batchNumber ?? batch.id}_${stamp}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+      await XLSX.writeFile(wb, fileName);
       const redactedSkipped = filteredClients.length - visible.length;
       toast.success(
         `导出成功：${fileName}（共 ${visible.length} 位客户${redactedSkipped > 0 ? `，已跳过 ${redactedSkipped} 条当前角色不可见记录` : ""}）`

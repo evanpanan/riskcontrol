@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { getMockData, commitBatchFinance, createNewBatch, reloadMockData, nextClientNo, nextSubAccountNo, FINANCE_STORE_KEY, FINANCE_STORE_KEY_LEGACY } from "@/lib/mockData";
 import { triggerClientAddedAlert } from "@/lib/notifier";
-import { getLiveQuoteSettings, fetchQuoteBrowser } from "@/lib/liveQuote";
+import { getLiveQuoteSettings, fetchQuoteBrowser, isQuoteUsableForRiskDecision, quoteAgeMs, quoteSourceLabel } from "@/lib/liveQuote";
 import { quoteProviderLabel } from "@/lib/quote/providers";
 import { formatCurrency, cn, formatDate, formatPercent, calculateTradingWindows } from "@/lib/utils";
 import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit, PRIORITY_RATIO, SUBORDINATE_RATIO, calculateBatchStatus, calculateCurrentMarketValue } from "@/lib/riskEngine";
@@ -35,7 +35,7 @@ import { filterClientsByRole, type ClientLike, canCreateBatch } from "@/lib/auth
 import { APP_ROLES } from "@/types/auth";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { RoleGate } from "@/components/auth/RoleGate";
-import * as XLSX from "xlsx";
+import * as XLSX from "@/lib/excelExport";
 import {
   Users,
   Search,
@@ -780,7 +780,7 @@ export default function ClientsPage() {
         <div className="flex items-center gap-2">
           {!isBdManager && (
             <>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => {
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={async () => {
                 try {
                   const all = allClients;
                   const rows: any[] = [];
@@ -861,7 +861,7 @@ export default function ClientsPage() {
                   ];
                   XLSX.utils.book_append_sheet(wb, sheet2, "客户批次参与明细（每批次一行）");
                   const fileName = `客户档案_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${new Date().toTimeString().slice(0,5).replace(":","")}.xlsx`;
-                  XLSX.writeFile(wb, fileName);
+                  await XLSX.writeFile(wb, fileName);
                   toast.success(`客户表导出成功：${fileName}（共 ${rows.length} 位自然人 / ${detailRows.length} 条批次参与记录）`);
                 } catch (err) {
                   console.error(err);
@@ -3075,11 +3075,15 @@ export default function ClientsPage() {
                       try {
                         const q = await fetchQuoteBrowser(sym);
                         const p = Number(q?.price);
-                        if (Number.isFinite(p) && p > 0) {
+                        // 建仓价直接进入风控计算：过期缓存价与离线占位价一律不得写入，必须人工确认。
+                        if (!isQuoteUsableForRiskDecision(q)) {
+                          const staleAge = quoteAgeMs(q);
+                          toast.error(
+                            `行情已失效（${quoteSourceLabel(q)}${staleAge !== null ? `，${Math.round(staleAge / 60000)} 分钟前` : ""}），不可用于建仓，请稍后重试或手动输入。`
+                          );
+                        } else if (Number.isFinite(p) && p > 0) {
                           setCreateBatchForm((prev) => prev.stockSymbol === sym ? { ...prev, currentStockPrice: Number(p).toFixed(2) } : prev);
-                          const label =
-                            q?.source === "CACHE" ? "缓存报价" :
-                            q?.source === "LIVE" ? "实时报价" : "离线报价";
+                          const label = q?.source === "CACHE" ? "缓存报价" : "实时报价";
                           toast.success(`${label}：${sym} = $${Number(p).toFixed(2)}${q?.provider ? ` (${quoteProviderLabel(q.provider)})` : ""}`);
                         } else {
                           toast.error(`抓取失败：${sym} 未返回有效价格，请手动输入。`);

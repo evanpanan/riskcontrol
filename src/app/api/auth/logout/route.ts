@@ -7,7 +7,7 @@ import { prisma } from '@/lib/prisma';
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
 
   // 退出动作的审计由服务端在同一请求内落库：客户端先发审计再退出会与撤销会话竞态，
   // 导致这条最关键的记录被 401 丢掉。

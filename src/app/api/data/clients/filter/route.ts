@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const token = cookies().get("rc_session_v1")?.value;
+    const token = (await cookies()).get("rc_session_v1")?.value;
     const session = await resolveSessionUserFromToken(token);
     if (!session) {
       return NextResponse.json({ error: "未登录或会话已过期", filtered: [] }, { status: 401 });

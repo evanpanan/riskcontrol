@@ -37,7 +37,7 @@ import { Logo } from "@/components/branding/Logo";
 import Link from "next/link";
 import { getNotificationLogs, LAST_NOTIFICATIONS_KEY, type NotificationLogEntry, type NotificationPayload } from "@/lib/notifier";
 import { toast } from "sonner";
-import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo } from "@/lib/liveQuote";
+import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo, quoteSourceLabel } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { KLineDialog } from "@/components/quote/KLineDialog";
 import { quoteProviderLabel } from "@/lib/quote/providers";
@@ -375,6 +375,12 @@ export function TopBar() {
                   {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
                   {up ? "+" : ""}{Number(chg || 0).toFixed(2)}%
                 </span>
+                {liveQuote?.stale && (
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold text-warning">
+                    <AlertTriangle className="h-3 w-3" />
+                    行情失效
+                  </span>
+                )}
               </button>
             );
             return (
@@ -394,8 +400,13 @@ export function TopBar() {
                     </p>
                     {liveQuote?.provider && (
                       <p className="text-muted-foreground mt-1">
-                        数据源：{quoteProviderLabel(liveQuote.provider)}
-                        {liveQuote.source !== "LIVE" && `（${liveQuote.source === "CACHE" ? "最近成功缓存" : "离线数据"}）`}
+                        数据源：{quoteProviderLabel(liveQuote.provider)}（{quoteSourceLabel(liveQuote)}）
+                      </p>
+                    )}
+                    {liveQuote && (
+                      <p className="text-muted-foreground mt-1">
+                        行情时间：{new Date(liveQuote.updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}
+                        {liveQuote.stale && '（已失效，不参与风控计算）'}
                       </p>
                     )}
                     <p className="text-primary mt-1">点击打开 K 线图（多周期切换）</p>

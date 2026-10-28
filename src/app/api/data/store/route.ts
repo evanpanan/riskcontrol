@@ -10,6 +10,7 @@ import {
   mergeLedgerWriteForBd,
   redactLedgerForBd,
 } from '@/lib/server/workspaceScope';
+import { financeContentChanged } from '@/lib/server/ledgerGuard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -134,13 +135,6 @@ interface AuditIntent {
 const MAX_OP_ID_LENGTH = 128;
 const MAX_AUDIT_ENTRIES = 20;
 
-/** 读取账本中的资金版本号；用于判定本次写入是否属于「资金写入」。 */
-function financeRevisionOf(payload: unknown): number | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const fin = (payload as { batch?: { finance?: { revision?: unknown } } }).batch?.finance;
-  return typeof fin?.revision === 'number' && Number.isFinite(fin.revision) ? fin.revision : null;
-}
-
 /** 规范化 JSON：对象键排序，保证同一请求内容的摘要稳定（不受键序影响）。 */
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -259,11 +253,23 @@ export async function PUT(req: Request) {
         return { ok: false as const, forbidden: '仅可修改已存在的本人名下批次账本' };
       }
 
-      // 资金写入必须携带幂等标识。是否属于资金写入由服务端依据 finance.revision 是否推进判定，
-      // 不依赖客户端声明，杜绝「账本被改但无幂等登记、无审计」的写入。
+      // 1) 先做归属校验与白名单合并，且必须发生在返回任何冲突数据之前：
+      //    否则知道批次键的商务经理可借版本不匹配拿到他人客户与财务账本原文。
+      let nextPayload: Prisma.InputJsonValue = payload;
+      let blockedFields: Array<{ clientId: string; field: string }> = [];
+      if (bdWrite && kind === 'ledger' && existing) {
+        const merged = mergeLedgerWriteForBd(existing.payload, payload, session.bdManagerFullName);
+        if (!merged.ok) {
+          return { ok: false as const, forbidden: merged.error ?? '当前角色不可修改该账本' };
+        }
+        nextPayload = JSON.parse(JSON.stringify(merged.payload)) as Prisma.InputJsonValue;
+        blockedFields = merged.blocked ?? [];
+      }
+
+      // 2) 资金写入必须携带幂等标识。判定依据是【合并后资金内容的实质变化】，
+      //    不再仅凭客户端上送的 finance.revision（改内容但保留版本号无法绕过），也不依赖客户端声明。
       const financialWrite =
-        kind === 'ledger' &&
-        (existing === null || financeRevisionOf(payload) !== financeRevisionOf(existing.payload));
+        kind === 'ledger' && (existing === null || financeContentChanged(existing.payload, nextPayload));
       if (financialWrite && !opId) {
         return { ok: false as const, missingOpId: true as const };
       }
@@ -283,9 +289,6 @@ export async function PUT(req: Request) {
           return { ok: false as const, idempotencyConflict: true as const };
         }
       }
-
-      // 被白名单拦截的受保护字段（商务经理试图改动资金 / 结算 / 归属字段）。
-      let blockedFields: Array<{ clientId: string; field: string }> = [];
 
       // 记账、审计与幂等登记必须在同一事务内提交：任一步失败则整体回滚。
       const commitAuditAndIdempotency = async (finalRevision: number) => {
@@ -347,6 +350,15 @@ export async function PUT(req: Request) {
         }
       };
 
+      // 冲突响应按角色脱敏：与正常读取保持一致，绝不向商务经理回带他人账本原文。
+      const conflictOf = (snapshot: unknown, revision: number) => ({
+        payload:
+          kind === 'ledger' && bdWrite
+            ? redactLedgerForBd(snapshot, session.bdManagerFullName ?? '')
+            : snapshot,
+        revision,
+      });
+
       if (!existing) {
         try {
           const created = await tx.workspaceRecord.create({
@@ -364,27 +376,14 @@ export async function PUT(req: Request) {
             });
             return {
               ok: false as const,
-              conflict: { payload: current?.payload ?? null, revision: current?.revision ?? 0 },
+              conflict: conflictOf(current?.payload ?? null, current?.revision ?? 0),
             };
           }
           throw createErr;
         }
       }
       if (baseRevision === null || baseRevision !== existing.revision) {
-        return {
-          ok: false as const,
-          conflict: { payload: existing.payload, revision: existing.revision },
-        };
-      }
-      // 商务经理写账本：只接受自有客户条目的变更，批次级字段与他人客户行以服务端为准。
-      let nextPayload: Prisma.InputJsonValue = payload;
-      if (bdWrite && kind === 'ledger') {
-        const merged = mergeLedgerWriteForBd(existing.payload, payload, session.bdManagerFullName);
-        if (!merged.ok) {
-          return { ok: false as const, forbidden: merged.error ?? '当前角色不可修改该账本' };
-        }
-        nextPayload = JSON.parse(JSON.stringify(merged.payload)) as Prisma.InputJsonValue;
-        blockedFields = merged.blocked ?? [];
+        return { ok: false as const, conflict: conflictOf(existing.payload, existing.revision) };
       }
       // 版本比较必须落在 UPDATE 的 WHERE 条件里，仅靠事务内「先读后比」在并发下会丢失更新：
       // 两个事务读到同一 revision 时都能通过 check，最终只有一份 payload 生效。
@@ -399,7 +398,7 @@ export async function PUT(req: Request) {
         });
         return {
           ok: false as const,
-          conflict: { payload: current?.payload ?? null, revision: current?.revision ?? 0 },
+          conflict: conflictOf(current?.payload ?? null, current?.revision ?? 0),
         };
       }
       await commitAuditAndIdempotency(existing.revision + 1);

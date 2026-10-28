@@ -12,6 +12,14 @@ import {
 } from '@/lib/auth/password';
 import type { ResolvedAnyAccount } from '@/lib/auth/password';
 import { registerSession } from '@/lib/server/sessionRegistry';
+import { prisma } from '@/lib/prisma';
+import {
+  hashPasswordPbkdf2,
+  isPbkdf2Hash,
+  verifyPbkdf2,
+  generateSaltHex,
+} from '@/lib/server/passwordKdf';
+import { hitLoginThrottle, clearLoginThrottle } from '@/lib/server/loginThrottle';
 
 export const runtime = 'nodejs';
 
@@ -21,13 +29,9 @@ interface LoginRequestBody {
   remember?: unknown;
 }
 
-type ThrottleKey = string;
-interface ThrottleEntry { first: number; count: number; }
 const LOGIN_THROTTLE_WINDOW_MS = 60_000;
 const LOGIN_THROTTLE_MAX_PER_IP = 10;
 const LOGIN_THROTTLE_MAX_PER_ACCOUNT = 5;
-const IP_RATE_LIMIT = new Map<string, ThrottleEntry>();
-const ACCOUNT_RATE_LIMIT = new Map<ThrottleKey, ThrottleEntry>();
 
 function getClientIp(req: NextRequest): string {
   const fwd = req.headers.get('x-forwarded-for');
@@ -40,36 +44,46 @@ function getClientIp(req: NextRequest): string {
   return 'unknown-ip';
 }
 
-function hitRateLimit(ip: string, accountKey: string | null): boolean {
-  const now = Date.now();
-  let ipE = IP_RATE_LIMIT.get(ip);
-  if (!ipE || now - ipE.first > LOGIN_THROTTLE_WINDOW_MS) {
-    ipE = { first: now, count: 0 };
-    IP_RATE_LIMIT.set(ip, ipE);
-  }
-  ipE.count += 1;
-  if (ipE.count > LOGIN_THROTTLE_MAX_PER_IP) return true;
+/**
+ * 登录限流（跨实例共享）：IP 维度 + 账号维度 + IP×账号维度。
+ * 单看 IP 挡不住分布式撞库，单看账号挡不住批量撞库，三个维度叠加才有效。
+ */
+async function hitRateLimit(ip: string, accountKey: string | null): Promise<boolean> {
+  const rules = [
+    { key: `ip:${ip}`, max: LOGIN_THROTTLE_MAX_PER_IP, windowMs: LOGIN_THROTTLE_WINDOW_MS },
+  ];
   if (accountKey) {
-    const k: ThrottleKey = `${ip}::${accountKey}`;
-    let a = ACCOUNT_RATE_LIMIT.get(k);
-    if (!a || now - a.first > LOGIN_THROTTLE_WINDOW_MS) {
-      a = { first: now, count: 0 };
-      ACCOUNT_RATE_LIMIT.set(k, a);
-    }
-    a.count += 1;
-    if (a.count > LOGIN_THROTTLE_MAX_PER_ACCOUNT) return true;
+    rules.push(
+      { key: `acct:${accountKey}`, max: LOGIN_THROTTLE_MAX_PER_ACCOUNT, windowMs: LOGIN_THROTTLE_WINDOW_MS },
+      { key: `ipacct:${ip}::${accountKey}`, max: LOGIN_THROTTLE_MAX_PER_ACCOUNT, windowMs: LOGIN_THROTTLE_WINDOW_MS }
+    );
   }
-  return false;
+  return hitLoginThrottle(rules);
 }
 
 const GENERIC_DENY_MESSAGE = '凭据错误或账号不存在，请勿尝试枚举';
+
+/**
+ * 校验口令：PBKDF2 直连校验；历史单一 SHA-256 哈希校验通过后返回需升级标记，
+ * 由调用方在登录成功时原地升级为 PBKDF2，实现无感平滑迁移。
+ */
+async function verifyCredential(
+  candidate: string,
+  account: ResolvedAnyAccount
+): Promise<{ ok: boolean; needsUpgrade: boolean }> {
+  if (isPbkdf2Hash(account.passwordHash)) {
+    return { ok: verifyPbkdf2(candidate, account.passwordHash, account.salt), needsUpgrade: false };
+  }
+  const ok = await verifyPassword(candidate, account.passwordHash, account.salt);
+  return { ok, needsUpgrade: ok };
+}
 
 export async function POST(req: NextRequest) {
   try {
     const ip = getClientIp(req);
     const contentType = req.headers.get('content-type') ?? '';
     if (!contentType.toLowerCase().includes('application/json')) {
-      void hitRateLimit(ip, null);
+      await hitRateLimit(ip, null);
       return NextResponse.json(
         { ok: false, error: 'bad_request', message: '请求体必须是 JSON' },
         { status: 400 }
@@ -79,7 +93,7 @@ export async function POST(req: NextRequest) {
     try {
       parsed = await req.json();
     } catch {
-      void hitRateLimit(ip, null);
+      await hitRateLimit(ip, null);
       return NextResponse.json(
         { ok: false, error: 'bad_request', message: '请求体必须是 JSON' },
         { status: 400 }
@@ -89,7 +103,7 @@ export async function POST(req: NextRequest) {
     const identifier = typeof body.identifier === 'string' ? body.identifier.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     if (!identifier || !password) {
-      void hitRateLimit(ip, null);
+      await hitRateLimit(ip, null);
       return NextResponse.json(
         { ok: false, error: GENERIC_DENY_MESSAGE },
         { status: 401 }
@@ -98,7 +112,7 @@ export async function POST(req: NextRequest) {
 
     const account: ResolvedAnyAccount | null = await resolveAnyAccountByIdentifier(identifier);
     const accountKey = account?.kind === 'built-in' ? account.key : (account?.id ?? null);
-    if (hitRateLimit(ip, accountKey)) {
+    if (await hitRateLimit(ip, accountKey)) {
       const retryAfterSec = Math.ceil(LOGIN_THROTTLE_WINDOW_MS / 1000);
       return NextResponse.json(
         {
@@ -126,12 +140,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const verified = await verifyPassword(password, account.passwordHash, account.salt);
-    if (!verified) {
+    const credential = await verifyCredential(password, account);
+    if (!credential.ok) {
       return NextResponse.json(
         { ok: false, error: GENERIC_DENY_MESSAGE },
         { status: 401 }
       );
+    }
+
+    // 历史单一 SHA-256 哈希校验通过后原地升级为 PBKDF2：老账号无需重置口令即可获得强哈希。
+    if (credential.needsUpgrade && account.kind === 'prisma') {
+      try {
+        const salt = generateSaltHex();
+        await prisma.appUser.update({
+          where: { id: account.id },
+          data: { passwordSalt: salt, passwordHash: hashPasswordPbkdf2(password, salt) },
+        });
+      } catch (err) {
+        // 升级失败不影响本次登录，下次登录再试。
+        console.error('[auth:login] 口令哈希升级失败：', err instanceof Error ? err.message : String(err));
+      }
     }
 
     const sessionUser: AppSessionUser = {
@@ -165,6 +193,11 @@ export async function POST(req: NextRequest) {
     }
 
     const cookie = buildSetCookieHeader(token);
+
+    // 登录成功即清零该账号维度的计数，避免正常用户被历史失败尝试拖累。
+    if (accountKey) {
+      await clearLoginThrottle([`acct:${accountKey}`, `ipacct:${ip}::${accountKey}`]);
+    }
 
     const res = NextResponse.json({
       ok: true,

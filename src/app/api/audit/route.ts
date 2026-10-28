@@ -102,7 +102,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   remaining.push({ at: now });
   RATE_BUCKET.set(ip, remaining);
 
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
   const session = await resolveSessionUserFromToken(token);
 
   let raw: Buffer;
@@ -221,7 +221,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
   const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return NextResponse.json({ ok: false, error: "未登录" }, { status: 401, headers: { "Cache-Control": "no-store" } });

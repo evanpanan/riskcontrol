@@ -77,16 +77,32 @@ async function main(): Promise<void> {
     )
   );
 
+  // 账号初始化：生产必须一次性授权，且逐账号指定口令（禁止共享口令）。
+  const allowSeed = (process.env.RC_ALLOW_SEED ?? '').trim() === '1';
+  const perUserPasswords = (process.env.RC_SEED_PASSWORDS ?? '').trim();
+  const sharedPassword = (process.env.RC_SEED_DEFAULT_PASSWORD ?? '').trim();
   results.push(
     checkEnv(
-      'RC_SEED_DEFAULT_PASSWORD / RC_SEED_PASSWORDS',
-      Boolean((process.env.RC_SEED_DEFAULT_PASSWORD ?? '').trim() || (process.env.RC_SEED_PASSWORDS ?? '').trim()),
-      (process.env.RC_SEED_DEFAULT_PASSWORD ?? '').trim() || (process.env.RC_SEED_PASSWORDS ?? '').trim()
-        ? '已配置'
-        : '未配置（首次 seed 时需要；已有账号可忽略）',
+      'RC_ALLOW_SEED / RC_SEED_PASSWORDS',
+      !allowSeed || Boolean(perUserPasswords),
+      !allowSeed
+        ? '未开启账号初始化（正确：容器重启不会重放 seed）'
+        : perUserPasswords
+          ? '已授权一次性初始化，且已逐账号指定口令'
+          : '已授权初始化但未提供逐账号口令：生产不会创建任何账号',
       false
     )
   );
+  if (isProd && sharedPassword) {
+    results.push(
+      checkEnv(
+        'RC_SEED_DEFAULT_PASSWORD',
+        false,
+        '生产环境禁止共享口令，请改用逐账号 RC_SEED_PASSWORDS',
+        true
+      )
+    );
+  }
 
   const notifyOk = !isPlaceholder(process.env.EMAIL_WEBHOOK_URL ?? '') || !isPlaceholder(process.env.WHATSAPP_WEBHOOK_URL ?? '');
   results.push(

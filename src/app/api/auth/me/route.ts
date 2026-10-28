@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   void req;
-  const store = cookies();
+  const store = await cookies();
   const token = store.get(RC_SESSION_COOKIE)?.value;
   if (!token || typeof token !== 'string') {
     return NextResponse.json({ ok: false, error: 'unauthorized', user: null }, { status: 401 });

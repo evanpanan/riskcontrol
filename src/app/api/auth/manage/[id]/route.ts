@@ -87,7 +87,7 @@ async function requireAdminSession(req: NextRequest): Promise<{ ok: boolean; res
   remaining.push({ at: now });
   RATE_BUCKET.set(ip, remaining);
 
-  const token = cookies().get(RC_SESSION_COOKIE)?.value ?? null;
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
   const session = await resolveSessionUserFromToken(token);
   if (!session) {
     return {
@@ -123,10 +123,11 @@ async function getPrisma() {
   return mod.prisma;
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireAdminSession(req);
   if (!guard.ok) return guard.res!;
-  const id = truncate(params.id);
+  const { id: rawId } = await params;
+  const id = truncate(rawId);
   if (!id) return jsonError("缺少用户 ID", 400);
 
   let raw: Buffer;
@@ -225,10 +226,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const guard = await requireAdminSession(req);
   if (!guard.ok) return guard.res!;
-  const id = truncate(params.id);
+  const { id: rawId } = await params;
+  const id = truncate(rawId);
   if (!id) return jsonError("缺少用户 ID", 400);
   if (guard.actor && id === guard.actor.id) return jsonError("不能删除当前登录账号", 400);
   try {

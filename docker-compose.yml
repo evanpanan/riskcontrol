@@ -1,10 +1,27 @@
-# RiskControl 单机部署编排：PostgreSQL + 应用
+# RiskControl 单机部署编排：PostgreSQL + 应用 + 闪跌监控
 # 用法：
 #   1) 在服务器上创建 .env（参考 .env.production.example），至少设置
-#      POSTGRES_PASSWORD、NEXT_RC_AUTH_SECRET、RC_SEED_DEFAULT_PASSWORD
+#      POSTGRES_PASSWORD、NEXT_RC_AUTH_SECRET
 #   2) docker compose up -d --build
+#   3) 首次初始化账号：在 .env 中设置 RC_ALLOW_SEED=1 与逐账号 RC_SEED_PASSWORDS（JSON），
+#      再 `docker compose up -d --force-recreate app`；完成后请改回 RC_ALLOW_SEED=0。
 #
 # 说明：本地未安装 Docker，本文件尚未在本机验证，首次部署请留意容器日志。
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
+  DIRECT_DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
+  NEXT_RC_AUTH_SECRET: ${NEXT_RC_AUTH_SECRET:?请在 .env 中设置 NEXT_RC_AUTH_SECRET}
+  RC_ENABLE_DEV_MOCK_ACCOUNTS: "0"
+  # 账号初始化需显式授权，且生产必须逐账号指定口令（禁止共享口令）。
+  RC_ALLOW_SEED: ${RC_ALLOW_SEED:-0}
+  RC_SEED_PASSWORDS: ${RC_SEED_PASSWORDS:-}
+  RC_SEED_FORCE_PASSWORD: ${RC_SEED_FORCE_PASSWORD:-0}
+  EMAIL_WEBHOOK_URL: ${EMAIL_WEBHOOK_URL:-}
+  WHATSAPP_WEBHOOK_URL: ${WHATSAPP_WEBHOOK_URL:-}
+  NOTIFICATION_SEND_TOKEN: ${NOTIFICATION_SEND_TOKEN:-}
+  NEXT_PUBLIC_STOCK_API_KEY: ${NEXT_PUBLIC_STOCK_API_KEY:-}
 
 services:
   db:
@@ -32,19 +49,22 @@ services:
       db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
-      DIRECT_DATABASE_URL: postgresql://rc_app:${POSTGRES_PASSWORD}@db:5432/risk_control
-      NEXT_RC_AUTH_SECRET: ${NEXT_RC_AUTH_SECRET:?请在 .env 中设置 NEXT_RC_AUTH_SECRET}
-      RC_ENABLE_DEV_MOCK_ACCOUNTS: "0"
-      RC_SEED_DEFAULT_PASSWORD: ${RC_SEED_DEFAULT_PASSWORD:?请在 .env 中设置 RC_SEED_DEFAULT_PASSWORD（首次初始化账号口令）}
-      RC_SEED_PASSWORDS: ${RC_SEED_PASSWORDS:-}
-      EMAIL_WEBHOOK_URL: ${EMAIL_WEBHOOK_URL:-}
-      WHATSAPP_WEBHOOK_URL: ${WHATSAPP_WEBHOOK_URL:-}
-      NOTIFICATION_SEND_TOKEN: ${NOTIFICATION_SEND_TOKEN:-}
-      NEXT_PUBLIC_STOCK_API_KEY: ${NEXT_PUBLIC_STOCK_API_KEY:-}
+      <<: *app-env
     ports:
       - "3000:3000"
+
+  # 服务端闪跌监控：独立于浏览器持续采集行情、检测闪跌并投递预警。
+  # 与 app 共用镜像，仅覆盖启动命令；单机试点可与 app 同机运行。
+  monitor:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      RC_MONITOR_INTERVAL_SEC: ${RC_MONITOR_INTERVAL_SEC:-30}
+    command: ["npx", "tsx", "scripts/flash-monitor.ts"]
 
 volumes:
   rc_pgdata:
