@@ -51,15 +51,27 @@ services:
     environment:
       <<: *app-env
     ports:
-      - "3000:3000"
+      # 宿主端口可覆盖：APP_HOST_PORT=3100 docker compose up -d
+      - "${APP_HOST_PORT:-3000}:3000"
+    # 就绪探针：容器先跑 migrate deploy + preflight 才起 next start，
+    # 因此 start_period 需覆盖迁移耗时（首次部署库为空时更久）。
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
 
   # 服务端闪跌监控：独立于浏览器持续采集行情、检测闪跌并投递预警。
   # 与 app 共用镜像，仅覆盖启动命令；单机试点可与 app 同机运行。
+  # 依赖 app 就绪（迁移已完成）再启动，避免空库首次部署时读到不存在的表。
   monitor:
     build: .
     restart: unless-stopped
     depends_on:
       db:
+        condition: service_healthy
+      app:
         condition: service_healthy
     environment:
       <<: *app-env

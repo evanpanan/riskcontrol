@@ -26,6 +26,18 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 
+# 运维工具链：加密备份 / 恢复（scripts/operations/backup.ts）依赖 pg_dump、pg_restore、psql。
+# 必须装 PostgreSQL 16 客户端：低版本 pg_dump 遇到 16 服务端会直接拒绝执行
+# （Debian bookworm 自带的 postgresql-client 是 15，故走 PGDG 官方源）。
+RUN apt-get -o Acquire::Retries=3 update \
+  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends curl gnupg \
+  && curl -fsSL --retry 3 https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc -o /usr/share/keyrings/postgresql.asc \
+  && echo "deb [signed-by=/usr/share/keyrings/postgresql.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get -o Acquire::Retries=3 update \
+  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends postgresql-client-16 \
+  && apt-get purge -y --auto-remove curl gnupg \
+  && rm -rf /var/lib/apt/lists/*
+
 # 注意：node_modules 必须取构建层（其中包含已生成的 Prisma Client）
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
