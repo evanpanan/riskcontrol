@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "tsx scripts/build-production.ts",
+    "build": "node scripts/build-production.js",
     "start": "next start",
     "postinstall": "prisma generate",
     "lint": "next lint",
