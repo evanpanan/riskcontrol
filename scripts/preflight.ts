@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { hydrateRuntimeEnv } from '../src/lib/server/runtimeEnv';
 
 // 若进程环境未提供变量，则回退读取本地 .env（生产由编排系统注入，通常不需要）
 function loadDotEnvFallback(): void {
@@ -46,6 +47,7 @@ function isPlaceholder(value: string): boolean {
 
 async function main(): Promise<void> {
   loadDotEnvFallback();
+  hydrateRuntimeEnv();
 
   const isProd = process.env.NODE_ENV === 'production';
   const results: CheckResult[] = [];
