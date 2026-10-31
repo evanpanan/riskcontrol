@@ -219,7 +219,7 @@ risk-control/
 │
 ├── prisma/
 │   ├── schema.prisma              # enum AppRole(ADMIN/RISK_MANAGER/OPERATIONS/BD_MANAGER) + AppUser + Session + Client + Batch + MarginCallHistory + AuditLog
-│   └── seed.ts                    # 种子账号（admin@riskcontrol.io / evan.pan@institution.com + 4 位 BD_MANAGER）
+│   └── seed.ts                    # 种子账号（仅预置总管理员 admin@riskcontrol.io，其余角色由 ADMIN 在系统设置中创建）
 │
 ├── test_datascope_rbac.ts         # RBAC dataScope 验收脚本（12 子测试：客户/批次详情/BD 分布/补仓记录隔离与占位防猜）
 ├── .env.example                   # DATABASE_URL + Supabase + Stock API + Webhooks
@@ -288,7 +288,7 @@ cp .env.example .env.local
 
 ```bash
 npx prisma db push       # Schema 同步到 PostgreSQL
-npx prisma db seed       # 写入 5 个种子账号 + Mock Auth (可选，演示模式可跳过)
+npx prisma db seed       # 写入唯一的总管理员账号 (可选，演示模式可跳过)
 npx tsx test_datascope_rbac.ts   # 运行 RBAC 验收脚本，期望 10/10 PASS
 ```
 
@@ -301,20 +301,19 @@ node node_modules/next/dist/bin/next dev -p 3000
 # 浏览器访问 → http://localhost:3000
 ```
 
-### 5. 演示账号（HttpOnly Cookie 会话登录）
+### 5. 系统账号（HttpOnly Cookie 会话登录）
+
+系统只预置**一个总管理员**，其余角色由该账号登录后在「系统设置 → 系统账号」按需创建。
 
 | 角色 | 邮箱 | 密码 | 说明 |
 |------|------|------|------|
-| **ADMIN 系统管理员** | `admin@riskcontrol.io` | `Admin@Risk2026` | 全量权限 + **唯一可删客户 + 唯一可分配 ADMIN 角色** + 系统设置全部可改 |
-| **RISK_MANAGER 风控总监** | `evan.pan@institution.com` | `Evan@Risk2026` | 看所有客户/批次 / 补仓 / 通知 / 击穿处理；不能改阈值、不能增删账号、不能删客户 |
-| **BD_MANAGER 商务经理** | `evan.li@institution.com` | `Li@Client2026` | 仅看自己名下客户 + 对应批次；不能操作任何系统设置 / 不能删客户 |
-| **BD_MANAGER 商务经理** | `sylvia.wang@institution.com` | `Wang@Client2026` | 同上 |
-| **BD_MANAGER 商务经理** | `jack.zhang@institution.com` | `Zhang@Client2026` | 同上 |
-| **BD_MANAGER 商务经理** | `jennifer.liu@institution.com` | `Liu@Client2026` | 同上 |
+| **ADMIN 总管理员** | `admin@riskcontrol.io` | `Admin@Risk2026` | 平台唯一预置账号：全量权限 + **唯一可删客户 + 唯一可分配 ADMIN 角色** + 系统设置全部可改 |
 
-> **OPERATIONS 运营专员**：`OPERATIONS` 角色已在 RBAC / `middleware.ts` 中定义并生效（客户资料编辑 / 批次录入，不能改阈值 / 不能补仓 / 不能删客户），但演示环境**未预置该角色的内置账号**；如需体验，请以 ADMIN 在「系统设置 → 系统账号」新建一个 OPERATIONS 账号。
+> 上表口令仅用于**本地开发**（由 `.env` 的 `RC_SEED_PASSWORDS` 注入）。生产环境必须为该账号单独指定强随机口令，见 [.env.production.example](.env.production.example)。
 >
-> **登录标识**：登录框接受上表**邮箱**，也接受内置 key（`admin_root` / `risk_evan` / `bd_lixiaoming` / `bd_wangsy` / `bd_zhangzhiq` / `bd_liujia`）。
+> **RISK_MANAGER 风控总监 / BD_MANAGER 商务经理 / OPERATIONS 运营专员** 均不预置账号，由总管理员创建。三者权限边界（风控总监可看全部客户但不能改阈值 / 不能删客户，商务经理仅看自己名下客户，运营专员可录客户与批次但不能补仓 / 不能删客户）已在 RBAC 与 `middleware.ts` 中定义并生效。
+>
+> **登录标识**：登录框接受上表**邮箱**；本地开发环境另接受内建 mock key（`admin_root` / `risk_evan` / `bd_lixiaoming` / `bd_wangsy` / `bd_zhangzhiq` / `bd_liujia`），该通道仅在 `NODE_ENV=development` 生效，生产环境自动禁用。
 
 > **密码口径**：演示环境所有内置（built-in）账号密码经 `SHA-256 + 固定 salt`（`mock-builtin-${key}-${id}-s4lt`）校验，见 [password.ts](src/lib/auth/password.ts)；**⚠ 内置口令以明文存在 `BUILTIN_PASSWORDS` 源码常量中，仅供原型 / 演示 / 本地 mock 使用**，不要用于任何真实环境或真实账号复用；生产部署应接真实 IdP（OAuth2/SAML）而不是本 mock 账号库。
 >

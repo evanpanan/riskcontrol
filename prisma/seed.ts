@@ -7,56 +7,26 @@ const prisma = new PrismaClient();
 /** 生产口令最小长度：共享口令 + 六位口令是上线阻塞项，这里统一抬高到 12 位。 */
 const MIN_PASSWORD_LENGTH = 12;
 
-type DemoUserSeed = {
+type SeedAccount = {
   email: string;
   displayName: string;
   role: AppRole | 'ADMIN';
   avatarInitials: string;
-  bdManagerFullName?: string;
 };
 
 const asAppRole = (r: AppRole | 'ADMIN'): AppRole => r as unknown as AppRole;
 
-const DEMO_USERS: DemoUserSeed[] = [
+/**
+ * 系统只预置一个总管理员（平台级唯一账号）。
+ * 风控总监 / 商务经理 / 运营专员一律不预置，由总管理员登录后在「系统设置 → 系统账号」按需创建，
+ * 避免生产库残留演示账号与共享口令。
+ */
+const SEED_ACCOUNTS: SeedAccount[] = [
   {
     email: 'admin@riskcontrol.io',
     displayName: '系统超级管理员 (Platform Admin)',
     role: 'ADMIN',
     avatarInitials: 'SA',
-  },
-  {
-    email: 'evan.pan@institution.com',
-    displayName: 'Evan Pan (风控总监)',
-    role: AppRole.RISK_MANAGER,
-    avatarInitials: 'EP',
-  },
-  {
-    email: 'evan.li@institution.com',
-    displayName: '李晓明 (Evan Li)',
-    role: AppRole.BD_MANAGER,
-    avatarInitials: 'LXM',
-    bdManagerFullName: '李晓明 (Evan Li)',
-  },
-  {
-    email: 'sylvia.wang@institution.com',
-    displayName: '王思远 (Sylvia Wang)',
-    role: AppRole.BD_MANAGER,
-    avatarInitials: 'WSY',
-    bdManagerFullName: '王思远 (Sylvia Wang)',
-  },
-  {
-    email: 'jack.zhang@institution.com',
-    displayName: '张志强 (Jack Zhang)',
-    role: AppRole.BD_MANAGER,
-    avatarInitials: 'ZZQ',
-    bdManagerFullName: '张志强 (Jack Zhang)',
-  },
-  {
-    email: 'jennifer.liu@institution.com',
-    displayName: '刘佳 (Jennifer Liu)',
-    role: AppRole.BD_MANAGER,
-    avatarInitials: 'LJ',
-    bdManagerFullName: '刘佳 (Jennifer Liu)',
   },
 ];
 
@@ -112,14 +82,14 @@ async function main() {
   let updated = 0;
   let skipped = 0;
 
-  for (const u of DEMO_USERS) {
+  for (const u of SEED_ACCOUNTS) {
     const role = asAppRole(u.role);
     const existing = await prisma.appUser.findUnique({ where: { email: u.email } });
     const profile = {
       displayName: u.displayName,
       role,
       avatarInitials: u.avatarInitials,
-      bdManagerFullName: u.bdManagerFullName ?? null,
+      bdManagerFullName: null,
     };
 
     if (existing && !force) {
