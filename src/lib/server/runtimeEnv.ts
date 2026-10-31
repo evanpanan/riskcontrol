@@ -24,4 +24,7 @@ export function hydrateRuntimeEnv(): void {
   if (!directDatabaseUrl && vercelDirect) {
     process.env.DIRECT_DATABASE_URL = vercelDirect;
   }
+  if (!process.env.DIRECT_DATABASE_URL?.trim() && process.env.DATABASE_URL?.trim()) {
+    process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL.trim();
+  }
 }
