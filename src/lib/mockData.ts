@@ -1060,6 +1060,26 @@ function sameClientIds(a: BatchLike, b: BatchLike): boolean {
   return idsA.length === idsB.length && idsA.every((id, i) => id === idsB[i]);
 }
 
+const LEGACY_STALE_SNAPSHOT_PRICE = 8.71;
+
+function shouldRefreshSavedSnapshotPrice(saved: BatchLike, fixture: BatchLike): boolean {
+  const savedPrice = Number(saved.currentStockPrice ?? 0);
+  const fixturePrice = Number(fixture.currentStockPrice ?? 0);
+  if (!Number.isFinite(fixturePrice) || fixturePrice <= 0) return false;
+  if ((saved as any)._realtimeSynced) return false;
+  if (!Number.isFinite(savedPrice) || savedPrice <= 0) return true;
+  return Math.abs(savedPrice - LEGACY_STALE_SNAPSHOT_PRICE) <= 1e-6 && Math.abs(savedPrice - fixturePrice) > 1e-6;
+}
+
+function applyLatestSnapshotPrice(saved: BatchLike, fixture: BatchLike): void {
+  if (!shouldRefreshSavedSnapshotPrice(saved, fixture)) return;
+  saved.currentStockPrice = fixture.currentStockPrice;
+  if (typeof fixture.currentDayChange === "number") {
+    saved.currentDayChange = fixture.currentDayChange;
+  }
+  saved.updatedAt = fixture.updatedAt;
+}
+
 function financeRecord(batch: BatchLike): FinanceRecord {
   return {
     fingerprint: batchFingerprint(batch),
@@ -1260,6 +1280,7 @@ export function getMockData(): MockDataSet {
     for (const batch of loaded.batches) {
       const saved = store[batch.id];
       if (saved) {
+        applyLatestSnapshotPrice(saved.batch as BatchLike, batch as BatchLike);
         if (saved.fingerprint !== batchFingerprint(batch) || saved.batch.finance?.version !== 2) {
           if (!autoResetHandled) {
             const upgrade = tryAutoUpgradeTestLedger();
