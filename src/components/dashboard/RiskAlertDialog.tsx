@@ -20,6 +20,7 @@ import {
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export interface RiskAlertItem {
   alertKey: string;
@@ -73,7 +74,9 @@ export function RiskAlertDialog({
   onDismissOne,
   settingsEnabled,
 }: RiskAlertDialogProps) {
+  const router = useRouter();
   const [muted, setMuted] = useState(false);
+  const [openingBatchId, setOpeningBatchId] = useState<string | null>(null);
   const beepedIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -88,9 +91,23 @@ export function RiskAlertDialog({
     }
   }, [alerts, muted, settingsEnabled]);
 
+  useEffect(() => {
+    if (!settingsEnabled || alerts.length === 0) return;
+    alerts.forEach((a) => {
+      router.prefetch(`/batch/${a.batchId}`);
+    });
+  }, [alerts, router, settingsEnabled]);
+
   const open = settingsEnabled && alerts.length > 0;
   const criticalAlerts = alerts.filter((a) => a.riskLevel === RiskLevel.CRITICAL);
   const warningAlerts = alerts.filter((a) => a.riskLevel === RiskLevel.WARNING);
+
+  const handleOpenBatch = (batchId: string) => {
+    if (openingBatchId === batchId) return;
+    setOpeningBatchId(batchId);
+    onDismissOne(batchId);
+    router.push(`/batch/${batchId}`);
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onDismissAll()}>
@@ -204,16 +221,20 @@ export function RiskAlertDialog({
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
-                  <Link href={`/batch/${a.batchId}`} className="w-full" onClick={() => onDismissOne(a.batchId)}>
-                    <Button size="sm" className="gap-1 w-full">
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      查看批次
-                    </Button>
-                  </Link>
+                  <Button
+                    size="sm"
+                    className="gap-1 w-full"
+                    onClick={() => handleOpenBatch(a.batchId)}
+                    disabled={openingBatchId === a.batchId}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    {openingBatchId === a.batchId ? "打开中..." : "查看批次"}
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="gap-1 text-muted-foreground hover:text-foreground w-full"
+                    disabled={openingBatchId === a.batchId}
                     onClick={() => onDismissOne(a.batchId)}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5" />
