@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, LogOut, ImagePlus, AlertTriangle, CheckCircle2, Info, TrendingUp, TrendingDown, LineChart, Loader2 } from "lucide-react";
+import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, LogOut, ImagePlus, AlertTriangle, CheckCircle2, Info, TrendingUp, TrendingDown, LineChart } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -355,7 +355,12 @@ export function TopBar() {
                 title={`${symbol} 最新价 $${Number(price).toFixed(2)} · 点击查看 K 线`}
               >
                 {quoteFetching ? (
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                  <div className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                    <span className="absolute inset-0 rounded-full border border-sky-300/35 animate-quote-fetch-ring" />
+                    <span className="absolute inset-[2px] rounded-full border border-cyan-300/25 animate-quote-fetch-ring-delay" />
+                    <span className="absolute inset-0 rounded-full border-t border-r border-sky-200/90 border-b-transparent border-l-transparent animate-quote-fetch-sweep" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.75)]" />
+                  </div>
                 ) : (
                   <LineChart className={cn("h-3.5 w-3.5 shrink-0", up ? "text-success" : "text-danger")} />
                 )}

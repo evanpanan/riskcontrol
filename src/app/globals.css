@@ -351,6 +351,44 @@
     animation: price-flash-down 1500ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
+  @keyframes quote-fetch-ring {
+    0% {
+      transform: scale(0.72);
+      opacity: 0.18;
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0.18);
+    }
+    45% {
+      opacity: 0.55;
+    }
+    100% {
+      transform: scale(1.16);
+      opacity: 0;
+      box-shadow: 0 0 0 7px hsl(var(--primary) / 0);
+    }
+  }
+  @keyframes quote-fetch-sweep {
+    0% {
+      transform: rotate(0deg);
+      opacity: 0.82;
+    }
+    50% {
+      opacity: 1;
+    }
+    100% {
+      transform: rotate(360deg);
+      opacity: 0.82;
+    }
+  }
+  .animate-quote-fetch-ring {
+    animation: quote-fetch-ring 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+  .animate-quote-fetch-ring-delay {
+    animation: quote-fetch-ring 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite 0.9s;
+  }
+  .animate-quote-fetch-sweep {
+    animation: quote-fetch-sweep 1.15s linear infinite;
+  }
+
   .risk-water-track {
     background: linear-gradient(
       90deg,
