@@ -83,7 +83,7 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
   const [period, setPeriod] = useState<HistoryPeriod>("1M");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [candles, setCandles] = useState<HistoryCandle[] | null>(null);
+  const [rawCandles, setRawCandles] = useState<HistoryCandle[] | null>(null);
   const [provider, setProvider] = useState<string>("");
   const [fallbackNote, setFallbackNote] = useState<string>("");
   const [tick, setTick] = useState(0);
@@ -97,13 +97,30 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const mountedKeyRef = useRef<string>("");
   const candlesRef = useRef<HistoryCandle[] | null>(null);
+
+  const candles = useMemo(() => {
+    if (!rawCandles || rawCandles.length === 0) return null;
+    const sortedCandles = [...rawCandles].sort((a, b) => a.time - b.time);
+    const anchorClose = Number(anchorPrice || 0) > 0 ? Number(anchorPrice) : null;
+    if (!anchorClose) return sortedCandles;
+    const out = [...sortedCandles];
+    const last = out[out.length - 1];
+    const fixedClose = Number(anchorClose.toFixed(2));
+    out[out.length - 1] = {
+      ...last,
+      open: Number(last.open.toFixed(2)),
+      high: Number(Math.max(last.high, fixedClose).toFixed(2)),
+      low: Number(Math.min(last.low, fixedClose).toFixed(2)),
+      close: fixedClose,
+    };
+    return out;
+  }, [rawCandles, anchorPrice]);
+
   candlesRef.current = candles;
 
   useEffect(() => {
     if (!open) return;
-    setCandles(null);
     setError(null);
-    setFallbackNote("");
     setLoading(true);
     let cancelled = false;
     (async () => {
@@ -133,24 +150,7 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
           }
           setProvider(data.provider);
           setFallbackNote(data.fallbackNote || "");
-          const sortedCandles = data.candles.sort((a, b) => a.time - b.time);
-          const anchorClose = Number(anchorPrice || 0) > 0 ? Number(anchorPrice) : null;
-          const normalized = anchorClose
-            ? (() => {
-                const out = [...sortedCandles];
-                const last = out[out.length - 1];
-                const fixedClose = Number(anchorClose.toFixed(2));
-                out[out.length - 1] = {
-                  ...last,
-                  open: Number(last.open.toFixed(2)),
-                  high: Number(Math.max(last.high, fixedClose).toFixed(2)),
-                  low: Number(Math.min(last.low, fixedClose).toFixed(2)),
-                  close: fixedClose,
-                };
-                return out;
-              })()
-            : sortedCandles;
-          setCandles(normalized);
+          setRawCandles([...data.candles].sort((a, b) => a.time - b.time));
           setError(null);
           break;
         } catch (e: any) {
@@ -161,7 +161,6 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
           }
           const raw = e?.message || String(e || "加载失败");
           setError(/HTTP \d{3}|no candles|empty data|UPSTREAM_FATAL|所有行情源均失败|行情获取失败/i.test(raw) ? "行情获取失败，请稍后重试或检查网络。" : raw);
-          setCandles(null);
         }
       }
       if (!cancelled) setLoading(false);
@@ -169,7 +168,7 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
     return () => {
       cancelled = true;
     };
-  }, [open, symbol, period, tick, anchorPrice]);
+  }, [open, symbol, period, tick]);
 
   const rows: CandleRow[] = useMemo(() => {
     if (!candles || candles.length === 0) return [];
@@ -647,12 +646,23 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
             data-testid="volume-chart"
           />
 
-          {loading && (
+          {loading && !rows.length && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-xl bg-background/85 backdrop-blur-sm z-10">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
               <p className="text-[12px] text-muted-foreground">
                 正在从 3 个数据源加载 {symbol} · {HISTORY_PERIOD_CONFIG[period].label} ...
               </p>
+            </div>
+          )}
+
+          {loading && rows.length > 0 && (
+            <div className="pointer-events-none absolute right-3 top-3 z-10">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-background/88 px-3 py-1.5 shadow-sm backdrop-blur-sm">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  正在更新 K 线
+                </span>
+              </div>
             </div>
           )}
 

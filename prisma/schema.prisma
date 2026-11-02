@@ -289,6 +289,51 @@ model QuotePricePoint {
   @@index([createdAt])
 }
 
+// 历史 K 线缓存：同一 symbol + interval + candleTime 只保留一条，
+// 已经抓过的历史 candle 落库后优先复用，减少每次都向外部行情源重拉整段历史。
+model QuoteHistoryCandle {
+  id         String   @id @default(cuid())
+  symbol     String
+  interval   String
+  candleTime DateTime
+  open       Float
+  high       Float
+  low        Float
+  close      Float
+  volume     Float    @default(0)
+  provider   String
+  fetchedAt  DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([symbol, interval, candleTime])
+  @@index([symbol, interval, candleTime])
+  @@index([fetchedAt])
+}
+
+// 首页大盘曲线真实快照：按 scope（全局 / 商务经理）和整点 bucket 落库，
+// 供资产价值曲线与收益率曲线直接读取历史业务结果，避免长期依赖前端合成走势。
+model DashboardSnapshot {
+  id                  String   @id @default(cuid())
+  scopeType           String
+  scopeKey            String
+  bucketAt            DateTime
+  totalValue          Float
+  institutionValue    Float
+  clientValue         Float
+  totalYieldPct       Float
+  institutionYieldPct Float
+  clientYieldPct      Float
+  totalPnL            Float    @default(0)
+  institutionPnL      Float    @default(0)
+  clientPnL           Float    @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([scopeType, scopeKey, bucketAt])
+  @@index([scopeType, scopeKey, bucketAt])
+}
+
 // 闪跌告警：dedupeKey 保证同一批次同一阈值在冷却期内只告警一次，
 // delivered 记录实际送达结果，失败可由下一轮重试。
 model FlashCrashAlert {

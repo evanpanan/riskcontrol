@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { FlashNumber } from "@/components/ui/FlashNumber";
 import { cn, formatCurrency, formatCurrencyByUnit } from "@/lib/utils";
@@ -45,6 +45,15 @@ const TIMEFRAMES: { key: Timeframe; label: string }[] = [
   { key: "6M", label: "6月" },
   { key: "1Y", label: "1年" },
 ];
+
+type SnapshotSeries = Record<
+  Timeframe,
+  { valuePoints: ValueDataPoint[]; yieldPoints: YieldDataPoint[] }
+>;
+
+function hasEnoughSnapshotPoints(timeframe: Timeframe, count: number) {
+  return count >= Math.max(2, Math.floor(TIMEFRAME_POINTS[timeframe] * 0.5));
+}
 
 /* -------- 确定性伪随机（seeded, 同 tick/timeframe 下数据一致）-------- */
 function mulberry32(seed: number) {
@@ -804,6 +813,8 @@ export function DashboardCharts({
   summary: PortfolioSummary;
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1M");
+  const [snapshotSeries, setSnapshotSeries] = useState<SnapshotSeries | null>(null);
+  const persistRef = useRef<{ at: number; fingerprint: string }>({ at: 0, fingerprint: "" });
   /* 派生当前价值：机构 = 原始机构投入 + 累计补仓 + 机构盈亏； 客户 = 原始客户投入 + 客户盈亏 */
   const institutionValue = useMemo(
     () =>
@@ -819,6 +830,87 @@ export function DashboardCharts({
   );
   const institutionCost = summary.totalSubordinate + summary.totalMarginCalls;
   const clientCost = summary.totalPriority;
+
+  const snapshotPayload = useMemo(
+    () => ({
+      totalValue: summary.currentMarketValueTotal,
+      institutionValue,
+      clientValue,
+      totalYieldPct: summary.totalPnLPercent,
+      institutionYieldPct: summary.institutionPnLPercent,
+      clientYieldPct: summary.allClientsPnLPercent,
+      totalPnL: summary.totalPnL,
+      institutionPnL: summary.institutionPnL,
+      clientPnL: summary.allClientsPnL,
+    }),
+    [
+      summary.currentMarketValueTotal,
+      summary.totalPnLPercent,
+      summary.institutionPnLPercent,
+      summary.allClientsPnLPercent,
+      summary.totalPnL,
+      summary.institutionPnL,
+      summary.allClientsPnL,
+      institutionValue,
+      clientValue,
+    ]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch("/api/dashboard/snapshots", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok || !data?.timeframes) return;
+        setSnapshotSeries(data.timeframes as SnapshotSeries);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (summary.totalBatches <= 0) return;
+    const fingerprint = [
+      snapshotPayload.totalValue.toFixed(2),
+      snapshotPayload.institutionValue.toFixed(2),
+      snapshotPayload.clientValue.toFixed(2),
+      snapshotPayload.totalYieldPct.toFixed(2),
+      snapshotPayload.institutionYieldPct.toFixed(2),
+      snapshotPayload.clientYieldPct.toFixed(2),
+    ].join("|");
+    const now = Date.now();
+    if (
+      fingerprint === persistRef.current.fingerprint &&
+      now - persistRef.current.at < 20_000
+    ) {
+      return;
+    }
+    if (now - persistRef.current.at < 20_000) {
+      return;
+    }
+    persistRef.current = { at: now, fingerprint };
+    void fetch("/api/dashboard/snapshots", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshotPayload),
+    }).catch(() => {
+      /* ignore */
+    });
+  }, [snapshotPayload, summary.totalBatches]);
 
   /* 稳定 seed：派生自 summary 数值 hash（价格/仓位真正变动时才变） */
   const stableSeed = useMemo(() => {
@@ -852,20 +944,24 @@ export function DashboardCharts({
     const keys: Timeframe[] = ["1D", "1W", "1M", "3M", "6M", "1Y"];
     for (let i = 0; i < keys.length; i++) {
       const k = keys[i];
-      v[k] = synthesizeHistory(
+      const fallbackValue = synthesizeHistory(
         summary.currentMarketValueTotal,
         institutionValue,
         clientValue,
         k,
         stableSeed
       );
-      y[k] = synthesizeYieldHistory(
+      const fallbackYield = synthesizeYieldHistory(
         summary.totalPnLPercent,
         summary.institutionPnLPercent,
         summary.allClientsPnLPercent,
         k,
         stableSeed
       );
+      const snapshotValue = snapshotSeries?.[k]?.valuePoints ?? [];
+      const snapshotYield = snapshotSeries?.[k]?.yieldPoints ?? [];
+      v[k] = hasEnoughSnapshotPoints(k, snapshotValue.length) ? snapshotValue : fallbackValue;
+      y[k] = hasEnoughSnapshotPoints(k, snapshotYield.length) ? snapshotYield : fallbackYield;
     }
     return { valueDataByTimeframe: v, yieldDataByTimeframe: y };
   }, [
@@ -876,6 +972,7 @@ export function DashboardCharts({
     institutionValue,
     clientValue,
     stableSeed,
+    snapshotSeries,
   ]);
 
   return (

@@ -11,6 +11,7 @@
  *   RC_MONITOR_ONCE=1        等同于 --once
  */
 import { runFlashMonitorCycle } from '../src/lib/server/flashMonitor';
+import { runDashboardSnapshotCycle } from '../src/lib/server/dashboardSnapshots';
 import { prisma } from '../src/lib/prisma';
 
 const INTERVAL_SEC = Math.max(5, Number(process.env.RC_MONITOR_INTERVAL_SEC ?? 30) || 30);
@@ -18,16 +19,32 @@ const ONCE = process.argv.includes('--once') || process.env.RC_MONITOR_ONCE === 
 
 let stopping = false;
 let timer: NodeJS.Timeout | null = null;
+let lastSnapshotBucket = '';
+
+function currentSnapshotBucket(now: Date): string {
+  return now.toISOString().slice(0, 13);
+}
 
 async function tick(round: number): Promise<void> {
   const startedAt = Date.now();
   try {
     const result = await runFlashMonitorCycle();
+    const now = new Date();
+    const snapshotBucket = currentSnapshotBucket(now);
+    let snapshotSummary = '';
+    if (round === 1 || snapshotBucket !== lastSnapshotBucket) {
+      const snapshotResult = await runDashboardSnapshotCycle(now);
+      lastSnapshotBucket = snapshotBucket;
+      snapshotSummary =
+        ` | 大盘快照 scope ${snapshotResult.scopes} | upsert ${snapshotResult.snapshotsUpserted}`;
+      for (const note of snapshotResult.notes) console.log(`[monitor]   · ${note}`);
+    }
     const elapsed = Date.now() - startedAt;
     console.log(
       `[monitor] 第 ${round} 轮 | 批次 ${result.batches} | 标的 ${result.symbols} | ` +
         `行情成功 ${result.quotesFetched} 失败 ${result.quoteFailures} | 快照 ${result.snapshotsWritten} | ` +
-        `新增告警 ${result.alertsCreated} | 已送达 ${result.alertsDelivered} | 待重试 ${result.alertsPendingRetry} | ${elapsed}ms`
+        `新增告警 ${result.alertsCreated} | 已送达 ${result.alertsDelivered} | 待重试 ${result.alertsPendingRetry}` +
+        `${snapshotSummary} | ${elapsed}ms`
     );
     for (const note of result.notes) console.log(`[monitor]   · ${note}`);
   } catch (err) {
