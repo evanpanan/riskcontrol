@@ -19,13 +19,23 @@ import {
   Shield,
   FlaskConical,
   Landmark,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Logo } from "@/components/branding/Logo";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { hasInstitutionView, isBDManager } from "@/lib/auth";
 
 type NavRoleScope = "all" | "institution" | "bd";
+
+const SIDEBAR_COLLAPSED_KEY = "risk_control_sidebar_collapsed_v1";
 
 type NavItem = {
   title: string;
@@ -116,7 +126,31 @@ export function AppSidebar() {
   const { user } = useCurrentUser();
   const isBD = isBDManager(user);
   const [summary, setSummary] = useState<ReturnType<typeof calculatePortfolioSummary> | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [collapsedReady, setCollapsedReady] = useState(false);
   const institution = hasInstitutionView(user);
+
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
+    } catch {
+      /* ignore */
+    }
+    setCollapsedReady(true);
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!institution) { setSummary(null); return; }
     const update = (reload = false) => {
@@ -137,51 +171,94 @@ export function AppSidebar() {
   }, [institution]);
 
   return (
-    <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border/60 bg-card/50 backdrop-blur-sm">
-      <div className="p-6 border-b border-border/60">
-        <Link href="/" className="flex items-center gap-3 group">
-          <div className="relative">
-            <Logo size={40} />
-            <div className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full bg-success border-2 border-card animate-pulse" />
-          </div>
-          <div className="flex flex-col">
-            <span className="font-bold text-base tracking-tight text-gradient-primary">
-              RiskControl
-            </span>
-            <span className="text-[10px] text-muted-foreground tracking-wider">
-              机构级股票风控平台
-            </span>
-          </div>
-        </Link>
-        {isBD && user && (
-          <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 flex items-start gap-2">
-            <Shield className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[10.5px] font-semibold text-primary leading-tight">商务经理专属工作台</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                仅展示归属您的客户与批次数据
-              </p>
+    <aside
+      className={cn(
+        "hidden lg:flex shrink-0 flex-col border-r border-border/60 bg-card/50 backdrop-blur-sm",
+        collapsedReady && "transition-[width] duration-300 ease-out",
+        collapsed ? "w-[76px]" : "w-64"
+      )}
+    >
+      {collapsed ? (
+        <div className="flex flex-col items-center gap-3 border-b border-border/60 px-2 py-4">
+          <Link href="/" className="relative block">
+            <Logo size={32} />
+            <div className="absolute -bottom-1 -right-1 h-2.5 w-2.5 rounded-full border-2 border-card bg-success animate-pulse" />
+          </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleCollapsed}
+            title="展开侧边栏"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronsRight className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <div className="relative border-b border-border/60 p-6">
+          <Link href="/" className="group flex items-center gap-3 pr-7">
+            <div className="relative">
+              <Logo size={40} />
+              <div className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full bg-success border-2 border-card animate-pulse" />
             </div>
+            <div className="flex flex-col">
+              <span className="font-bold text-base tracking-tight text-gradient-primary">
+                RiskControl
+              </span>
+              <span className="text-[10px] text-muted-foreground tracking-wider">
+                机构级股票风控平台
+              </span>
+            </div>
+          </Link>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleCollapsed}
+            title="收起侧边栏"
+            className="absolute right-3 top-5 h-7 w-7 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronsLeft className="h-4 w-4" />
+          </Button>
+          {isBD && user && (
+            <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 flex items-start gap-2">
+              <Shield className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[10.5px] font-semibold text-primary leading-tight">商务经理专属工作台</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  仅展示归属您的客户与批次数据
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <nav className={cn("flex-1 space-y-1 overflow-y-auto scrollbar-thin", collapsed ? "px-2 py-4" : "p-4")}>
+        {collapsed ? (
+          <div className="mx-auto mb-3 h-px w-8 bg-border/60" />
+        ) : (
+          <div className="mb-2 px-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            主控制台
           </div>
         )}
-      </div>
-
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto scrollbar-thin">
-        <div className="mb-2 px-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          主控制台
-        </div>
         {NAV_ITEMS.filter((item) => isNavVisible(item, user)).map((item) => {
           const isActive =
             (item.href === "/" && pathname === "/") ||
             (item.href !== "/" && pathname.startsWith(item.href));
           const Icon = item.icon;
+          const alertCount = summary ? summary.criticalCount + summary.warningCount : 0;
+          const showAlertBadge = !item.badge && item.href === "/alerts" && alertCount > 0;
+          const badgeText = item.badge?.text ?? (showAlertBadge ? String(alertCount) : null);
+          const badgeVariant = item.badge?.variant ?? "danger";
 
-          return (
+          const link = (
             <Link
               key={item.href}
               href={item.href}
+              title={collapsed ? item.title : undefined}
               className={cn(
-                "group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200",
+                "group relative flex items-center rounded-lg text-sm font-medium transition-all duration-200",
+                collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2.5",
                 isActive
                   ? "bg-primary/10 text-primary shadow-sm"
                   : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -196,59 +273,90 @@ export function AppSidebar() {
                   isActive && "text-primary"
                 )}
               />
-              <div className="flex flex-col flex-1 min-w-0">
-                <span
-                  className={cn(
-                    isActive ? "text-primary font-semibold" : ""
-                  )}
-                >
-                  {item.title}
-                </span>
-                {item.description && (
-                  <span className="text-[10px] text-muted-foreground truncate">
-                    {item.description}
+              {!collapsed && (
+                <div className="flex flex-col flex-1 min-w-0">
+                  <span
+                    className={cn(
+                      isActive ? "text-primary font-semibold" : ""
+                    )}
+                  >
+                    {item.title}
                   </span>
-                )}
-              </div>
-              {item.badge && (
-                <Badge variant={item.badge.variant} className="ml-auto">
-                  {item.badge.text}
+                  {item.description && (
+                    <span className="text-[10px] text-muted-foreground truncate">
+                      {item.description}
+                    </span>
+                  )}
+                </div>
+              )}
+              {!collapsed && badgeText && (
+                <Badge variant={badgeVariant} className="ml-auto">
+                  {badgeText}
                 </Badge>
               )}
-              {!item.badge && item.href === "/alerts" && summary && (summary.criticalCount + summary.warningCount) > 0 && (
-                <Badge variant="danger" className="ml-auto">
-                  {summary.criticalCount + summary.warningCount}
-                </Badge>
+              {collapsed && badgeText && (
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-danger" />
               )}
             </Link>
           );
+
+          if (!collapsed) return link;
+
+          return (
+            <Tooltip key={item.href}>
+              <TooltipTrigger asChild>{link}</TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                <p className="text-[11px] font-medium">{item.title}</p>
+                {item.description && (
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">{item.description}</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          );
         })}
 
-        <div className="mt-6 mb-2 px-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          系统
-        </div>
+        {collapsed ? (
+          <div className="mx-auto mt-4 mb-3 h-px w-8 bg-border/60" />
+        ) : (
+          <div className="mt-6 mb-2 px-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            系统
+          </div>
+        )}
         {SECONDARY_NAV.filter((item) => isNavVisible(item, user)).map((item) => {
           const isActive = pathname.startsWith(item.href);
           const Icon = item.icon;
-          return (
+          const link = (
             <Link
               key={item.href}
               href={item.href}
+              title={collapsed ? item.title : undefined}
               className={cn(
-                "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all",
+                "group flex items-center rounded-lg text-sm font-medium transition-all",
+                collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2.5",
                 isActive
                   ? "bg-secondary text-foreground"
                   : "text-muted-foreground hover:bg-secondary hover:text-foreground"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              <span>{item.title}</span>
+              {!collapsed && <span>{item.title}</span>}
             </Link>
+          );
+
+          if (!collapsed) return link;
+
+          return (
+            <Tooltip key={item.href}>
+              <TooltipTrigger asChild>{link}</TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                {item.title}
+              </TooltipContent>
+            </Tooltip>
           );
         })}
       </nav>
 
-      {!isBD ? (
+      {collapsed ? null : !isBD ? (
         <div className="p-4 border-t border-border/60">
           <div className="rounded-xl p-4 gradient-card border border-border/60">
             <div className="flex items-center gap-2 mb-3">
