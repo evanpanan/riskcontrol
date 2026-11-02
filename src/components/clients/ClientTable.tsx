@@ -16,29 +16,28 @@ import {
   cn,
   formatCurrency,
   formatPercent,
-  formatSplitRatio,
 } from "@/lib/utils";
 import type { AppRole, AppSessionUser } from "@/types/auth";
 import { APP_ROLES } from "@/types/auth";
 import {
   ShieldCheck,
-  TrendingUp,
-  TrendingDown,
   Minus,
   CheckCircle,
   Hourglass,
   Landmark,
-  PlusCircle,
+  Building2,
+  User,
   EyeOff,
   LogOut,
   CheckSquare,
-  RotateCcw,
   Archive,
   AlertCircle,
   Zap,
-  History,
   DollarSign,
   X,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import {
   Table,
@@ -49,7 +48,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  getClientProfitSplit,
   isVipClient,
   allocateClientMarginRequirements,
   executeInstitutionTopup,
@@ -117,6 +115,8 @@ interface ClientTableProps {
   }) => void;
   onClientInvestmentRefresh?: () => void;
   onLedgerRecovery?: () => void;
+  showOverviewCards?: boolean;
+  showSectionTabs?: boolean;
 }
 
 export function ClientTable({
@@ -131,35 +131,31 @@ export function ClientTable({
   batch,
   onBatchMutated,
   onLedgerRecovery,
+  showOverviewCards = true,
+  showSectionTabs = true,
 }: ClientTableProps) {
   const totalInvestment = clients
     .filter((c) => !(c as any).__redacted)
     .reduce((s, c) => s + c.investmentAmount, 0);
+  const totalEstimatedExit = clients.reduce(
+    (s, c) => s + (c.investmentAmount + (c.actualClientPnL ?? 0)),
+    0
+  );
+  const totalPnL = totalEstimatedExit - totalInvestment;
+  const activeClientCount = clients.filter(
+    (c) => !(c as any).__redacted && c.status === ClientStatus.ACTIVE
+  ).length;
+  const warningClientCount = clients.filter(
+    (c) => !(c as any).__redacted && c.status === ClientStatus.EXIT_REQUESTED
+  ).length;
+  const settledClientCount = clients.filter(
+    (c) => !(c as any).__redacted && c.status === ClientStatus.SETTLED
+  ).length;
+  const protectedPrincipalRatio = totalInvestment > 0
+    ? ((clients.filter((c) => !(c as any).__redacted && c.status !== ClientStatus.SETTLED).length || clients.length) / clients.length) * 100
+    : 0;
 
-  const isBd = viewerRole === APP_ROLES.BD_MANAGER;
-  const bdFullName = viewerUser?.bdManagerFullName;
   const institutionRole = viewerRole === APP_ROLES.RISK_MANAGER || viewerRole === APP_ROLES.ADMIN;
-  const nonRedactedClients = clients.filter(c => !(c as any).__redacted);
-  const shouldMergeProfitCols = nonRedactedClients.every(c => {
-    const rt = c.realtimePnL ?? 0;
-    const ap = c.actualClientPnL ?? 0;
-    return Math.abs(rt - ap) < 0.01;
-  });
-
-  const canEditClient = (c: EnrichedClient): boolean => {
-    if ((c as any).__redacted) return false;
-    if (viewerRole === APP_ROLES.ADMIN) return true;
-    if (viewerRole === APP_ROLES.RISK_MANAGER) return true;
-    if (isBd && bdFullName && c.bdManager === bdFullName) return true;
-    return false;
-  };
-
-  const canDeleteClient = (c: EnrichedClient): boolean => {
-    if ((c as any).__redacted) return false;
-    return viewerRole === APP_ROLES.ADMIN;
-  };
-  void canDeleteClient;
-
   const getStatusConfig = (status: ClientStatus) => {
     switch (status) {
       case ClientStatus.ACTIVE:
@@ -321,86 +317,143 @@ export function ClientTable({
   const sortedClientsFinal = sortedClients;
 
   return (
-    <div className="border border-border/50 rounded-xl overflow-hidden">
-      <Table>
-        <TableHeader className="bg-secondary/30">
-          <TableRow className="hover:bg-secondary/30 border-border/50">
-            <TableHead className="w-[180px]">客户信息</TableHead>
-            <TableHead className="w-[120px] min-w-[100px] max-w-[140px]">
-              <div className="flex items-center whitespace-nowrap">
-                商务经理
+    <div className="overflow-hidden rounded-[26px] border border-primary/10 bg-[linear-gradient(180deg,rgba(6,15,36,0.98),rgba(3,10,28,0.98))] shadow-[0_22px_54px_rgba(2,8,23,0.42)]">
+      {showOverviewCards && (
+      <div className="border-b border-white/[0.06] px-4 py-4 sm:px-5">
+        <div className="flex flex-wrap gap-3">
+          <div className="min-w-0 flex-1 rounded-[24px] border border-primary/20 bg-[radial-gradient(circle_at_20%_15%,rgba(59,130,246,0.24),transparent_42%),linear-gradient(135deg,rgba(37,99,235,0.28),rgba(16,24,55,0.92))] px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] xl:basis-[30%] xl:flex-[1.45]">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-white/90">
+              <Wallet className="h-4 w-4 text-primary" />
+              客户总览
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-5">
+              <div>
+                  <p className="font-mono text-[38px] font-bold leading-none tracking-tight text-white">{clients.length}</p>
+                <p className="mt-2 text-xs text-white/70">客户总数</p>
               </div>
-            </TableHead>
-            <TableHead className="text-right">投资金额</TableHead>
-            <TableHead className="text-center">分成比例</TableHead>
-            <TableHead className="text-right">
-              <div className="flex items-center gap-1 justify-end">
-                <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
-                WIN100 盈利
+              <div className="min-w-0 border-l border-white/10 pl-5">
+                  <p className="font-mono text-[clamp(17px,1.55vw,24px)] font-bold leading-tight tracking-tight text-white">
+                  {formatCurrency(totalInvestment)}
+                </p>
+                <p className="mt-2 text-xs text-white/70">客户总权益</p>
               </div>
-            </TableHead>
-            <TableHead className="text-right">
-              <div className="flex items-center gap-1 justify-end">
-                <DollarSign className="h-3.5 w-3.5 text-success" />
-                客户盈利
-              </div>
-            </TableHead>
-            {shouldMergeProfitCols ? (
-              <TableHead className="text-right">
-                <div className="flex items-center gap-1 justify-end">
-                  <Landmark className="h-3.5 w-3.5 text-primary" />
-                  客户最终盈利
+            </div>
+          </div>
+
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-emerald-400/15 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+            <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-emerald-300/80">
+              <Landmark className="h-3.5 w-3.5" />
+              投资金额
+            </div>
+            <p className="mt-5 font-mono text-[clamp(16px,1.3vw,19px)] font-bold leading-tight tracking-tight text-foreground">{formatCurrency(totalInvestment)}</p>
+            <p className="mt-2 text-[11px] text-muted-foreground">客户本金保底口径</p>
+          </div>
+
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-sky-400/15 bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+            <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-sky-300/80">
+              <TrendingUp className="h-3.5 w-3.5" />
+              预计退出
+            </div>
+            <p className="mt-5 font-mono text-[clamp(16px,1.3vw,19px)] font-bold leading-tight tracking-tight text-foreground">{formatCurrency(totalEstimatedExit)}</p>
+            <p className="mt-2 text-[11px] text-muted-foreground">按当前口径测算</p>
+          </div>
+
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-rose-400/15 bg-[radial-gradient(circle_at_top,rgba(244,63,94,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+            <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-rose-300/80">
+              <TrendingDown className="h-3.5 w-3.5" />
+              已实现亏损
+            </div>
+            <p className={cn(
+              "mt-5 font-mono text-[clamp(16px,1.3vw,19px)] font-bold leading-tight tracking-tight",
+              totalPnL > 0 ? "text-success" : totalPnL < 0 ? "text-danger" : "text-foreground"
+            )}>
+              {totalPnL > 0 ? "+" : ""}{formatCurrency(totalPnL)}
+            </p>
+            <p className="mt-2 text-[11px] text-muted-foreground">客户与机构合并口径</p>
+          </div>
+
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-amber-400/15 bg-[radial-gradient(circle_at_top,rgba(250,204,21,0.14),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+            <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-amber-300/80">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              机构补仓缺口
+            </div>
+            <p className={cn(
+              "mt-5 font-mono text-[clamp(16px,1.3vw,19px)] font-bold leading-tight tracking-tight",
+              clientTotalMarginPending > 0 ? "text-danger" : "text-success"
+            )}>
+              {formatCurrency(clientTotalMarginPending)}
+            </p>
+            <p className="mt-2 text-[11px] text-muted-foreground">仅机构承担补仓</p>
+          </div>
+
+          <div className="min-w-[104px] rounded-[24px] border border-cyan-400/15 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.14),transparent_55%),rgba(255,255,255,0.03)] px-3 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:w-[116px] xl:flex-none">
+            <div className="mx-auto flex w-fit flex-col items-center">
+              <div
+                className="relative flex h-20 w-20 items-center justify-center rounded-full"
+                style={{
+                  background: `conic-gradient(rgba(34,211,238,0.95) 0 ${Math.max(6, Math.min(100, protectedPrincipalRatio))}%, rgba(148,163,184,0.18) ${Math.max(6, Math.min(100, protectedPrincipalRatio))}% 100%)`,
+                }}
+              >
+                <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#08152f] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                  <span className="font-mono text-[24px] font-bold text-white">
+                    {Math.round(protectedPrincipalRatio)}%
+                  </span>
                 </div>
-              </TableHead>
-            ) : (
-              <>
-                <TableHead className="text-right">
-                  <div className="flex items-center gap-1 justify-end">
-                    <TrendingUp className="h-3.5 w-3.5" />
-                    未实现浮盈
-                  </div>
-                </TableHead>
-                <TableHead className="text-right">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="flex items-center gap-1 justify-end cursor-help">
-                        <Landmark className="h-3.5 w-3.5 text-primary" />
-                        <span className="whitespace-nowrap">已实现盈利</span>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p className="text-xs w-[260px]">
-                        仅当 <span className="font-semibold">当前股价超过买入价</span> 时客户才有客户PnL，否则保本不显示任何盈利数字；WIN100 补仓不改变客户盈亏，本金独立核算归 WIN100</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TableHead>
-              </>
-            )}
-            {showRescueCol && (
-              <TableHead className="text-right">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center gap-1 justify-end cursor-help">
-                      <Archive className="h-3.5 w-3.5 text-warning" />
-                      <span className="whitespace-nowrap text-warning font-semibold">WIN100 补仓分摊</span>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="text-xs w-[220px]">
-                      WIN100 补仓救援金（独立核算：本金及盈利全归 WIN100，客户不参与。本列仅显示该客户按出资比例对应的名义救援分摊金额
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TableHead>
-            )}
-            <TableHead className="text-right">
-              <div className="flex items-center gap-1 justify-end">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                预估退出金额
               </div>
-            </TableHead>
-            <TableHead className="text-center w-[100px]">状态</TableHead>
-            <TableHead className="text-center w-[180px]">操作</TableHead>
+              <p className="mt-3 text-xs font-medium text-foreground">整体保本率</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
+
+      {showSectionTabs && (
+      <div className="border-b border-white/[0.06] px-4 pt-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                className="relative rounded-t-2xl bg-[linear-gradient(180deg,rgba(18,95,246,0.22),rgba(18,95,246,0.08))] px-5 py-2.5 text-sm font-semibold text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+              >
+                客户明细
+                <span className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-primary" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>风险预警</span>
+              {warningClientCount > 0 ? (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-danger/90 px-1.5 text-[11px] font-semibold text-white">
+                  {warningClientCount}
+                </span>
+              ) : null}
+            </div>
+            <span className="text-sm text-muted-foreground">动态提醒</span>
+            <span className="text-sm text-muted-foreground">资金流水</span>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span>持仓中 {activeClientCount}</span>
+            <span className="text-white/20">|</span>
+            <span>已结算 {settledClientCount}</span>
+          </div>
+        </div>
+      </div>
+      )}
+
+        <div className="px-4 pb-1 pt-2 sm:px-5">
+            <Table className="table-fixed [&_th]:px-2 [&_td]:px-2 [&_th]:py-3 [&_td]:py-3 [&_td]:whitespace-normal">
+        <TableHeader className="bg-[rgba(255,255,255,0.018)]">
+          <TableRow className="border-border/40 hover:bg-transparent">
+              <TableHead className="w-[156px] text-[12px] font-medium text-muted-foreground">客户信息</TableHead>
+              <TableHead className="w-[112px] text-[12px] font-medium text-muted-foreground">商务经理</TableHead>
+              <TableHead className="w-[78px] text-[12px] font-medium text-muted-foreground">账户类型</TableHead>
+              <TableHead className="w-[112px] text-right text-[12px] font-medium text-muted-foreground">客户权益</TableHead>
+              <TableHead className="w-[136px] text-right text-[12px] font-medium text-muted-foreground">投资金额</TableHead>
+              <TableHead className="w-[140px] text-right text-[12px] font-medium text-muted-foreground">盈亏 (USD)</TableHead>
+              <TableHead className="w-[90px] text-right text-[12px] font-medium text-muted-foreground">收益率</TableHead>
+              <TableHead className="w-[140px] text-right text-[12px] font-medium text-muted-foreground">预计退出金额</TableHead>
+              <TableHead className="w-[94px] text-center text-[12px] font-medium text-muted-foreground">状态</TableHead>
+              <TableHead className="w-[96px] text-center text-[12px] font-medium text-muted-foreground">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -408,42 +461,47 @@ export function ClientTable({
             const isRedacted = !!(client as any).__redacted;
             const statusConfig = getStatusConfig(client.status as ClientStatus);
             const StatusIcon = statusConfig.Icon;
-            const realtimePnL = client.realtimePnL || 0;
             const estExit = client.estimatedExitAmount ?? client.investmentAmount;
             const isSettled = client.status === ClientStatus.SETTLED;
             const settledTs = isSettled && client.settledAt ? new Date(client.settledAt as any).getTime() : 0;
             const justSettled = !!newlySettledIds[client.id] &&
               settledTs >= (mountedAtRef.current - 1500);
             const unverifiedSettlement = isSettled && !(client as any).settlement;
-            const split = getClientProfitSplit(client);
-            const actualPnL = client.actualClientPnL ?? 0;
-            const actualPnLPct = client.actualClientPnLPercent ?? 0;
             const clientRatio = totalInvestment > 0
               ? ((client.investmentAmount || 0) / totalInvestment) * 100
               : 0;
-            const canEdit = canEditClient(client);
-            const canDelete = canDeleteClient(client);
             const ms = perClientStateMap.get(client.id);
             const clientRequired = ms?.required ?? 0;
             const clientFulfilled = ms?.fulfilled ?? 0;
             const clientPending = Math.max(0, clientRequired - clientFulfilled);
-            const historyCount = ms?.history?.length ?? 0;
-            const clientMarginProgressPct = clientRequired > 0 ? Math.min(100, (clientFulfilled / clientRequired) * 100) : 0;
-            const clientMarginPctOfTotal = (batchSummary?.totalRequired ?? 0) > 0
-              ? (clientRequired / (batchSummary?.totalRequired ?? 1)) * 100
-              : clientRatio;
+            const clientWeight = (batch?.priorityAmount ?? 0) > 0
+              ? (client.investmentAmount || 0) / Math.max(batch?.priorityAmount ?? 1, 1)
+              : 0;
+            const institutionInvestment = Math.max(
+              0,
+              Number(((batch?.subordinateAmount ?? 0) * clientWeight).toFixed(2))
+            );
             const settlementCalc = (() => {
-              if (isRedacted) return { institutionPnL: 0, clientPnL: 0 };
+              if (isRedacted) {
+                return { institutionPnL: 0, clientPnL: 0, institutionReceives: 0, clientReceives: 0 };
+              }
               try {
                 if (client.status === ClientStatus.SETTLED && (client as any).settlement) {
                   const snap = (client as any).settlement;
                   return {
                     institutionPnL: Number(snap.institutionPnL ?? 0),
                     clientPnL: Number(snap.clientPnL ?? 0),
+                    institutionReceives: Number(snap.institutionReceives ?? (institutionInvestment + Number(snap.institutionPnL ?? 0))),
+                    clientReceives: Number(snap.clientReceives ?? (client.investmentAmount + Number(snap.clientPnL ?? 0))),
                   };
                 }
                 if (!batch || !batch.priorityAmount || !(batch.priorityAmount > 0)) {
-                  return { institutionPnL: 0, clientPnL: 0 };
+                  return {
+                    institutionPnL: 0,
+                    clientPnL: 0,
+                    institutionReceives: institutionInvestment,
+                    clientReceives: estExit,
+                  };
                 }
                 const priceFinal = (batch as any).currentStockPrice ?? (batch as any).stockPriceAtStart ?? 0;
                 const mvFinal = (() => {
@@ -459,609 +517,243 @@ export function ClientTable({
                 return {
                   institutionPnL: Number(r.institutionPnL ?? 0),
                   clientPnL: Number(r.clientPnL ?? 0),
+                  institutionReceives: Number(r.institutionReceives ?? (institutionInvestment + Number(r.institutionPnL ?? 0))),
+                  clientReceives: Number(r.clientReceives ?? (client.investmentAmount + Number(r.clientPnL ?? 0))),
                 };
               } catch {
-                return { institutionPnL: 0, clientPnL: 0 };
+                return {
+                  institutionPnL: 0,
+                  clientPnL: 0,
+                  institutionReceives: institutionInvestment,
+                  clientReceives: estExit,
+                };
               }
             })();
+            const clientFinalPnL = settlementCalc.clientPnL;
+            const clientFinalPnLPct = client.investmentAmount > 0
+              ? (clientFinalPnL / client.investmentAmount) * 100
+              : 0;
+            const totalInvestmentAttributed = client.investmentAmount + institutionInvestment;
+            const totalPnL = settlementCalc.clientPnL + settlementCalc.institutionPnL;
+            const totalExitAttributed = settlementCalc.clientReceives + settlementCalc.institutionReceives;
+            const totalReturnPct = totalInvestmentAttributed > 0 ? (totalPnL / totalInvestmentAttributed) * 100 : 0;
+            const institutionReturnPct = institutionInvestment > 0 ? (settlementCalc.institutionPnL / institutionInvestment) * 100 : 0;
 
             return (
               <TableRow
                 id={`client-row-${client.id}`}
-                key={`${client.id}-${isSettled ? `S${settledTs}` : 'A'}`}
+                key={`${client.id}-${isSettled ? `S${settledTs}` : "A"}`}
                 className={cn(
-                  "group h-[68px]",
-                  isRedacted &&
-                    "opacity-60 bg-secondary/10 hover:bg-secondary/15 pointer-events-none select-none",
-                  !isRedacted && client.status === ClientStatus.EXIT_REQUESTED &&
-                    "opacity-70 bg-yellow-950/10 hover:bg-yellow-950/20",
-                  !isRedacted && client.status === ClientStatus.SETTLED && [
-                    justSettled
-                      ? "animate-settle-focus-pulse"
-                      : "settle-gray-static",
-                    "hover:bg-secondary/20",
-                  ]
+                  "border-t border-white/[0.06] bg-[rgba(5,16,41,0.38)] transition-colors hover:bg-[rgba(255,255,255,0.028)]",
+                  isRedacted && "opacity-60 pointer-events-none select-none",
+                  justSettled && "animate-settle-focus-pulse"
                 )}
               >
                 <TableCell>
                   {isRedacted ? (
                     <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-xl bg-secondary/60 border border-dashed border-border/60 flex items-center justify-center shrink-0">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-dashed border-border/60 bg-secondary/60">
                         <EyeOff className="h-4 w-4 text-muted-foreground/70" />
                       </div>
                       <div className="min-w-0">
-                        <p className="font-semibold text-sm italic text-muted-foreground">
-                          {client.name}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground/80 font-mono">
-                          其他商务经理 客户 · 已脱敏
-                        </p>
+                        <p className="font-semibold italic text-muted-foreground">{client.name}</p>
+                        <p className="text-[11px] text-muted-foreground/80">其他商务经理客户</p>
                       </div>
                     </div>
                   ) : (
                     <div className="flex items-center gap-3">
                       <ClientAvatar name={client.name} size="md" rounded="xl" />
                       <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="font-semibold text-sm truncate">{client.name}</p>
+                        <p className="truncate text-[14px] font-semibold leading-none text-foreground">{client.name}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
                           {(client as any).clientNo ? (
-                            <span className="font-mono text-[10px] px-1.5 py-0 rounded border border-primary/30 bg-primary/10 text-primary/90 h-[18px] leading-[18px] inline-flex items-center">
-                              {String((client as any).clientNo)}
-                            </span>
-                          ) : null}
-                          {(client as any).subAccountNo ? (
-                            <span className="font-mono text-[10px] px-1.5 py-0 rounded border border-secondary-foreground/30 bg-secondary/50 text-secondary-foreground h-[18px] leading-[18px] inline-flex items-center" title="中阳证券子账号">
-                              {String((client as any).subAccountNo)}
+                            <span className="rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/90">
+                              {(client as any).clientNo}
                             </span>
                           ) : null}
                           {isVipClient(client) && (
-                            <Badge variant="primary" className="text-[9px] px-1.5 py-0 h-4 font-mono">
-                              VIP
-                            </Badge>
+                            <span className="rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary/90">VIP</span>
                           )}
                           {client.investmentAmount >= 200000 && (
-                            <Badge variant="warning" className="text-[9px] px-1.5 py-0 h-4 font-mono">
-                              大额
-                            </Badge>
+                            <span className="rounded-md border border-warning/20 bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">大额</span>
                           )}
                         </div>
-                        <p className="text-[10px] text-muted-foreground font-mono truncate">
-                          占优先池 {clientRatio.toFixed(1)}%
-                        </p>
+                        <p className="mt-1 text-[10px] leading-none text-muted-foreground">占优先池 {clientRatio.toFixed(1)}%</p>
                       </div>
                     </div>
                   )}
                 </TableCell>
-                <TableCell className="w-[120px] min-w-[100px] max-w-[140px]">
+                <TableCell>
                   {isRedacted ? (
-                    <span className="text-sm text-muted-foreground italic">—</span>
+                    <span className="text-sm italic text-muted-foreground">—</span>
                   ) : (
-                    <Link
-                      href={`/bd/${encodeURIComponent(client.bdManager)}`}
-                      className="text-sm text-primary hover:text-primary/80 hover:underline underline-offset-2 transition-colors block w-full"
-                      title={`查看 ${client.bdManager} 的所有客户`}
-                    >
-                      <span className="block truncate whitespace-nowrap min-w-0">{client.bdManager}</span>
-                    </Link>
+                    <div className="min-w-0">
+                      <Link
+                        href={`/bd/${encodeURIComponent(client.bdManager)}`}
+                        className="block truncate text-[13px] font-medium leading-none text-primary hover:underline underline-offset-2"
+                        title={`查看 ${client.bdManager} 的所有客户`}
+                      >
+                        {client.bdManager}
+                      </Link>
+                      <p className="mt-1 text-[10px] leading-none text-muted-foreground">客户归属经理</p>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {isRedacted ? (
+                    <span className="text-sm italic text-muted-foreground">—</span>
+                  ) : (
+                      <div className="space-y-0.5">
+                        <div className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[9px] leading-none text-foreground/90">
+                        <User className="h-3 w-3" />
+                        客户账户
+                      </div>
+                        <div className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] leading-none text-primary/90">
+                        <Building2 className="h-3 w-3" />
+                        机构分成
+                      </div>
+                    </div>
                   )}
                 </TableCell>
                 <TableCell className="text-right">
                   {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
+                    <span className="italic text-muted-foreground">—</span>
                   ) : (
-                    <div>
-                      <p className="font-mono font-bold text-sm">
-                        {formatCurrency(client.investmentAmount)}
+                    <div className="min-w-0">
+                      <p className="font-mono text-[16px] font-bold leading-none tracking-tight text-foreground">{formatCurrency(client.investmentAmount)}</p>
+                      <p className="mt-1 text-[10px] leading-none text-muted-foreground/80">保本线 {formatCurrency(client.investmentAmount)}</p>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="italic text-muted-foreground">—</span>
+                  ) : (
+                    <div className="min-w-0">
+                      <p className="font-mono text-[16px] font-bold leading-none tracking-tight text-foreground">{formatCurrency(totalInvestmentAttributed)}</p>
+                      <div className="mt-1.5 space-y-1 text-[10px] leading-none text-muted-foreground/90">
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">客</span>
+                          <span className="font-mono tabular-nums tracking-tight">{formatCurrency(client.investmentAmount)}</span>
+                        </div>
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">机</span>
+                          <span className="font-mono tabular-nums tracking-tight">{formatCurrency(institutionInvestment)}</span>
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[10px] leading-none text-muted-foreground/75">占比 {clientRatio.toFixed(1)}%</p>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="italic text-muted-foreground">—</span>
+                  ) : (
+                    <div className="min-w-0">
+                      <p className={cn(
+                        "font-mono text-[16px] font-bold leading-none tracking-tight",
+                        totalPnL > 0 ? "text-success" : totalPnL < 0 ? "text-danger" : "text-muted-foreground"
+                      )}>
+                        {totalPnL > 0 ? "+" : ""}{formatCurrency(totalPnL)}
                       </p>
+                      <div className="mt-1.5 space-y-1 text-[10px] leading-none text-muted-foreground/90">
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">客</span>
+                          <span className="font-mono tabular-nums tracking-tight">
+                            {clientFinalPnL > 0 ? "+" : ""}{formatCurrency(clientFinalPnL)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">机</span>
+                          <span className="font-mono tabular-nums tracking-tight">
+                            {settlementCalc.institutionPnL > 0 ? "+" : ""}{formatCurrency(settlementCalc.institutionPnL)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="italic text-muted-foreground">—</span>
+                  ) : (
+                    <div className="min-w-0">
+                      <p className={cn(
+                        "font-mono text-[16px] font-bold leading-none tracking-tight",
+                        totalReturnPct > 0 ? "text-success" : totalReturnPct < 0 ? "text-danger" : "text-muted-foreground"
+                      )}>
+                        {totalReturnPct > 0 ? "+" : ""}{formatPercent(totalReturnPct)}
+                      </p>
+                      <div className="mt-1.5 space-y-1 text-[10px] leading-none text-muted-foreground/90">
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">客</span>
+                          <span className="font-mono tabular-nums tracking-tight">
+                            {clientFinalPnLPct > 0 ? "+" : ""}{formatPercent(clientFinalPnLPct)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">机</span>
+                          <span className="font-mono tabular-nums tracking-tight">
+                            {institutionReturnPct > 0 ? "+" : ""}{formatPercent(institutionReturnPct)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isRedacted ? (
+                    <span className="italic text-muted-foreground">—</span>
+                  ) : (
+                    <div className="min-w-0">
+                      <p className="font-mono text-[16px] font-bold leading-none tracking-tight text-primary">
+                        {unverifiedSettlement ? "待核对" : formatCurrency(totalExitAttributed)}
+                      </p>
+                      <div className="mt-1.5 space-y-1 text-[10px] leading-none text-muted-foreground/90">
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">客</span>
+                          <span className="font-mono tabular-nums tracking-tight">{formatCurrency(settlementCalc.clientReceives)}</span>
+                        </div>
+                        <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                          <span className="w-5 text-right text-muted-foreground/70">机</span>
+                          <span className="font-mono tabular-nums tracking-tight">{formatCurrency(settlementCalc.institutionReceives)}</span>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </TableCell>
                 <TableCell className="text-center">
                   {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
-                  ) : (
-                      <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="cursor-help">
-                          <p className="text-xs font-mono font-semibold">
-                            客户 {Number((split.client * 100).toFixed(2))}%
-                          </p>
-                          <p className="text-[10px] text-muted-foreground">
-                            / WIN100 {Number((split.institution * 100).toFixed(2))}%
-                          </p>
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <div className="text-xs space-y-0.5 w-[220px]">
-                          <p className="font-semibold">分成规则说明</p>
-                          <p className="text-muted-foreground">
-                            投资金额 ${client.investmentAmount?.toLocaleString?.()}
-                          </p>
-                          <p className="text-muted-foreground">
-                            签约比例：客户 {Number((split.client * 100).toFixed(2))}% /
-                            WIN100 {Number((split.institution * 100).toFixed(2))}%
-                          </p>
-                          <p className="pt-1 text-[10px] text-primary">
-                            * 客户亏损全额由 WIN100 担保资金承担
-                          </p>
-                        </div>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </TableCell>
-                <TableCell className="text-right">
-                  {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="cursor-help w-[140px] ml-auto">
-                          <p
-                            className={cn(
-                              "font-mono font-bold text-sm whitespace-nowrap tabular-nums",
-                              settlementCalc.institutionPnL > 0 && "text-success",
-                              settlementCalc.institutionPnL < 0 && "text-danger",
-                              settlementCalc.institutionPnL === 0 && "text-muted-foreground",
-                            )}
-                          >
-                            {settlementCalc.institutionPnL > 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <TrendingUp className="h-3 w-3" />
-                                +{formatCurrency(settlementCalc.institutionPnL)}
-                              </span>
-                            ) : settlementCalc.institutionPnL < 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <TrendingDown className="h-3 w-3" />
-                                {formatCurrency(settlementCalc.institutionPnL)}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <Minus className="h-3 w-3" /> {formatCurrency(0)}
-                              </span>
-                            )}
-                          </p>
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" align="end">
-                        <p className="text-xs w-[200px]">
-                          按客户本金占优先池权重 × WIN100 担保本金及补仓分摊对应的 WIN100 侧净利润（扣除担保本金与补仓本金回退）
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </TableCell>
-                <TableCell className="text-right">
-                  {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="cursor-help w-[140px] ml-auto">
-                          <p
-                            className={cn(
-                              "font-mono font-bold text-sm whitespace-nowrap tabular-nums",
-                              settlementCalc.clientPnL > 0 && "text-success",
-                              settlementCalc.clientPnL === 0 && "text-muted-foreground",
-                            )}
-                          >
-                            {settlementCalc.clientPnL > 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <PlusCircle className="h-3 w-3" />
-                                +{formatCurrency(settlementCalc.clientPnL)}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <ShieldCheck className="h-3 w-3 text-primary/80" /> 保本
-                              </span>
-                            )}
-                          </p>
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" align="end">
-                        <p className="text-xs w-[200px]">
-                          客户签约分成对应的最终净利润（客户本金 100% 保底，只有正向行情才产生盈利）
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </TableCell>
-                {shouldMergeProfitCols ? (
-                  <TableCell className="text-right">
-                    {isRedacted ? (
-                      <span className="text-muted-foreground italic">—</span>
-                    ) : (
-                      <div className="w-[140px] ml-auto">
-                        <p
-                          className={cn(
-                            "font-mono font-bold text-sm",
-                            actualPnL > 0 && "text-success",
-                            actualPnL === 0 && "text-muted-foreground"
-                          )}
-                        >
-                          {actualPnL > 0 ? (
-                            <span className="flex items-center gap-0.5 justify-end">
-                              <PlusCircle className="h-3 w-3" />
-                              +{formatCurrency(actualPnL)}
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-0.5 justify-end text-primary/80">
-                              <ShieldCheck className="h-3 w-3" /> {unverifiedSettlement ? "待核对" : isSettled ? "已结算" : "保本中"}
-                            </span>
-                          )}
-                        </p>
-                        {actualPnL > 0 ? (
-                          <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
-                            +{formatPercent(actualPnLPct)}
-                          </p>
-                        ) : (
-                          (() => {
-                            if (isSettled) return null;
-                            const mv = (client.marketValueShare ?? 0);
-                            const inv = client.investmentAmount || 0;
-                            const progress = inv > 0
-                              ? Math.max(0, Math.min(100, (mv / inv) * 100))
-                              : 100;
-                            return (
-                              <div className="mt-1.5">
-                                <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
-                                  <span>回本进度</span>
-                                  <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
-                                </div>
-                                <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
-                                  <div
-                                    className={cn(
-                                      "h-full rounded-full transition-all duration-700",
-                                      progress >= 100
-                                        ? "bg-gradient-to-r from-success to-success/70"
-                                        : progress >= 90
-                                        ? "bg-gradient-to-r from-primary to-primary/70"
-                                        : progress >= 75
-                                        ? "bg-gradient-to-r from-warning/90 to-warning/60"
-                                        : "bg-gradient-to-r from-danger/80 to-danger/50"
-                                    )}
-                                    style={{ width: `${progress}%` }}
-                                  />
-                                </div>
-                              </div>
-                            );
-                          })()
-                        )}
-                      </div>
-                    )}
-                  </TableCell>
-                ) : (
-                  <>
-                    <TableCell className="text-right">
-                      {isRedacted ? (
-                        <span className="text-muted-foreground italic">—</span>
-                      ) : isSettled ? (
-                        <div className="w-[140px] ml-auto">
-                          <p className="font-mono font-semibold text-sm text-muted-foreground italic text-right flex items-center gap-0.5 justify-end">
-                            <ShieldCheck className="h-3 w-3" /> —
-                          </p>
-                          <p className="text-[10px] font-mono mt-0.5 text-muted-foreground/70 text-right">
-                            已结算平仓
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="w-[140px] ml-auto">
-                          <p
-                            className={cn(
-                              "font-mono font-bold text-sm",
-                              realtimePnL > 0 && "text-success",
-                              realtimePnL < 0 && "text-danger",
-                              realtimePnL === 0 && ""
-                            )}
-                          >
-                            {realtimePnL > 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <TrendingUp className="h-3 w-3" />
-                                +{formatCurrency(realtimePnL)}
-                              </span>
-                            ) : realtimePnL < 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <TrendingDown className="h-3 w-3" />
-                                {formatCurrency(realtimePnL)}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-0.5 justify-end text-primary/80">
-                                <ShieldCheck className="h-3 w-3" /> 保本
-                              </span>
-                            )}
-                          </p>
-                          {realtimePnL > 0 ? (
-                            <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
-                              +{formatPercent((realtimePnL / (client.investmentAmount || 1)) * 100)}
-                            </p>
-                          ) : realtimePnL < 0 ? (
-                            <p className="text-[10px] font-mono mt-0.5 text-danger/80 text-right">
-                              {formatPercent((realtimePnL / (client.investmentAmount || 1)) * 100)}
-                            </p>
-                          ) : (
-                            (() => {
-                              const mv = (client.marketValueShare ?? 0);
-                              const inv = client.investmentAmount || 0;
-                              const progress = inv > 0
-                                ? Math.max(0, Math.min(100, (mv / inv) * 100))
-                                : 100;
-                              return (
-                                <div className="mt-1.5">
-                                  <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
-                                    <span>回本进度</span>
-                                    <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
-                                  </div>
-                                  <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
-                                    <div
-                                      className={cn(
-                                        "h-full rounded-full transition-all duration-700",
-                                        progress >= 100
-                                          ? "bg-gradient-to-r from-success to-success/70"
-                                          : progress >= 90
-                                          ? "bg-gradient-to-r from-primary to-primary/70"
-                                          : progress >= 75
-                                          ? "bg-gradient-to-r from-warning/90 to-warning/60"
-                                          : "bg-gradient-to-r from-danger/80 to-danger/50"
-                                      )}
-                                      style={{ width: `${progress}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })()
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {isRedacted ? (
-                        <span className="text-muted-foreground italic">—</span>
-                      ) : (
-                        <div className="w-[140px] ml-auto">
-                          <p
-                            className={cn(
-                              "font-mono font-bold text-sm",
-                              actualPnL > 0 && "text-success",
-                              actualPnL === 0 && "text-muted-foreground"
-                            )}
-                          >
-                            {actualPnL > 0 ? (
-                              <span className="flex items-center gap-0.5 justify-end">
-                                <PlusCircle className="h-3 w-3" />
-                                +{formatCurrency(actualPnL)}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-0.5 justify-end text-primary/80">
-                                <ShieldCheck className="h-3 w-3" /> 保本
-                              </span>
-                            )}
-                          </p>
-                          {actualPnL > 0 ? (
-                            <p className="text-[10px] font-mono mt-0.5 text-success/80 text-right">
-                              +{formatPercent(actualPnLPct)}
-                            </p>
-                          ) : (
-                            (() => {
-                              if (isSettled) return null;
-                              const mv = (client.marketValueShare ?? 0);
-                              const inv = client.investmentAmount || 0;
-                              const progress = inv > 0
-                                ? Math.max(0, Math.min(100, (mv / inv) * 100))
-                                : 100;
-                              return (
-                                <div className="mt-1.5">
-                                  <div className="flex items-center justify-between text-[9px] text-muted-foreground mb-1 font-mono">
-                                    <span>回本进度</span>
-                                    <span className="text-primary/80 font-semibold">{progress.toFixed(0)}%</span>
-                                  </div>
-                                  <div className="h-1.5 w-full rounded-full bg-secondary/50 overflow-hidden">
-                                    <div
-                                      className={cn(
-                                        "h-full rounded-full transition-all duration-700",
-                                        progress >= 100
-                                          ? "bg-gradient-to-r from-success to-success/70"
-                                          : progress >= 90
-                                          ? "bg-gradient-to-r from-primary to-primary/70"
-                                          : progress >= 75
-                                          ? "bg-gradient-to-r from-warning/90 to-warning/60"
-                                          : "bg-gradient-to-r from-danger/80 to-danger/50"
-                                      )}
-                                      style={{ width: `${progress}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })()
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                  </>
-                )}
-                {showRescueCol && (
-                  <TableCell className="text-right">
-                    {isRedacted ? (
-                      <span className="text-muted-foreground italic">—</span>
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="cursor-help w-[170px] ml-auto">
-                            <div className="flex items-center justify-end gap-2">
-                              <p className={cn(
-                                "font-mono font-bold text-sm",
-                                clientRequired > 0
-                                  ? clientPending > 0.01
-                                    ? "text-danger"
-                                    : clientFulfilled > 0
-                                      ? "text-success"
-                                      : "text-muted-foreground"
-                                  : ((client as any).rescueAllocation ?? 0) > 0
-                                    ? "text-warning"
-                                    : "text-muted-foreground"
-                              )}>
-                                {clientRequired > 0 ? (
-                                  <span className="flex items-center gap-0.5 justify-end">
-                                    {clientPending > 0.01 ? (
-                                      <>
-                                        <AlertCircle className="h-3 w-3" />
-                                        {formatCurrency(clientPending)}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <CheckCircle className="h-3 w-3" />
-                                        {formatCurrency(clientFulfilled)}
-                                      </>
-                                    )}
-                                  </span>
-                                ) : ((client as any).rescueAllocation ?? 0) > 0 ? (
-                                  <span className="flex items-center gap-0.5 justify-end">
-                                    <Archive className="h-3 w-3" />
-                                    {formatCurrency((client as any).rescueAllocation ?? 0)}
-                                  </span>
-                                ) : (
-                                  <span className="text-muted-foreground/60">—</span>
-                                )}
-                              </p>
-                            </div>
-                            {clientRequired > 0 && (
-                              <>
-                                <div className="flex items-center justify-between text-[9px] font-mono mt-1">
-                                  <span className="text-muted-foreground">
-                                    {clientFulfilled > 0 ? `到账 ${clientMarginProgressPct.toFixed(0)}%${historyCount > 0 ? ` · ${historyCount}次` : ""}` : `待补${clientMarginPctOfTotal.toFixed(1)}%批次总`}
-                                  </span>
-                                  <span className={cn(clientFulfilled > 0 ? "text-success" : "text-warning")}>
-                                    上限 {formatCurrency(clientRequired)}
-                                  </span>
-                                </div>
-                                <div className="h-1.5 w-full rounded-full bg-secondary/60 mt-1 overflow-hidden">
-                                  <div
-                                    className={cn(
-                                      "h-full transition-all duration-500",
-                                      clientMarginProgressPct >= 99.99
-                                        ? "bg-gradient-to-r from-success to-success/70"
-                                        : clientFulfilled > 0
-                                        ? "bg-gradient-to-r from-primary to-success/80"
-                                        : "bg-gradient-to-r from-danger/80 to-danger/50"
-                                    )}
-                                    style={{ width: `${clientMarginProgressPct}%` }}
-                                  />
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" align="end" className="w-[300px]">
-                          <div className="text-xs space-y-1.5">
-                            {clientRequired > 0 ? (
-                              <>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-muted-foreground">个体需补仓</span>
-                                  <span className="font-mono font-semibold text-danger">{formatCurrency(clientRequired)}</span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-muted-foreground">单独已补仓</span>
-                                  <span className="font-mono font-semibold text-success">{formatCurrency(clientFulfilled)}{historyCount > 0 ? ` · ${historyCount}次` : ""}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-t border-border/50 pt-1">
-                                  <span className="font-semibold">当前缺口</span>
-                                  <span className="font-mono font-bold text-danger">{formatCurrency(clientPending)}</span>
-                                </div>
-                                {((client as any).rescueAllocation ?? 0) > 0.01 && (
-                                  <div className="mt-1.5 pt-1.5 border-t border-border/50 space-y-1">
-                                    <p className="font-semibold text-warning flex items-center gap-1">
-                                      <Archive className="h-3 w-3" />WIN100 补仓救援（名义分摊）
-                                    </p>
-                                    <p className="text-muted-foreground text-[11px]">
-                                      WIN100 已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归 WIN100，客户不参与分成，本金 100% 保底。
-                                    </p>
-                                  </div>
-                                )}
-                                {ms?.history && ms.history.length > 0 && (
-                                  <div className="mt-1.5 pt-1.5 border-t border-border/50 space-y-1 max-h-[84px] overflow-y-auto">
-                                    <p className="text-[10px] font-semibold text-muted-foreground flex items-center gap-1">
-                                      <History className="h-3 w-3" /> 单独补仓历史
-                                    </p>
-                                    {[...ms.history].reverse().slice(0, 5).map((h) => (
-                                      <div key={h.id} className="flex items-center justify-between text-[10.5px]">
-                                        <span className={cn(
-                                          "font-mono",
-                                          h.source === "batch_one_click" ? "text-primary" : "text-success"
-                                        )}>
-                                          {h.source === "batch_one_click" ? "批次分配" : "单独补仓"}
-                                        </span>
-                                        <span className="flex items-center gap-1.5 font-mono font-semibold">
-                                          {formatCurrency(h.amount)}
-                                          <span className="text-muted-foreground">
-                                            {new Date(h.fulfilledAt).toLocaleDateString("zh-CN")}
-                                          </span>
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </>
-                            ) : ((client as any).rescueAllocation ?? 0) > 0 ? (
-                              <>
-                                <p className="font-semibold text-warning flex items-center gap-1">
-                                  <Archive className="h-3 w-3" />机构补仓救援（名义分摊）
-                                </p>
-                                <p className="text-muted-foreground text-[11px]">
-                                  机构已出资 {formatCurrency(batch?.cumulativeMarginCalls ?? 0)} 救援补仓，本客户按出资比例名义分摊 {formatCurrency((client as any).rescueAllocation ?? 0)}。救援金本金及盈利全部归机构，客户不参与分成，本金 100% 保底。
-                                </p>
-                              </>
-                            ) : null}
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                )}
-                <TableCell className="text-right">
-                  {isRedacted ? (
-                    <span className="text-muted-foreground italic">—</span>
-                  ) : (
-                    <div>
-                      <p className="font-mono font-bold text-sm text-gradient-primary">
-                        {unverifiedSettlement ? "待核对" : formatCurrency(estExit)}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {unverifiedSettlement ? "缺少历史结算快照" : isSettled ? "已冻结结算金额" : "本金 + 真实盈利"}
-                      </p>
-                    </div>
-                  )}
-                </TableCell>
-                <TableCell className="text-center">
-                  {isRedacted ? (
-                    <Badge variant="outline" className="gap-1 px-2.5 py-1 text-[11px] border-dashed text-muted-foreground italic">
+                    <Badge variant="outline" className="gap-1 border-dashed text-muted-foreground italic">
                       <EyeOff className="h-3 w-3" />
                       已脱敏
                     </Badge>
                   ) : (
-                    <>
-                      <Badge
-                        variant={statusConfig.variant as any}
-                        className="gap-1 px-2.5 py-1 text-[11px]"
-                      >
+                      <div className="space-y-0.5">
+                      <Badge variant={statusConfig.variant as any} className="gap-1 px-2 py-0.5 text-[10px] shadow-[0_0_14px_rgba(15,23,42,0.18)]">
                         <StatusIcon className="h-3 w-3" />
                         {statusConfig.label}
                       </Badge>
-                      {client.settledAt && (
-                        <p className="text-[9px] text-muted-foreground font-mono mt-1">
-                          {new Date(client.settledAt).toLocaleDateString('zh-CN')}
-                        </p>
+                      {showRescueCol && clientPending > 0.01 ? (
+                        <p className="text-[10px] leading-none font-medium text-warning">待补 {formatCurrency(clientPending)}</p>
+                      ) : showRescueCol && clientFulfilled > 0 ? (
+                        <p className="text-[10px] leading-none font-medium text-success">已补 {formatCurrency(clientFulfilled)}</p>
+                      ) : (
+                        <p className="text-[10px] leading-none text-muted-foreground">{isSettled ? "已冻结结算" : "客户本金保底"}</p>
                       )}
-                    </>
+                    </div>
                   )}
                 </TableCell>
                 <TableCell className="text-center">
                   {!isRedacted && (
-                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      <div className="grid justify-items-center gap-1">
                       {!isSettled && showRescueCol && clientRequired > 0 && clientPending > 0.01 && institutionRole && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="warning"
-                              size="sm"
-                              className="h-7 gap-1.5 px-2.5 text-[11px]"
+                                size="xs"
+                                className="h-7 gap-1 rounded-full px-2 text-[9px]"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (batch && isTopupBlockedByLegacyLedger(batch)) {
@@ -1075,111 +767,85 @@ export function ClientTable({
                               }}
                             >
                               <Zap className="h-3.5 w-3.5" />
-                              单独补仓
+                              机构补仓
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p className="text-[11px]">仅为该客户单独补仓 {formatCurrency(clientPending)}，其他客户保持缺口不变</p>
+                            <p className="text-[11px]">本次机构补仓 {formatCurrency(clientPending)}，客户本人不承担补仓义务</p>
                           </TooltipContent>
                         </Tooltip>
                       )}
-                      {/* Phase 3: 退出全流程按钮 */}
                       {client.status === ClientStatus.ACTIVE && institutionRole && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 gap-1.5 px-2.5 text-[11px] text-warning hover:text-warning hover:border-warning"
-                              disabled={!onRequestExit}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRequestExit?.(client.id);
-                              }}
-                            >
-                              <LogOut className="h-3.5 w-3.5" />
-                              申请退出
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-[11px]">提交退出申请，15 天通知期后可结算</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          className="h-7 gap-1 rounded-full px-2 text-[9px] text-warning hover:text-warning hover:border-warning"
+                          disabled={!onRequestExit}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRequestExit?.(client.id);
+                          }}
+                        >
+                          <LogOut className="h-3.5 w-3.5" />
+                          申请退出
+                        </Button>
                       )}
                       {client.status === ClientStatus.EXIT_REQUESTED && institutionRole && (
                         <>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className="h-7 gap-1 rounded-full px-2 text-[9px] text-muted-foreground"
+                            disabled={!onCancelExit}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCancelExit?.(client.id);
+                            }}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            取消
+                          </Button>
                           {(() => {
                             const elig = batch ? getExitEligibility(batch, client as any) : null;
                             const canSettle = elig?.canExit ?? false;
                             return (
-                              <>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-7 gap-1.5 px-2.5 text-[11px] text-muted-foreground"
-                                      disabled={!onCancelExit}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onCancelExit?.(client.id);
-                                      }}
-                                    >
-                                      <X className="h-3.5 w-3.5" />
-                                      取消申请
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="text-[11px]">取消退出申请，恢复持仓状态</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="secondary"
-                                      size="sm"
-                                      className="h-7 gap-1.5 px-2.5 text-[11px]"
-                                      disabled={!canSettle || !onClientStatusChange}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onClientStatusChange?.(client.id, ClientStatus.SETTLED);
-                                      }}
-                                    >
-                                      <CheckSquare className="h-3.5 w-3.5" />
-                                      结算
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p className="text-[11px]">
-                                      {canSettle
-                                        ? (elig?.isEarlyExit ? "提前退出，收取 1% 手续费归中阳证券" : "到期退出，无手续费")
-                                        : (elig?.reason ?? "等待通知期结束")}
-                                    </p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="secondary"
+                                    size="xs"
+                                    className="h-7 gap-1 rounded-full px-2 text-[9px]"
+                                    disabled={!canSettle || !onClientStatusChange}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onClientStatusChange?.(client.id, ClientStatus.SETTLED);
+                                    }}
+                                  >
+                                    <CheckSquare className="h-3.5 w-3.5" />
+                                    结算
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-[11px]">
+                                    {canSettle
+                                      ? (elig?.isEarlyExit ? "提前退出，收取 1% 手续费归中阳证券" : "到期退出，无手续费")
+                                      : (elig?.reason ?? "等待通知期结束")}
+                                  </p>
+                                </TooltipContent>
+                              </Tooltip>
                             );
                           })()}
                         </>
                       )}
                       {client.status === ClientStatus.SETTLED && (
-                        <>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 gap-1.5 px-2.5 text-[11px] text-muted-foreground"
-                              >
-                                <Archive className="h-3.5 w-3.5" />
-                                已归档
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-[11px]">客户已结算完成，不可再修改</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="h-7 gap-1 rounded-full px-2 text-[9px] text-muted-foreground"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                          已归档
+                        </Button>
                       )}
                     </div>
                   )}
@@ -1189,87 +855,8 @@ export function ClientTable({
           })}
         </TableBody>
       </Table>
-
-      {/* Summary Footer */}
-      <div className="bg-secondary/40 border-t border-border/50 px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">本页合计投资:</span>
-          <span className="font-mono font-bold text-sm">{formatCurrency(totalInvestment)}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">客户数:</span>
-          <span className="font-mono font-bold">{clients.length}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">已实现盈利合计:</span>
-          <span className={cn(
-            "font-mono font-bold text-sm tabular-nums",
-            clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) > 0
-              ? "text-success"
-              : clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) < 0
-              ? "text-warning"
-              : "text-muted-foreground"
-          )}>
-            {(clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0) >= 0 ? "+" : "")}
-            {formatCurrency(
-              clients.reduce((s, c) => s + (c.actualClientPnL ?? 0), 0)
-            )}
-          </span>
-        </div>
-        {!shouldMergeProfitCols && (
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground">未实现浮盈合计:</span>
-            <span className={cn(
-              "font-mono font-bold text-sm tabular-nums",
-              clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0) > 0
-                ? "text-success"
-                : clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0) < 0
-                ? "text-danger"
-                : "text-muted-foreground"
-            )}>
-              {(() => {
-                const v = clients.reduce((s, c) => s + (c.status === ClientStatus.SETTLED ? 0 : (c.realtimePnL ?? 0)), 0);
-                return (v >= 0 ? "+" : "") + formatCurrency(v);
-              })()}
-            </span>
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">预计总退出金额:</span>
-          <span className="font-mono font-bold text-sm text-primary">
-            {formatCurrency(
-              clients.reduce((s, c) => s + (c.investmentAmount + (c.actualClientPnL ?? 0)), 0)
-            )}
-          </span>
-        </div>
-        <div className="ml-auto flex items-center gap-4 text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <CheckCircle className="h-3 w-3 text-success" />
-            客户本金 100% 保底
-          </span>
-          <span className="flex items-center gap-1">
-            <TrendingUp className="h-3 w-3 text-success" />
-            盈利按比例分成
-          </span>
-          {(batchSummary || clientTotalMarginPending > 0) && (
-            <span className="flex items-center gap-1 pl-3 border-l border-border/60 ml-2">
-              <Zap className="h-3 w-3 text-warning" />
-              批次补仓缺口:{" "}
-              <span className="font-mono font-semibold text-danger">
-                {formatCurrency(clientTotalMarginPending)}
-              </span>
-              <span className="text-muted-foreground/70">
-                / 总需 {formatCurrency(batchSummary?.totalRequired ?? batchRequiredMarginCall)}
-              </span>
-              {batchSummary && batchSummary.clientCountWithSingleTopup > 0 && (
-                <span className="text-success/80">
-                  · 已单独补仓 {batchSummary.clientCountWithSingleTopup} 位
-                </span>
-              )}
-            </span>
-          )}
-        </div>
       </div>
+
       {marginDialogClient && perClientStateMap.has(marginDialogClient.id) && (
         <ConfirmDialog
           open={marginDialogOpen}
@@ -1284,8 +871,8 @@ export function ClientTable({
             }
           }}
           tone="warning"
-          title={`为 ${marginDialogClient.name ?? "该客户"} 单独补仓`}
-          description="WIN100 为该客户对应缺口单独出资，其他客户需补额不变，批次剩余缺口同步扣减。补仓本金及收益全部归 WIN100，与客户原始本金分开记录。"
+          title={`为 ${marginDialogClient.name ?? "该客户"} 记机构补仓`}
+          description="WIN100 对该客户归属缺口出资补仓，客户本人不承担任何补仓义务。其他客户的归属缺口不变，批次剩余缺口同步扣减。补仓本金及收益全部归 WIN100，与客户原始本金分开记录。"
           summary={
             (() => {
               const mm = perClientStateMap.get(marginDialogClient.id);
@@ -1297,10 +884,10 @@ export function ClientTable({
               const applyAmount = Math.min(pending, Math.max(0, safeAmount));
               return [
                 { label: "客户投资本金", value: formatCurrency(mm?.initialInvestment ?? marginDialogClient.investmentAmount ?? 0), accent: "muted" as const },
-                { label: "个体需补仓", value: formatCurrency(req), accent: "danger" as const },
-                { label: "单独已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
-                { label: "本次单独补仓", value: formatCurrency(applyAmount), accent: "warning" as const },
-                { label: "补仓后剩余缺口", value: formatCurrency(Math.max(0, pending - applyAmount)), accent: applyAmount >= pending ? "success" : "danger" as const },
+                { label: "机构归属补仓", value: formatCurrency(req), accent: "danger" as const },
+                { label: "机构已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
+                { label: "本次机构补仓", value: formatCurrency(applyAmount), accent: "warning" as const },
+                { label: "补仓后机构剩余缺口", value: formatCurrency(Math.max(0, pending - applyAmount)), accent: applyAmount >= pending ? "success" : "danger" as const },
                 { label: "归属 商务经理", value: marginDialogClient.bdManager ?? "—", accent: "primary" as const },
               ];
             })()
@@ -1354,7 +941,7 @@ export function ClientTable({
             const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
             const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
             const amount = Number.isFinite(parsed) && parsed > 0 ? Math.min(pending, parsed) : 0;
-            return amount > 0 ? `单独补仓 ${formatCurrency(amount)}` : "确认单独补仓";
+            return amount > 0 ? `确认机构补仓 ${formatCurrency(amount)}` : "确认机构补仓";
           })()}
           cancelText="取消"
           onConfirm={async () => {

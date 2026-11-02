@@ -675,7 +675,6 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   const redactedCountInPage = filteredClients.filter((c: any) => c.__redacted).length;
   const visibleOwnCountInPage = filteredClients.length - redactedCountInPage;
-  const totalOriginalClientCount = batch.clients?.length || 0;
 
   return (
     <div className={cn("space-y-6", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
@@ -1293,11 +1292,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             )}
           </div>
 
-          <div className="grid gap-3 grid-cols-2 md:grid-cols-4 pt-4 border-t border-border/40">
-            <div className="rounded-lg bg-secondary/50 p-3">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">初始总投资</p>
-              <p className="text-sm font-mono font-semibold">{formatCurrency(baseCapital)}</p>
-            </div>
+          <div className="grid gap-3 grid-cols-1 md:grid-cols-3 pt-4 border-t border-border/40">
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
                 {Math.round(warningPct)}% 预警阈值（含补仓）
@@ -1456,9 +1451,13 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               </div>
               <div className="space-y-1 rounded-lg bg-secondary/50 p-2.5">
                 <p className="text-muted-foreground flex items-center gap-1">
-                  <Users className="h-3 w-3" /> 客户数量
+                  <Target className="h-3 w-3" /> 优先占比
                 </p>
-                <p className="font-mono font-semibold text-primary">{batch.clients?.length || 0} 位</p>
+                <p className="font-mono font-semibold text-primary">
+                  {batch.initialTotalAmount > 0
+                    ? `${((batch.priorityAmount / batch.initialTotalAmount) * 100).toFixed(0)}%`
+                    : "--"}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -1468,56 +1467,39 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       {/* CLIENTS TABLE (Full Width) */}
       <div className="space-y-4">
         <Card className="border-border/50">
-            <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+            <CardHeader className="pb-2">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-bold">
                     <Users className="h-4 w-4 text-primary" />
-                    客户明细穿透
-                  </CardTitle>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    显示{" "}
-                    <span className="font-mono font-semibold text-foreground">
-                      {visibleOwnCountInPage}
-                    </span>{" "}
-                    位真实客户
-                    {isBdManager && redactedCountInPage > 0 && (
-                      <>
-                        {" · "}
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-secondary/60 border border-border/50 text-muted-foreground/90">
-                          <EyeOff className="h-3 w-3" />
-                          {redactedCountInPage} 位其他商务经理 客户已脱敏
-                        </span>
-                      </>
-                    )}
-                    {" · "}
-                    批次全部合计 {totalOriginalClientCount} 位{" · "}
-                    合计投资{" "}
-                    <span className="font-mono font-semibold">
-                      {formatCurrency(
-                        filteredClients
-                          .filter((c: any) => !c.__redacted)
-                          .reduce((s: number, c: any) => s + c.investmentAmount, 0)
-                      )}
+                    客户明细
+                    <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-mono text-primary">
+                      {visibleOwnCountInPage} 位
                     </span>
-                  </p>
+                    {isBdManager && redactedCountInPage > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-border/50 bg-secondary/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                        <EyeOff className="h-3 w-3" />
+                        脱敏 {redactedCountInPage}
+                      </span>
+                    )}
+                  </CardTitle>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/50 bg-secondary/20 p-1.5">
                   <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                     <input
-                      className="h-9 pl-8 pr-3 rounded-lg border border-input bg-background text-xs w-[180px] focus:outline-none focus:ring-2 focus:ring-ring"
-                      placeholder={isBdManager ? "搜索我名下客户" : "客户 / 商务经理搜索"}
+                      className="h-8 w-[156px] rounded-lg border border-input/80 bg-background/80 pl-8 pr-3 text-[11px] focus:outline-none focus:ring-2 focus:ring-ring"
+                      placeholder={isBdManager ? "搜我名下" : "搜客户 / 商务"}
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />
                   </div>
                   <select
-                    className="h-9 px-3 rounded-lg border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="h-8 rounded-lg border border-input/80 bg-background/80 px-2.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                     value={bdFilter}
                     onChange={(e) => setBdFilter(e.target.value)}
                   >
-                    <option value="ALL">{isBdManager ? "仅我名下 / 全部" : "全部商务经理"}</option>
+                    <option value="ALL">{isBdManager ? "我名下" : "商务经理"}</option>
                     {bdManagers.map((bd) => {
                       const disabled = isBdManager && bd !== bdManagerFullName;
                       return (
@@ -1528,30 +1510,31 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     })}
                   </select>
                   <select
-                    className="h-9 px-3 rounded-lg border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="h-8 rounded-lg border border-input/80 bg-background/80 px-2.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-ring"
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value as any)}
                   >
-                    <option value="ALL">全部状态</option>
+                    <option value="ALL">状态</option>
                     <option value="ACTIVE">持仓中</option>
                     <option value="SETTLED">已结算</option>
                   </select>
                   <select
-                    className="h-9 px-3 rounded-lg border border-input bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="h-8 rounded-lg border border-input/80 bg-background/80 px-2.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-ring"
                     value={splitFilter}
                     onChange={(e) => setSplitFilter(e.target.value as any)}
                   >
-                    <option value="ALL">全部分成档位</option>
+                    <option value="ALL">分成档位</option>
                     <option value="VIP">VIP 档（按签约时门槛）</option>
                     <option value="STANDARD">普通档（按签约时门槛）</option>
                   </select>
                   <Button
                     size="sm"
-                    className="gap-1.5 h-9"
+                    variant="outline"
+                    className="h-8 gap-1 border-primary/20 bg-primary/5 px-2.5 text-[11px] text-primary hover:bg-primary/10"
                     onClick={() => setAddClientOpen(true)}
                   >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    新增客户
+                    <UserPlus className="h-3 w-3" />
+                    新增
                   </Button>
                 </div>
               </div>
@@ -1562,6 +1545,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 batchInitialAmount={batch.initialTotalAmount}
                 viewerRole={role}
                 viewerUser={user ?? undefined}
+                showOverviewCards={false}
+                showSectionTabs={false}
                 batchRequiredMarginCall={lockedBatchRequiredMargin > 0 ? lockedBatchRequiredMargin : metrics.requiredMarginCall}
                 onClientStatusChange={handleClientStatusChange}
                 onRequestExit={handleRequestExit}
@@ -1592,7 +1577,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {bdStatsResult.visibleEntries
                   .sort((a, b) => b[1].amount - a[1].amount)
-                  .map(([bd, v], idx) => {
+                  .map(([bd, v]) => {
                     const { count, amount, pnl } = v;
                     const pct = (amount / batch.priorityAmount) * 100;
                     return (
