@@ -17,6 +17,7 @@ import {
   formatCurrency,
   formatPercent,
 } from "@/lib/utils";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import type { AppRole, AppSessionUser } from "@/types/auth";
 import { APP_ROLES } from "@/types/auth";
 import {
@@ -134,6 +135,7 @@ export function ClientTable({
   showOverviewCards = true,
   showSectionTabs = true,
 }: ClientTableProps) {
+  const { role } = useCurrentUser();
   const totalInvestment = clients
     .filter((c) => !(c as any).__redacted)
     .reduce((s, c) => s + c.investmentAmount, 0);
@@ -808,6 +810,8 @@ export function ClientTable({
                           {(() => {
                             const elig = batch ? getExitEligibility(batch, client as any) : null;
                             const canSettle = elig?.canExit ?? false;
+                            const isAdmin = role === "ADMIN" || role === "RISK_MANAGER";
+                            const effectivelyCanSettle = canSettle || isAdmin;
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -815,21 +819,21 @@ export function ClientTable({
                                     variant="secondary"
                                     size="xs"
                                     className="h-7 gap-1 rounded-full px-2 text-[9px]"
-                                    disabled={!canSettle || !onClientStatusChange}
+                                    disabled={!effectivelyCanSettle || !onClientStatusChange}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       onClientStatusChange?.(client.id, ClientStatus.SETTLED);
                                     }}
                                   >
                                     <CheckSquare className="h-3.5 w-3.5" />
-                                    结算
+                                    {!canSettle && isAdmin ? "特批同意" : "同意退出"}
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
                                   <p className="text-[11px]">
                                     {canSettle
                                       ? (elig?.isEarlyExit ? "提前退出，收取 1% 手续费归中阳证券" : "到期退出，无手续费")
-                                      : (elig?.reason ?? "等待通知期结束")}
+                                      : (isAdmin ? "特批免等待期，立即同意并结算" : (elig?.reason ?? "等待通知期结束"))}
                                   </p>
                                 </TooltipContent>
                               </Tooltip>
