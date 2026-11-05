@@ -270,6 +270,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [topupCollateralType, setTopupCollateralType] = useState<"cash" | "stock">("stock");
   const [settleTarget, setSettleTarget] = useState<string | null>(null);
+  const [requestExitTarget, setRequestExitTarget] = useState<string | null>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [bdFilter, setBdFilter] = useState("ALL");
@@ -639,6 +640,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   // Phase 3: 客户退出申请
   const handleRequestExit = (clientId: string) => {
+    setRequestExitTarget(clientId);
+  };
+
+  const confirmRequestExit = (clientId: string) => {
     try {
       const canonical = getMockData().batches.find((b) => b.id === batch.id);
       if (!canonical) return;
@@ -654,7 +659,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           type: "INFO",
           severity: "MEDIUM",
           title: "收到客户退出申请",
-          message: `商务经理 ${user?.displayName || "未知"} 提交了客户 ${clientName} 的退出申请，等待管理员审批/结算。`,
+          message: `操作人 ${user?.displayName || "未知"} 提交了客户 ${clientName} 的退出申请，等待审批/结算。`,
         });
       });
     } catch (err) {
@@ -2035,6 +2040,18 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
           setTick((t) => t + 1);
           onChange?.();
+        }}
+      />
+      <ConfirmDialog
+        open={!!requestExitTarget}
+        onOpenChange={(open) => { if (!open) setRequestExitTarget(null); }}
+        title="确认申请退出"
+        description="提交退出申请后，将进入为期 15 天的通知冷却期。冷却期满后方可进行财务结算。确认提交申请吗？"
+        confirmText="确认提交"
+        cancelText="取消"
+        onConfirm={() => {
+          if (requestExitTarget) confirmRequestExit(requestExitTarget);
+          setRequestExitTarget(null);
         }}
       />
     </div>
