@@ -821,6 +821,7 @@ export function ClientTable({
                                     className="h-7 gap-1 rounded-full px-2 text-[9px]"
                                     disabled={!effectivelyCanSettle || !onClientStatusChange}
                                     onClick={(e) => {
+                                      e.preventDefault();
                                       e.stopPropagation();
                                       onClientStatusChange?.(client.id, ClientStatus.SETTLED);
                                     }}
