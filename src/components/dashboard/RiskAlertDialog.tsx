@@ -106,6 +106,7 @@ export function RiskAlertDialog({
     if (openingBatchId === batchId) return;
     setOpeningBatchId(batchId);
     onDismissOne(batchId);
+    onDismissAll(); // 主动关闭弹窗
     router.push(`/batch/${batchId}`);
   };
 
