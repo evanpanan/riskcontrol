@@ -684,19 +684,19 @@ export function ClientTable({
                         "font-mono text-[16px] font-bold leading-none tracking-tight",
                         totalReturnPct > 0 ? "text-success" : totalReturnPct < 0 ? "text-danger" : "text-muted-foreground"
                       )}>
-                        {totalReturnPct > 0 ? "+" : ""}{formatPercent(totalReturnPct)}
+                        {formatPercent(totalReturnPct)}
                       </p>
                       <div className="mt-1.5 space-y-1 text-[10px] leading-none text-muted-foreground/90">
                         <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                           <span className="w-5 text-right text-muted-foreground/70">客</span>
                           <span className="font-mono tabular-nums tracking-tight">
-                            {clientFinalPnLPct > 0 ? "+" : ""}{formatPercent(clientFinalPnLPct)}
+                            {formatPercent(clientFinalPnLPct)}
                           </span>
                         </div>
                         <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                           <span className="w-5 text-right text-muted-foreground/70">机</span>
                           <span className="font-mono tabular-nums tracking-tight">
-                            {institutionReturnPct > 0 ? "+" : ""}{formatPercent(institutionReturnPct)}
+                            {formatPercent(institutionReturnPct)}
                           </span>
                         </div>
                       </div>
