@@ -2017,7 +2017,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           if (!canonical || !settleTarget) throw new Error("客户不存在，请刷新。");
           const clientName = canonical.clients?.find((c) => c.id === settleTarget)?.name || settleTarget;
           try {
-            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
+            const isAdmin = role === "ADMIN" || role === "RISK_MANAGER";
+            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget, { force: isAdmin }));
           } catch (err) {
             if (err instanceof Error && err.name === "RevisionMismatchError") {
               toast.error(err.message);

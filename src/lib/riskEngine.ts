@@ -1034,7 +1034,7 @@ function releaseClientObligation(batch: BatchLike, clientId: string): void {
   }
 }
 
-export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string } = {}): SettlementSnapshot {
+export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string; force?: boolean } = {}): SettlementSnapshot {
   initializeBatchFinance(batch);
   const f = batch.finance!;
   if (f.settlements[clientId]) return f.settlements[clientId];
@@ -1044,11 +1044,13 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
 
   // Phase 3: 检查退出资格 — 必须已提交退出申请且通知期已过
   const eligibility = getExitEligibility(batch, client);
-  if (client.status !== ClientStatus.EXIT_REQUESTED) {
-    throw new Error("请先提交退出申请，待通知期结束后再结算。");
-  }
-  if (!eligibility.canExit) {
-    throw new Error(eligibility.reason);
+  if (!opts.force) {
+    if (client.status !== ClientStatus.EXIT_REQUESTED) {
+      throw new Error("请先提交退出申请，待通知期结束后再结算。");
+    }
+    if (!eligibility.canExit) {
+      throw new Error(eligibility.reason);
+    }
   }
 
   // 只核销本客户未履约的补仓义务，其他客户的补仓轮次与原始期限保持不变。
