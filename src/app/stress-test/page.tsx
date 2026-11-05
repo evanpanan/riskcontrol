@@ -46,7 +46,7 @@ const PRESET_SCENARIOS: { label: string; scenario: StressScenario }[] = [
 
 export default function StressTestPage() {
   const [tick, setTick] = useState(0);
-  const { batches } = useMemo(() => getMockData(), [tick]);
+  const { batches } = useMemo(() => getMockData(), []);
 
   const [dropPercent, setDropPercent] = useState<number>(DEFAULT_STRESS_SCENARIO.dropPercent);
   const [settlementDelayDays, setSettlementDelayDays] = useState<number>(DEFAULT_STRESS_SCENARIO.settlementDelayDays);

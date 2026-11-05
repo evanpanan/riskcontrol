@@ -129,7 +129,7 @@ export default function MarketPage() {
   const [liveSymbol, setLiveSymbol] = useState<string>(DEFAULT_LIVE_QUOTE.symbol);
   const [realtime, setRealtime] = useState<BrowserQuote | null>(null);
   const [animActive, setAnimActive] = useState(true);
-  const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
+  const batches = useMemo(() => [...mockDataRef.current.batches], []);
 
   const riskMonthly = useMemo(() => {
     if (batches.length === 0) return [];

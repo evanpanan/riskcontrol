@@ -66,9 +66,9 @@ export default function DashboardPage() {
     }
   }
   const [tick, setTick] = useState(0);
-  const rawBatches = useMemo(() => [...(mockDataRef.current?.batches ?? [])], [tick, hydrated]);
+  const rawBatches = useMemo(() => [...(mockDataRef.current?.batches ?? [])], [hydrated]);
   const batches = useMemo(() => filterBatchesForUser(rawBatches, user ?? null), [rawBatches, user]);
-  const stockHistory = useMemo(() => mockDataRef.current?.stockHistory ?? [], [tick, hydrated]);
+  const stockHistory = useMemo(() => mockDataRef.current?.stockHistory ?? [], [hydrated]);
   const summary = useMemo(() => calculatePortfolioSummary(batches), [batches]);
   const lockedCount = batches.filter((b) => b.status === "LOCKED").length;
   const tradingCount = batches.length - lockedCount;
@@ -238,9 +238,11 @@ export default function DashboardPage() {
     () => [{ value: "ALL", label: "全部年份", count: batches.length }, ...yearGroups.map((y) => ({ value: y.year, label: `${y.year}年`, count: y.count }))],
     [yearGroups, batches.length]
   );
+
+  // toMonthKey 并不是响应式状态，不需要放入依赖数组
   const shownMonthGroups = useMemo(
     () => (yearFilter === "ALL" ? monthGroups : monthGroups.filter((m) => m.year === yearFilter)),
-    [monthGroups, yearFilter]
+    [yearFilter, monthGroups]
   );
   const yearMonthFilterActive = yearFilter !== "ALL" || monthFilter !== "ALL";
   const resetYearMonth = () => { setYearFilter("ALL"); setMonthFilter("ALL"); };

@@ -396,7 +396,7 @@ export default function SettingsPage() {
     } catch {
       return { batches: 0, clients: 0 };
     }
-  }, [hydrated, clearDataOpen]);
+  }, [hydrated]);
   const handleClearAllData = useCallback(async () => {
     setClearingData(true);
     try {
