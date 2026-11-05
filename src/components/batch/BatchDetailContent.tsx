@@ -642,10 +642,21 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     try {
       const canonical = getMockData().batches.find((b) => b.id === batch.id);
       if (!canonical) return;
+      const clientName = canonical.clients?.find((c) => c.id === clientId)?.name || clientId;
       commitBatchFinance(canonical, (draft) => {
         requestClientExit(draft, clientId, { operatorName: user?.displayName });
       });
       toast.success("已提交退出申请，等待 15 天通知期后可结算");
+      
+      // 触发内部通知
+      import("@/lib/notifier").then(({ pushInternalNotification }) => {
+        pushInternalNotification({
+          type: "INFO",
+          severity: "MEDIUM",
+          title: "收到客户退出申请",
+          message: `商务经理 ${user?.displayName || "未知"} 提交了客户 ${clientName} 的退出申请，等待管理员审批/结算。`,
+        });
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "退出申请失败");
       return;
@@ -1999,6 +2010,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         onConfirm={() => {
           const canonical = getMockData().batches.find((b) => b.id === batch.id);
           if (!canonical || !settleTarget) throw new Error("客户不存在，请刷新。");
+          const clientName = canonical.clients?.find((c) => c.id === settleTarget)?.name || settleTarget;
           try {
             commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget));
           } catch (err) {
@@ -2009,6 +2021,17 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             }
             return;
           }
+          
+          // 触发内部通知：管理员已审批通过退出
+          import("@/lib/notifier").then(({ pushInternalNotification }) => {
+            pushInternalNotification({
+              type: "INFO",
+              severity: "MEDIUM",
+              title: "客户退出审批已通过",
+              message: `管理员 ${user?.displayName || "未知"} 审批通过了客户 ${clientName} 的退出申请并已完成结算，相关额度已释放。`,
+            });
+          });
+          
           window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
           setTick((t) => t + 1);
           onChange?.();

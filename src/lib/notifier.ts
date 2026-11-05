@@ -133,6 +133,28 @@ export function getNotificationLogs(): NotificationLogEntry[] {
   return getLog();
 }
 
+export function pushInternalNotification(payload: Omit<NotificationPayload, "recipients" | "timestamp"> & { recipients?: NotificationPayload["recipients"]; timestamp?: Date }) {
+  if (typeof window === "undefined") return;
+  const entry: NotificationLogEntry = {
+    id: `n_${crypto.randomUUID()}`,
+    payload: {
+      ...payload,
+      recipients: payload.recipients || { emails: [], whatsapps: [] },
+      timestamp: payload.timestamp || new Date(),
+    },
+    result: {
+      success: true,
+      sentAt: new Date(),
+      recipientCount: { emails: 0, whatsapps: 0 },
+      channels: { internal: { success: true } }
+    },
+    createdAt: new Date().toISOString(),
+    status: "success",
+  };
+  pushLog(entry);
+  window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
+}
+
 export function buildMarginCallNotification(
   batch: Batch,
   marginCall: MarginCall,
