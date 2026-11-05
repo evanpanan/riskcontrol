@@ -55,8 +55,8 @@ export function TopBar() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<number>(0);
-  const [secondsAgo, setSecondsAgo] = useState(0);
+  const [nextUpdateAt, setNextUpdateAt] = useState<number>(0);
+  const [secondsLeft, setSecondsLeft] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifTick, setNotifTick] = useState(0);
   const [lastReadNotifAt, setLastReadNotifAt] = useState<number>(0);
@@ -75,7 +75,7 @@ export function TopBar() {
     setHydrated(true);
     const t = Date.now();
     setNow(new Date(t));
-    setLastUpdated(t);
+    setNextUpdateAt(t + 8000); // 默认大概8秒后更新
     try {
       const raw = localStorage.getItem(LAST_READ_NOTIF_KEY);
       if (raw) setLastReadNotifAt(Math.max(0, Number(raw) || 0));
@@ -87,11 +87,8 @@ export function TopBar() {
         if (!ce?.detail) return;
         if (ce.detail.symbol || ce.detail.displaySymbol) {
           setQuote((q) => ({ ...DEFAULT_LIVE_QUOTE, ...q, ...ce.detail }));
-          return;
         }
         if (typeof ce.detail.updatedAt === "number") {
-          setLastUpdated(ce.detail.updatedAt);
-          setSecondsAgo(0);
           const qNow = getQuoteSettings();
           const symKey = (qNow.symbol || "").trim().toUpperCase();
           const quotes = ce.detail.quotes as Record<string, { price: number; changePercent: number }> | undefined;
@@ -170,6 +167,9 @@ export function TopBar() {
       const refreshSec = nyseNow.shouldRefreshReal
         ? Math.min(60, userRefresh)
         : Math.min(60, Math.max(30, userRefresh));
+      
+      setNextUpdateAt(Date.now() + refreshSec * 1000);
+      
       t2Id = setTimeout(async () => {
         setQuoteFetching(true);
         try {
@@ -205,25 +205,18 @@ export function TopBar() {
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(new Date());
-      setSecondsAgo(Math.floor((Date.now() - lastUpdated) / 1000));
+      setSecondsLeft(Math.max(0, Math.ceil((nextUpdateAt - Date.now()) / 1000)));
     }, 1000);
     return () => clearInterval(timer);
-  }, [lastUpdated]);
+  }, [nextUpdateAt]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
     try { refreshMockDataPrices(); } catch {}
     setTimeout(() => {
       setIsRefreshing(false);
-      setLastUpdated(Date.now());
-      setSecondsAgo(0);
+      setNextUpdateAt(Date.now() + (Number(quote.refreshSec) || 8) * 1000);
     }, 1500);
-  };
-
-  const formatAgo = (s: number) => {
-    if (s < 60) return `${s} 秒前`;
-    if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-    return `${Math.floor(s / 3600)} 小时前`;
   };
 
   const roleBadgeVariant = (r: AppRole): "default" | "primary" | "warning" | "success" | "outline" | "danger" | "secondary" => {
@@ -330,7 +323,7 @@ export function TopBar() {
               </span>
               <span className="text-muted-foreground/80">|</span>
               <span className="font-mono text-muted-foreground tabular-nums">
-                {hydrated ? `${formatAgo(secondsAgo)}更新` : '准备中'}
+                {hydrated ? (nyse.shouldBreathe ? `${secondsLeft} 秒后更新` : '已停止') : '准备中'}
               </span>
             </div>
           </div>
@@ -438,7 +431,7 @@ export function TopBar() {
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>刷新行情（{hydrated ? `${secondsAgo}s 前更新` : '准备中'}）</p>
+              <p>刷新行情（{hydrated ? (nyse.shouldBreathe ? `${secondsLeft}s 后更新` : '已停止') : '准备中'}）</p>
             </TooltipContent>
           </Tooltip>
 
