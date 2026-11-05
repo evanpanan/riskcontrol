@@ -146,7 +146,11 @@ export function pushInternalNotification(payload: Omit<NotificationPayload, "rec
       success: true,
       sentAt: new Date(),
       recipientCount: { emails: 0, whatsapps: 0 },
-      channels: { internal: { success: true } }
+      channels: { 
+        internal: { success: true },
+        email: { success: true, sentTo: [] },
+        whatsapp: { success: true, sentTo: [] }
+      }
     },
     createdAt: new Date().toISOString(),
     status: "success",
