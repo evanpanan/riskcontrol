@@ -4,19 +4,30 @@ function hydrateRuntimeEnv() {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   const directDatabaseUrl = process.env.DIRECT_DATABASE_URL?.trim();
 
+  // 1. 如果没有配置 DATABASE_URL，优先使用 Vercel 的 POSTGRES_PRISMA_URL (带连接池)
   const vercelPooled =
     process.env.POSTGRES_PRISMA_URL?.trim() ||
-    process.env.POSTGRES_URL?.trim() ||
-    process.env.POSTGRES_URL_NON_POOLING?.trim();
+    process.env.POSTGRES_URL?.trim();
+    
+  // 2. 如果没有配置 DIRECT_DATABASE_URL，优先使用 Vercel 的 POSTGRES_URL_NON_POOLING (直连)
   const vercelDirect =
     process.env.POSTGRES_URL_NON_POOLING?.trim() ||
-    process.env.POSTGRES_URL?.trim() ||
-    process.env.POSTGRES_PRISMA_URL?.trim();
+    process.env.POSTGRES_URL?.trim();
 
-  if (!databaseUrl && vercelPooled) process.env.DATABASE_URL = vercelPooled;
-  if (!directDatabaseUrl && vercelDirect) process.env.DIRECT_DATABASE_URL = vercelDirect;
-  if (!process.env.DIRECT_DATABASE_URL?.trim() && process.env.DATABASE_URL?.trim()) {
-    process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL.trim();
+  if (!databaseUrl && vercelPooled) {
+    process.env.DATABASE_URL = vercelPooled;
+    console.log('[build] Auto-configured DATABASE_URL from Vercel env');
+  }
+  
+  if (!directDatabaseUrl && vercelDirect) {
+    process.env.DIRECT_DATABASE_URL = vercelDirect;
+    console.log('[build] Auto-configured DIRECT_DATABASE_URL from Vercel env');
+  }
+  
+  // 3. Prisma 强制要求如果使用了 directUrl 配置项，就必须提供该环境变量，否则抛出 P1012
+  if (!process.env.DIRECT_DATABASE_URL?.trim()) {
+    process.env.DIRECT_DATABASE_URL = process.env.DATABASE_URL?.trim();
+    console.log('[build] Fallback DIRECT_DATABASE_URL to DATABASE_URL to prevent Prisma P1012 error');
   }
 }
 
