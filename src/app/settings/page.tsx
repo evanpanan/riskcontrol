@@ -80,6 +80,9 @@ import {
   RefreshCw,
   Layers,
   Zap,
+  Bot,
+  Link2,
+  UserMinus,
 } from "lucide-react";
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from "react";
@@ -2213,6 +2216,9 @@ export default function SettingsPage() {
         </div>
       </CardContent>
     </Card>
+
+    {/* ====== WhatsApp 机器人订阅 ====== */}
+    <WhatsAppBotPanel />
       </div>
     </TabsContent>
 
@@ -3315,5 +3321,180 @@ export default function SettingsPage() {
 
 </div>
   </AuthGuard>
+  );
+}
+
+/**
+ * WhatsApp 机器人订阅面板：
+ * - 展示机器人号码与入站 Webhook 地址
+ * - 列出所有已订阅用户，支持退订 / 重新订阅 / 删除
+ */
+function WhatsAppBotPanel() {
+  const [subscribers, setSubscribers] = useState<
+    { id: string; phone: string; displayName: string | null; active: boolean; lastMessageAt: string; createdAt: string }[]
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [botPhone, setBotPhone] = useState(() => {
+    try { return localStorage.getItem("rc_wa_bot_phone") ?? ""; } catch { return ""; }
+  });
+  const webhookUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/api/notify/whatsapp/webhook`
+    : "";
+
+  const fetchSubs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/notify/whatsapp/subscribers", { cache: "no-store" });
+      if (!res.ok) throw new Error("加载失败");
+      const data = await res.json();
+      setSubscribers(data.subscribers ?? []);
+    } catch {
+      toast.error("加载订阅者列表失败");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchSubs(); }, [fetchSubs]);
+
+  const saveBotPhone = () => {
+    try { localStorage.setItem("rc_wa_bot_phone", botPhone.trim()); toast.success("机器人号码已保存"); }
+    catch { toast.error("保存失败"); }
+  };
+
+  const toggleActive = async (id: string, active: boolean) => {
+    try {
+      const res = await fetch(`/api/notify/whatsapp/subscribers/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+      });
+      if (!res.ok) throw new Error();
+      setSubscribers((prev) => prev.map((s) => (s.id === id ? { ...s, active } : s)));
+      toast.success(active ? "已重新订阅" : "已退订");
+    } catch {
+      toast.error("操作失败");
+    }
+  };
+
+  const removeSub = async (id: string) => {
+    try {
+      const res = await fetch(`/api/notify/whatsapp/subscribers/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setSubscribers((prev) => prev.filter((s) => s.id !== id));
+      toast.success("已删除");
+    } catch {
+      toast.error("删除失败");
+    }
+  };
+
+  const copyWebhook = () => {
+    navigator.clipboard?.writeText(webhookUrl).then(
+      () => toast.success("Webhook 地址已复制"),
+      () => toast.error("复制失败，请手动复制")
+    );
+  };
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2">
+          <Bot className="h-4 w-4 text-success" />
+          WhatsApp 机器人 · 自动订阅
+        </CardTitle>
+        <p className="text-xs text-muted-foreground mt-1">
+          用户给机器人号码发送任意消息即可订阅风控推送；发送「退订」可取消。订阅者会自动并入所有 WhatsApp 通知收件人。
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">机器人号码</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="+85291234567"
+                value={botPhone}
+                onChange={(e) => setBotPhone(e.target.value)}
+                className="font-mono text-sm h-9"
+              />
+              <Button size="sm" variant="outline" className="h-9" onClick={saveBotPhone}>保存</Button>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Twilio 入站 Webhook（粘贴到 Twilio Sandbox / Sender 的 When a message comes in）</Label>
+            <div className="flex gap-2">
+              <Input readOnly value={webhookUrl} className="font-mono text-xs h-9" />
+              <Button size="sm" variant="outline" className="h-9 gap-1" onClick={copyWebhook}>
+                <Link2 className="h-3.5 w-3.5" />复制
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Users className="h-3.5 w-3.5" />
+            订阅者：{subscribers.filter((s) => s.active).length} / {subscribers.length}
+          </div>
+          <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={fetchSubs} disabled={loading}>
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />刷新
+          </Button>
+        </div>
+
+        {subscribers.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground border rounded-xl border-dashed border-border/60">
+            <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
+            <p className="text-sm">暂无订阅者</p>
+            <p className="text-[11px] mt-0.5">用户给机器人号码发消息后会自动出现在这里</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/60 max-h-80 overflow-y-auto">
+            {subscribers.map((s) => (
+              <div key={s.id} className="py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-sm">{s.phone}</span>
+                    {s.displayName && <span className="text-xs text-muted-foreground">({s.displayName})</span>}
+                    {s.active ? (
+                      <Badge variant="success" className="text-[10px] gap-1">
+                        <CheckCircle2 className="h-2.5 w-2.5" />已订阅
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px]">已退订</Badge>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    最后消息：{formatDateTime(s.lastMessageAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {s.active ? (
+                    <Button
+                      size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-warning"
+                      onClick={() => toggleActive(s.id, false)}
+                    >
+                      <UserMinus className="h-3.5 w-3.5" />退订
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-success"
+                      onClick={() => toggleActive(s.id, true)}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" />重订阅
+                    </Button>
+                  )}
+                  <Button
+                    size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-danger hover:bg-danger/10"
+                    onClick={() => removeSub(s.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

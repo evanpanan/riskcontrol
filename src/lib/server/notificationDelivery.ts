@@ -1,3 +1,5 @@
+import { prisma } from "@/lib/prisma";
+
 type Channel = "email" | "whatsapp";
 type Env = Record<string, string | undefined>;
 const configured = (value?: string): value is string =>
@@ -74,11 +76,28 @@ export async function deliverNotification(body: any, env: Env = process.env) {
     throw new Error("请提供有效通知标题和正文（最多200和4000字符）。");
   }
   const raw = payload.recipients?.[channel === "email" ? "emails" : "whatsapps"];
-  if (!Array.isArray(raw) || !raw.length || raw.length > 20 || raw.some((v: unknown) => typeof v !== "string")) {
-    throw new Error("每次需提供1至20位有效收件人。");
+  if (!Array.isArray(raw) || raw.some((v: unknown) => typeof v !== "string")) {
+    throw new Error("收件人列表无效。");
   }
-  const targets = [...new Set<string>(raw.map((v: string) => channel === "email"
+  let targets = [...new Set<string>(raw.map((v: string) => channel === "email"
     ? v.trim() : v.trim().replace(/[\s()-]/g, "")))];
+
+  // WhatsApp 机器人订阅者：自动并入所有 active 订阅号码，无需管理员手动维护。
+  if (channel === "whatsapp") {
+    try {
+      const subscribers = await prisma.whatsAppSubscriber.findMany({
+        where: { active: true },
+        select: { phone: true },
+      });
+      targets = [...new Set([...targets, ...subscribers.map((s) => s.phone)])];
+    } catch {
+      /* 数据库不可用时退化为仅用显式收件人 */
+    }
+  }
+
+  if (!targets.length) {
+    throw new Error(channel === "email" ? "请提供收件邮箱。" : "请提供 WhatsApp 号码或先让用户订阅机器人。");
+  }
   if (targets.some((v) => !(channel === "email" ? emailValid(v) : phoneValid(v)))) {
     throw new Error(channel === "email" ? "收件邮箱格式无效。" : "WhatsApp 号码须含国家区号，例如 +85291234567。");
   }

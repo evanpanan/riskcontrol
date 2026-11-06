@@ -213,6 +213,22 @@ enum NotificationStatus {
 }
 
 // 通知投递记录：预警发送成功/部分/失败均落库，便于失败追溯与补发
+// WhatsApp 订阅者：用户向机器人号发送任意消息即订阅，发"退订"则取消。
+// 风控事件触发 WhatsApp 推送时，系统自动把本表里所有 active 的号码并入收件人。
+model WhatsAppSubscriber {
+  id             String   @id @default(cuid())
+  phone          String   @unique
+  displayName    String?
+  source         String?
+  active         Boolean  @default(true)
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([active])
+  @@index([lastMessageAt])
+}
+
 model NotificationLog {
   id         String             @id @default(cuid())
   channel    String
