@@ -1999,36 +1999,18 @@ export default function SettingsPage() {
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
-                  <p className="font-semibold text-sm">WhatsApp 通知通道</p>
+                  <p className="font-semibold text-sm">WhatsApp 机器人订阅</p>
                   <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
-                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 通知通道？">
+                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 机器人？">
                     <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  紧急警报通过 WhatsApp 发送至相关人员手机
+                  用户给机器人号码发消息即自动订阅，无需在此手动维护收件人
                 </p>
               </div>
             </div>
-            {hydrated && form.whatsappWebhook ? (
-              <Badge variant="success" className="gap-1 text-[10px]">
-                <CheckCircle2 className="h-2.5 w-2.5" />
-                已填地址，待验证
-              </Badge>
-            ) : (
-              <Badge variant="secondary" className="gap-1 text-[10px]">
-                <Info className="h-2.5 w-2.5" />
-                待配置
-              </Badge>
-            )}
           </div>
-          <SettingsField
-            name="whatsappWebhook"
-            value={form.whatsappWebhook}
-            onValueChange={handleSettingsFieldChange}
-            placeholder="可选：填入自建转发地址（HTTPS），留空则使用系统默认通道"
-            className="font-mono text-xs"
-          />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2069,26 +2051,12 @@ export default function SettingsPage() {
               <Mail className="h-3.5 w-3.5" />
               {sendingTest === "email" ? "发送中…" : "发送测试邮件"}
             </Button>
-            <Button
-              variant="outline"
-              className="gap-1.5"
-              onClick={() => handleSendTest("whatsapp")}
-              disabled={!!sendingTest}
-            >
-              <MessageCircle className="h-3.5 w-3.5" />
-              {sendingTest === "whatsapp" ? "发送中…" : "发送测试 WhatsApp"}
-            </Button>
           </div>
-          {(testStatus.email || testStatus.whatsapp) && (
+          {(testStatus.email) && (
             <div className="space-y-1 text-[11px] font-mono">
               {testStatus.email && (
                 <div className={cn(testStatus.email.startsWith("OK") ? "text-success" : "text-danger")}>
                   Email: {testStatus.email}
-                </div>
-              )}
-              {testStatus.whatsapp && (
-                <div className={cn(testStatus.whatsapp.startsWith("OK") ? "text-success" : "text-danger")}>
-                  WhatsApp: {testStatus.whatsapp}
                 </div>
               )}
             </div>
@@ -2157,11 +2125,6 @@ export default function SettingsPage() {
                   <span className="inline-flex items-center gap-1">
                     <Mail className="h-3 w-3" />{r.email}
                   </span>
-                  {r.whatsapp && (
-                    <span className="inline-flex items-center gap-1">
-                      <MessageCircle className="h-3 w-3" />{displayWhatsApp(r.whatsapp)}
-                    </span>
-                  )}
                 </div>
               </div>
             </div>
@@ -2635,7 +2598,6 @@ export default function SettingsPage() {
                     </div>
                     <div className="flex items-center gap-2 mt-0.5 text-[10.5px] text-muted-foreground font-mono truncate max-w-[400px]">
                       <span>{u.email}</span>
-                      {u.whatsapp && <span>· {displayWhatsApp(u.whatsapp)}</span>}
                       {u.bdManagerFullName && <span className="truncate">· {u.bdManagerFullName}</span>}
                     </div>
                   </div>
@@ -2966,47 +2928,6 @@ export default function SettingsPage() {
         />
         {rErrors.email && <p className="text-[11px] text-danger">{rErrors.email}</p>}
       </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs flex items-center gap-1">
-          <MessageCircle className="h-3 w-3" /> WhatsApp（选填）
-        </Label>
-        <div className="grid grid-cols-[160px_1fr] gap-2">
-          <Select value={rWA.code} onValueChange={(v) => setRWA({ ...rWA, code: v })}>
-            <SelectTrigger className="h-9 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {COUNTRY_CODES.map((c) => (
-                <SelectItem key={c.code} value={c.code} className="text-xs">
-                  {c.code === "CUSTOM" ? c.label : `${c.label} (${c.code})`}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {rWA.code !== "CUSTOM" ? (
-            <Input
-              placeholder="本地号码，如 91234567"
-              value={rWA.local}
-              onChange={(e) => setRWA({ ...rWA, local: e.target.value.replace(/[^\d]/g, "") })}
-              className="font-mono text-xs h-9"
-              maxLength={20}
-            />
-          ) : (
-            <Input
-              placeholder="手动输入完整号码，如 +000-000000"
-              value={rWA.customRaw}
-              onChange={(e) => setRWA({ ...rWA, customRaw: e.target.value })}
-              className="font-mono text-xs h-9"
-              maxLength={40}
-            />
-          )}
-        </div>
-        {rWA.code !== "CUSTOM" && rWA.local && (
-          <p className="text-[10.5px] text-muted-foreground">
-            预览：<span className="font-mono text-foreground">{rWA.code}-{rWA.local}</span>
-          </p>
-        )}
-      </div>
     </div>
     <DialogFooter className="gap-2 sm:gap-2">
       <Button variant="outline" onClick={() => setDlgOpen(false)}>
@@ -3107,47 +3028,6 @@ export default function SettingsPage() {
             </span>
           </div>
         </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs flex items-center gap-1">
-          <MessageCircle className="h-3 w-3" /> WhatsApp（选填）
-        </Label>
-        <div className="grid grid-cols-[160px_1fr] gap-2">
-          <Select value={uWA.code} onValueChange={(v) => setUWA({ ...uWA, code: v })}>
-            <SelectTrigger className="h-9 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {COUNTRY_CODES.map((c) => (
-                <SelectItem key={c.code} value={c.code} className="text-xs">
-                  {c.code === "CUSTOM" ? c.label : `${c.label} (${c.code})`}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {uWA.code !== "CUSTOM" ? (
-            <Input
-              placeholder="本地号码，如 91234567"
-              value={uWA.local}
-              onChange={(e) => setUWA({ ...uWA, local: e.target.value.replace(/[^\d]/g, "") })}
-              className="font-mono text-xs h-9"
-              maxLength={20}
-            />
-          ) : (
-            <Input
-              placeholder="手动输入完整号码，如 +000-000000"
-              value={uWA.customRaw}
-              onChange={(e) => setUWA({ ...uWA, customRaw: e.target.value })}
-              className="font-mono text-xs h-9"
-              maxLength={40}
-            />
-          )}
-        </div>
-        {uWA.code !== "CUSTOM" && uWA.local && (
-          <p className="text-[10.5px] text-muted-foreground">
-            预览：<span className="font-mono text-foreground">{uWA.code}-{uWA.local}</span>
-          </p>
-        )}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">

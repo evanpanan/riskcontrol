@@ -75,28 +75,29 @@ export async function deliverNotification(body: any, env: Env = process.env) {
       !payload.title.trim() || payload.title.length > 200 || payload.message.length > 4000) {
     throw new Error("请提供有效通知标题和正文（最多200和4000字符）。");
   }
-  const raw = payload.recipients?.[channel === "email" ? "emails" : "whatsapps"];
-  if (!Array.isArray(raw) || raw.some((v: unknown) => typeof v !== "string")) {
-    throw new Error("收件人列表无效。");
-  }
-  let targets = [...new Set<string>(raw.map((v: string) => channel === "email"
-    ? v.trim() : v.trim().replace(/[\s()-]/g, "")))];
+  let targets: string[] = [];
 
-  // WhatsApp 机器人订阅者：自动并入所有 active 订阅号码，无需管理员手动维护。
-  if (channel === "whatsapp") {
+  if (channel === "email") {
+    const raw = payload.recipients?.emails;
+    if (!Array.isArray(raw) || raw.some((v: unknown) => typeof v !== "string")) {
+      throw new Error("收件人列表无效。");
+    }
+    targets = [...new Set<string>(raw.map((v: string) => v.trim()))];
+  } else {
+    // WhatsApp 仅推送给机器人订阅者，忽略手动传入的号码（已废弃手动收件人方案）。
     try {
       const subscribers = await prisma.whatsAppSubscriber.findMany({
         where: { active: true },
         select: { phone: true },
       });
-      targets = [...new Set([...targets, ...subscribers.map((s) => s.phone)])];
+      targets = [...new Set(subscribers.map((s) => s.phone))];
     } catch {
-      /* 数据库不可用时退化为仅用显式收件人 */
+      /* 数据库不可用时 targets 为空，后续会抛出明确提示 */
     }
   }
 
   if (!targets.length) {
-    throw new Error(channel === "email" ? "请提供收件邮箱。" : "请提供 WhatsApp 号码或先让用户订阅机器人。");
+    throw new Error(channel === "email" ? "请提供收件邮箱。" : "暂无 WhatsApp 订阅者，请先让用户给机器人发消息订阅。");
   }
   if (targets.some((v) => !(channel === "email" ? emailValid(v) : phoneValid(v)))) {
     throw new Error(channel === "email" ? "收件邮箱格式无效。" : "WhatsApp 号码须含国家区号，例如 +85291234567。");

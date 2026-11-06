@@ -448,12 +448,13 @@ export async function notifyBatchChannel(
     if (channel === "email") {
       payload.recipients.whatsapps = [];
       if (!payload.recipients.emails.length && config.defaultRiskEmail) payload.recipients.emails = [config.defaultRiskEmail];
+      const targets = payload.recipients.emails;
+      if (!targets.length) throw new Error("请先到系统设置填写并启用真实收件邮箱。");
     } else {
+      // WhatsApp 仅推送给机器人订阅者，无需手动收件人
       payload.recipients.emails = [];
-      if (!payload.recipients.whatsapps.length && config.emergencyPhone) payload.recipients.whatsapps = [config.emergencyPhone];
+      payload.recipients.whatsapps = [];
     }
-    const targets = channel === "email" ? payload.recipients.emails : payload.recipients.whatsapps;
-    if (!targets.length) throw new Error("请先到系统设置填写并启用真实收件人。");
     const result = await sendNotification(payload);
     try {
       const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");

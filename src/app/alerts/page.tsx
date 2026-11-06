@@ -299,7 +299,7 @@ export default function AlertsPage() {
                               }}
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
-                              WhatsApp
+                              推送给订阅者
                             </Button>
                             {n.status === "pending" && n.severity === "critical" && (
                               <Button
