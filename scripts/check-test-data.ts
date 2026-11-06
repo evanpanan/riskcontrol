@@ -38,10 +38,14 @@ assert.deepEqual(data.batches.map((b) => b.clients.map((c) => [c.id, c.name, c.i
   generateMockData().batches.map((b) => b.clients.map((c) => [c.id, c.name, c.investmentAmount])));
 for (const batch of data.batches as BatchLike[]) {
   assert.ok(batch.clients!.every((c) => c.investmentAmount > 0));
-  assert.equal(batch.cumulativeMarginCalls, 0);
+  // 累计补仓金额口径 = 已实际到账（已履约）的补仓金额之和，与 syncBatchFinance 的回写口径一致
+  const fulfilledTotal = batch.marginCalls!.reduce((s, mc) => s + Number(mc.fulfilledAmount ?? 0), 0);
+  near(batch.cumulativeMarginCalls ?? 0, fulfilledTotal, 1e-6);
   initializeBatchFinance(batch);
+  // 演示夹具必须自洽：真实行情回查补齐成交价后，账本不得残留“历史资料不完整”告警
   assert.deepEqual(batch.finance!.legacyWarnings, []);
-  assert.equal(batch.finance!.trades.length, 0);
+  // 每条已履约补仓对应一条带成交价的机构成交记录
+  assert.equal(batch.finance!.trades.length, batch.marginCalls!.filter((mc) => Number(mc.fulfilledAmount ?? 0) > 0).length);
   // 优先/劣后恒为 7:3（syncBatchFinance 依据剩余本金重算）
   near(batch.priorityAmount, batch.initialTotalAmount * 0.7, 1e-6);
   near(batch.subordinateAmount, batch.initialTotalAmount * 0.3, 1e-6);
@@ -53,8 +57,8 @@ for (const batch of data.batches as BatchLike[]) {
     near(batch.clients!.reduce((sum, c) => sum + c.investmentAmount, 0), batch.initialTotalAmount, 1e-6);
   }
 }
-// 最新快照价（$8.710）高于全部批次入场价，测试数据中暂无触发补仓的批次；
-// 这里将批次 004 压至 78% 构造 22% 跌幅场景，以验证补仓与结算链路。
+// 最新快照价（$6.420）低于部分高入场价批次，测试数据本身已包含触发补仓的历史批次；
+// 这里再将批次 004 压至 78% 构造 22% 跌幅场景，以验证补仓与结算链路。
 const stress = structuredClone(data.batches[3]) as BatchLike;
 stress.currentStockPrice = Number((stress.stockPriceAtStart * 0.78).toFixed(4));
 initializeBatchFinance(stress);

@@ -388,35 +388,43 @@ export function generateMockData(): MockDataSet {
     );
 
     // 补仓次数：按真实跌幅决定（风险等级由 calculateBatchRiskMetrics 计算）
-    // 若 riskLevel=CRITICAL => 1 次补仓，WARNING => 0 或 1 次，其余 0
+    // 若 riskLevel=CRITICAL => 1~2 次补仓，WARNING => 0 或 1 次，其余 0
     const prelimMetrics = calculateBatchRiskMetrics(initialTotalAmount, currentMarketValue, 0);
-    let cumulativeMarginCalls = 0;
+    let marginCallCount = 0;
     if (prelimMetrics.riskLevel === RiskLevel.CRITICAL) {
-      cumulativeMarginCalls = batchRng.int(1, 2);
+      marginCallCount = batchRng.int(1, 2);
     } else if (prelimMetrics.riskLevel === RiskLevel.WARNING) {
-      cumulativeMarginCalls = batchRng.rand() < 0.35 ? 1 : 0;
+      marginCallCount = batchRng.rand() < 0.35 ? 1 : 0;
     }
-    const marginCalls: MarginCall[] = [];
-    for (let m = 0; m < cumulativeMarginCalls; m++) {
+    const marginCalls: (MarginCall & { averageEntryPrice?: number })[] = [];
+    for (let m = 0; m < marginCallCount; m++) {
       const callDate = new Date(now.getTime() - (m + 1) * 86400000 - batchRng.int(0, 5) * 86400000);
+      // 机构补仓成交价取触发补仓当日的真实收盘价；缺失会让账本被判为「缺少成交价待核对」
+      const callPrice = Number(findClosestClose(callDate.toISOString().slice(0, 10)).toFixed(4));
+      const callRequiredAmount = Number(prelimMetrics.requiredMarginCall.toFixed(2));
       marginCalls.push({
         id: `mc-${MOCK_BASE_SEED}-${i}-${m}`,
         batchId: `batch-${2026}-${String(i + 1).padStart(3, "0")}`,
         triggerDate: callDate,
         triggerMarketValue: prelimMetrics.currentMarketValue,
         dropPercent: prelimMetrics.dropPercent,
-        requiredAmount: Number(prelimMetrics.requiredMarginCall.toFixed(2)),
-        fulfilledAmount: m === cumulativeMarginCalls - 1 ? 0 : Number(prelimMetrics.requiredMarginCall.toFixed(2)),
-        fulfilledDate: m === cumulativeMarginCalls - 1 ? null : callDate,
-        status: m === cumulativeMarginCalls - 1 ? "PENDING" : "FULLFILLED",
+        requiredAmount: callRequiredAmount,
+        fulfilledAmount: m === marginCallCount - 1 ? 0 : callRequiredAmount,
+        fulfilledDate: m === marginCallCount - 1 ? null : callDate,
+        status: m === marginCallCount - 1 ? "PENDING" : "FULLFILLED",
         dueDate: new Date(getMarginRoundDueDate(callDate)),
         collateralType: "stock",
+        averageEntryPrice: callPrice,
         note: null,
         notifiedEmails: null,
         notifiedWhatsApps: null,
         createdAt: callDate,
       });
     }
+    // 累计补仓金额口径 = 已实际到账的机构补仓金额，与 syncBatchFinance 的回写口径保持一致
+    const cumulativeMarginCalls = money(
+      marginCalls.reduce((sum, mc) => sum + Number(mc.fulfilledAmount ?? 0), 0)
+    );
 
     const finalMetrics = calculateBatchRiskMetrics(
       initialTotalAmount,
@@ -1305,14 +1313,24 @@ export function getMockData(): MockDataSet {
             saved.batch.finance.revision++;
           }
         }
-        // 演示夹具中的历史结算是测试数据的一部分。运行态账本若只是一份没有任何真实记账的旧快照，
-        // 仍然整体覆盖会把已结算客户永久抹成「持仓中」，因此这里保留夹具结算后的批次并回写账本。
+        // 演示夹具本身是自洽的测试数据，用它逐批自愈两类旧版本运行态快照：
+        //   1) 夹具含内置结算，而账本只是一份无真实记账的旧快照；
+        //   2) 账本残留历史告警，但同样从未发生过真实记账。
+        // 真实记账一旦发生就必然在 settlements 留下快照、或落 batch_one_click/client_single 成交，
+        // 因此只要「无结算 + 全部成交均为 legacy 导入」即可判定该批从未被真实操作，可安全重建。
+        // 处理方式：仅重建该批的演示账本并回写，绝不触碰任何含真实记账的账目。
         const fixture = batch as BatchLike;
+        const savedHasStaleWarnings = (saved.batch.finance?.legacyWarnings?.length ?? 0) > 0;
+        const savedHasNoRealBookkeeping =
+          Object.keys(saved.batch.finance?.settlements ?? {}).length === 0 &&
+          (saved.batch.finance?.trades ?? []).every((t) => (t.source ?? "legacy") === "legacy");
         if (
-          isPristineLedgerRecord(saved) &&
-          Object.keys(fixture.finance?.settlements ?? {}).length > 0 &&
-          sameClientIds(fixture, saved.batch)
+          sameClientIds(fixture, saved.batch) &&
+          savedHasNoRealBookkeeping &&
+          (savedHasStaleWarnings || Object.keys(fixture.finance?.settlements ?? {}).length > 0)
         ) {
+          // 夹具可能尚未初始化账本（仅前 3 个批次在生成时初始化过），先按当前自洽数据建账
+          initializeBatchFinance(fixture);
           const previousRevision = saved.batch.finance?.revision ?? 0;
           fixture.finance!.revision = Math.max(Date.now(), previousRevision + 1);
           const savedPrice = Number(saved.batch.currentStockPrice ?? 0);
