@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BatchContractCard } from "@/components/batch/BatchContractCard";
 import { BatchDailyHistory } from "@/components/batch/BatchDailyHistory";
 import { useEffect, useMemo, useState, memo } from "react";
 import {
@@ -845,20 +846,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </div>
       )}
 
-      <details className="rounded-xl border border-border/50 bg-card px-4 py-3 text-xs">
-        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
-          <span className="flex items-center gap-2"><Lock className="h-3.5 w-3.5 text-muted-foreground" /><span className="font-medium">{tradingInfo.isLocked ? "锁仓期" : tradingInfo.isTradingWindow ? "交易窗口已开放" : "观望期"}</span><span className="text-muted-foreground">下次窗口 {tradingInfo.countdownText}</span></span>
-          <span className="text-muted-foreground">合约详情 ▾</span>
-        </summary>
-        <div className="mt-3 border-t border-border/40 pt-3 space-y-2 text-muted-foreground">
-          <p>签约 {formatDate(batch.signDate)} · 到期 {formatDate(batch.maturityDate)}{tradingInfo.nextTradingDate ? ` · 下次开放 ${formatDate(tradingInfo.nextTradingDate)}` : ''}</p>
-          <p>{tradingInfo.isLocked ? "锁仓期内常规退出受限；仅超级管理员可二次确认后特批退出。" : "开放窗口持续 14 天，每 3 个月一个交易周期。"}</p>
-          <p>交易节点：{tradingInfo.tradingWindows.map((w: TradeWin) => `第 ${w.month} 月`).join(' · ')}</p>
-        </div>
-      </details>
-
+      <section aria-label="批次概览" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-12 items-start">
+        <div className="min-w-0 md:col-span-2 xl:col-span-6 space-y-3">
       {/* TOP KPI CARDS */}
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2">
         <Card className="border-border/50">
           <CardContent className="p-3.5">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -960,11 +951,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 </div></details>
 
 
+        </div>
+        <div className="min-w-0 xl:col-span-3"><BatchContractCard signDate={batch.signDate} maturityDate={batch.maturityDate} /></div>
+        <div className="min-w-0 xl:col-span-3">
       {/* Safety Buffer Section */}
-      <Card className="border-border/50">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
+      <Card className="min-w-0 h-full border-border/50">
+        <CardHeader className="p-4 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-xs font-bold flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-warning" />
               风控安全监控
             </CardTitle>
@@ -976,18 +970,18 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                   ? "warning"
                   : "success"
               }
-              className="gap-1 px-3 py-1 text-xs"
+              className="gap-1 px-2 py-0.5 text-[10px]"
             >
               当前跌幅 {metrics.dropPercent.toFixed(2)}%
             </Badge>
           </div>
         </CardHeader>
-        <CardContent className="pt-0 space-y-4">
+        <CardContent className="p-4 pt-0 space-y-4">
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px] mb-1 gap-2">
               <div className="flex items-center gap-1 text-muted-foreground">
                 <Gauge className="h-3.5 w-3.5" />
-                <span>风险程度 · 账户收益率</span>
+                <span>风险程度</span>
               </div>
               <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap", gaugeStageColor)}>
                 {gaugeStageLabel}
@@ -1025,7 +1019,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
-          <details className="border-t border-border/40 pt-3" open={collateralRatio.breached || !!flashCrashStatus?.triggered}>
+          <div className="space-y-2 text-[11px] border-t border-border/40 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-1"><span className="text-muted-foreground">待补仓</span><span className={cn("font-mono font-semibold", metrics.requiredMarginCall > 0 && "text-danger")}>{formatCurrency(metrics.requiredMarginCall)}</span></div>
+            <div className="flex flex-wrap items-center justify-between gap-1"><span className="text-muted-foreground">担保比例</span><span className={cn("font-mono font-semibold", collateralRatio.breached ? "text-danger" : "text-success")}>{(collateralRatio.ratio * 100).toFixed(1)}%{collateralRatio.breached ? " · 低于警戒线" : ""}</span></div>
+            {flashCrashStatus?.triggered && <p className="text-danger font-medium">盘中闪跌预警已触发</p>}
+          </div>
+          <details className="border-t border-border/40 pt-3">
             <summary className="cursor-pointer text-xs text-muted-foreground">风控规则与监测明细{collateralRatio.breached || flashCrashStatus?.triggered ? " · 当前存在异常" : " · 展开查看"}</summary>
           {/* Phase 5: 多档风控阈值进度条 */}
           <div className="space-y-2 pt-3 border-t border-border/40">
@@ -1197,7 +1196,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             )}
           </div>
 
-          <div className="grid gap-3 grid-cols-1 md:grid-cols-3 pt-4 border-t border-border/40">
+          <div className="grid gap-3 grid-cols-1 pt-4 border-t border-border/40">
             <div className="rounded-lg bg-secondary/50 p-3">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
                 {Math.round(warningPct)}% 预警阈值（含补仓）
@@ -1236,6 +1235,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </details>
         </CardContent>
       </Card>
+
+        </div>
+      </section>
 
       <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
 
