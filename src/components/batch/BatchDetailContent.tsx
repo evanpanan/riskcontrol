@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { MasonryCards } from "@/components/ui/masonry-cards";
 import { BatchContractCard } from "@/components/batch/BatchContractCard";
 import { BatchDailyHistory } from "@/components/batch/BatchDailyHistory";
 import { useEffect, useMemo, useState, memo } from "react";
@@ -846,10 +847,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </div>
       )}
 
-      <section aria-label="批次概览" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-12 items-start">
-        <div className="min-w-0 md:col-span-2 xl:col-span-6 space-y-3">
+      <section aria-label="批次核心指标">
       {/* TOP KPI CARDS */}
-      <div className="grid gap-3 grid-cols-2">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card className="border-border/50">
           <CardContent className="p-3.5">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -908,11 +908,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
 
 
-        </div>
-        <div className="min-w-0 xl:col-span-3"><BatchContractCard signDate={batch.signDate} maturityDate={batch.maturityDate} /></div>
-        <div className="min-w-0 xl:col-span-3">
+      </section>
+      <section aria-label="合约、风控与收益卡片">
+        <MasonryCards>
+          <BatchContractCard signDate={batch.signDate} maturityDate={batch.maturityDate} />
       {/* Safety Buffer Section */}
-      <Card className="min-w-0 h-full border-border/50">
+      <Card className="min-w-0 border-border/50">
         <CardHeader className="p-4 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-xs font-bold flex items-center gap-2">
@@ -983,13 +984,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </div>
 
         </CardContent>
-      </Card>
-
-        </div>
-      </section>
-
-      <section aria-label="风控与补仓监测" className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 items-start">
-        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-4">
+      </Card>        <Card className="min-w-0 border-border/50"><CardContent className="p-4">
           {/* Phase 5: 多档风控阈值进度条 */}
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1079,7 +1074,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
           <div className="mt-3 border-t border-border/40 pt-2 text-[10px] text-muted-foreground space-y-1"><p>预警线 {Math.round(warningPct)}% · {formatCurrency((metrics.activeSubsetInitialPrincipal ?? baseCapital) * (1 - warningPct / 100))}</p><p>含补仓在管规模 {formatCurrency(metrics.activeSubsetInitialPrincipal ?? baseCapital)}</p></div>
         </CardContent></Card>
-        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-3">
+        <Card className="min-w-0 border-border/50"><CardContent className="p-3">
           {/* Phase 5.3: 担保比例警戒线 */}
           <div
             className={cn(
@@ -1116,7 +1111,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </div>
 
         </CardContent></Card>
-        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-3">
+        <Card className="min-w-0 border-border/50"><CardContent className="p-3">
           {/* Phase 6.1: 盘中闪跌检测 */}
           <div
             className={cn(
@@ -1166,7 +1161,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </div>
 
         </CardContent></Card>
-        <div className="min-w-0 h-full">
+        <div className="min-w-0">
         <Card className={cn(
           "border-border/50",
           rescueStats.totalRescueAmount > 0 && "border-warning/40 bg-warning/[0.04]"
@@ -1211,13 +1206,6 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </CardContent>
         </Card>
         </div>
-      </section>
-
-      <section aria-label="批次历史与收益" className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
-        <div className="min-w-0 xl:col-span-8"><BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} /></div>
-
-      {/* P&L SPLIT PANEL */}
-      <section aria-label="机构与客户收益" className="grid min-w-0 gap-3 grid-cols-1 lg:grid-cols-2 xl:grid-cols-1 xl:col-span-4">
         <Card className={cn("border-border/50 overflow-hidden relative")}>
           <CardHeader className="p-4 pb-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1347,10 +1335,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </CardContent>
         </Card>
+        </MasonryCards>
       </section>
 
-
-      </section>
+      <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
 
       {/* CLIENTS TABLE (Full Width) */}
       <div className="space-y-4">

@@ -11,7 +11,7 @@ export function BatchContractCard({ signDate, maturityDate }: { signDate: Date |
   const end = (info.isLocked ? dates.lockUpEndDate : dates.finalMaturityDate).getTime();
   const progress = Math.max(0, Math.min(100, (now - start) / Math.max(1, end - start) * 100));
   const monthsProgress = Math.max(0, Math.min(100, (now - start) / Math.max(1, dates.finalMaturityDate.getTime() - start) * 100));
-  return <Card className="min-w-0 h-full border-border/50">
+  return <Card className="min-w-0 border-border/50">
     <CardContent className="p-4 space-y-4">
       <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-semibold flex items-center gap-1.5"><Calendar className="h-3.5 w-3.5 text-muted-foreground" />合约进度</h3><span className={cn('text-[10px] rounded-full px-2 py-0.5 bg-secondary', info.isTradingWindow ? 'text-success' : 'text-muted-foreground')}>{info.isLocked ? '锁仓期' : now >= dates.finalMaturityDate.getTime() ? '已到期' : info.isTradingWindow ? '窗口已开放' : '观望期'}</span></div>
       <div className="space-y-2">
