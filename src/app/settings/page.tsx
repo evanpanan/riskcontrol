@@ -1,5 +1,6 @@
 "use client";
 
+import { SettingsSections, SettingsSection } from "@/components/settings-Sections";
 import { BackupSettingsPanel } from "@/components/settings-Backup";
 import { NotificationPolicyPanel } from "@/components/settings-NotificationPolicy";
 import { TelegramChannelPanel } from "@/components/settings-TelegramChannel";
@@ -342,6 +343,7 @@ function SettingsField({ name, value, onValueChange, ...props }: SettingsFieldPr
 }
 
 export default function SettingsPage() {
+  const [usersPage, setUsersPage] = useState(0);
   const [settingsTab, setSettingsTab] = useState("risk");
   const { user: currentUser, role: currentRole } = useAuthContext();
   const [saved, setSaved] = useState<string | null>(null);
@@ -557,6 +559,7 @@ export default function SettingsPage() {
   // 系统账号管理
   const { refreshMe } = useAuthContext();
   const [users, setUsers] = useState<SystemAppUser[]>(() => []);
+  useEffect(() => { setUsersPage(n => Math.min(n, Math.max(0, Math.ceil(users.length / 8) - 1))); }, [users.length]);
   const [usersLoadError, setUsersLoadError] = useState<string>("");
   const loadRemoteUsers = useCallback(async () => {
     try {
@@ -1265,7 +1268,7 @@ export default function SettingsPage() {
 
   return (
     <AuthGuard route="/settings" allowed={[...INSTITUTION_ROLES]}>
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-5 max-w-6xl mx-auto">
       <div className="space-y-1.5">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="px-2 py-0.5 rounded bg-secondary text-secondary-foreground font-semibold">
@@ -1281,17 +1284,18 @@ export default function SettingsPage() {
   </div>
 
   <Tabs value={settingsTab} onValueChange={setSettingsTab} className="w-full">
-    <GlassTabsList activeValue={settingsTab} className="grid w-full grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 h-auto p-1.5 gap-1.5">
+    <div className="sticky top-0 z-20 rounded-xl bg-background/90 py-2 backdrop-blur-xl"><GlassTabsList activeValue={settingsTab} className="grid w-full grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 h-auto p-1.5 gap-1.5">
       <TabsTrigger value="risk" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
       <TabsTrigger value="market" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
       <TabsTrigger value="notify" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
       <TabsTrigger value="account" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
       <RoleGate allowed={[APP_ROLES.ADMIN]}><TabsTrigger value="backup" className="relative z-10 h-9 w-full gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Database className="h-3.5 w-3.5" />数据备份</TabsTrigger></RoleGate>
       <TabsTrigger value="about" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
-    </GlassTabsList>
+    </GlassTabsList></div>
 
-    <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
-      <div className="space-y-6">
+    <TabsContent value="risk" className="mt-4"><SettingsSections sections={[{ id: "parameters", label: "基础风控参数" }, { id: "tiers", label: "多档风险阈值" }, { id: "flash", label: "闪跌检测" }, { id: "alerts", label: "预警与实时联动" }, { id: "profit", label: "分成比例" }]} readOnly={currentRole === "OPERATIONS"}>
+<SettingsSection id="parameters">
+
       {/* Risk Thresholds */}
       <RoleGate
         allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}
@@ -1409,8 +1413,20 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Phase 5: 多档风控阈值配置 */}
-        <div className="pt-4 border-t border-border/40 space-y-3">
+        <div className="pt-3 border-t border-border/40 flex items-center gap-3">
+          <Button className="gap-1.5" onClick={() => save("risk")}>
+            <Save className="h-4 w-4" />
+            保存风控参数
+          </Button>
+          {saved === "risk" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
+        </div>
+      </CardContent>
+    </Card>
+    </RoleGate>
+</SettingsSection>
+<SettingsSection id="tiers">
+<RoleGate allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}><Card className="border-border/50"><CardContent className="p-5">        {/* Phase 5: 多档风控阈值配置 */}
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Layers className="h-4 w-4 text-primary" />
@@ -1543,8 +1559,11 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Phase 6: 闪跌检测阈值配置 */}
-        <div className="pt-4 border-t border-border/40 space-y-3">
+</CardContent></Card></RoleGate>
+</SettingsSection>
+<SettingsSection id="flash">
+<RoleGate allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}><Card className="border-border/50"><CardContent className="p-5">        {/* Phase 6: 闪跌检测阈值配置 */}
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Zap className="h-4 w-4 text-warning" />
@@ -1610,17 +1629,9 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="pt-3 border-t border-border/40 flex items-center gap-3">
-          <Button className="gap-1.5" onClick={() => save("risk")}>
-            <Save className="h-4 w-4" />
-            保存风控参数
-          </Button>
-          {saved === "risk" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存</Badge>}
-        </div>
-      </CardContent>
-    </Card>
-    </RoleGate>
-
+</CardContent></Card></RoleGate>
+</SettingsSection>
+<SettingsSection id="alerts">
     {/* 风险预警弹窗 & 实时联动 */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -1770,6 +1781,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
+
+</SettingsSection>
+<SettingsSection id="profit">
     {/* 分成档位配置 */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -1849,15 +1863,18 @@ export default function SettingsPage() {
         </Button>
       </CardContent>
     </Card>
-      </div>
-    </fieldset></TabsContent>
 
-    <TabsContent value="notify" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
-      <div className="space-y-6">
-    <NotificationPolicyPanel />
-    <TelegramChannelPanel />
-    <details className="rounded-xl border border-border p-4"><summary className="text-sm cursor-pointer text-muted-foreground">邮件服务与其他联系人</summary><div className="space-y-6 mt-4">
-    <p className="text-xs text-muted-foreground">自动风控邮件以「重要提醒收件人」为准，以下联系人资料不用于自动群发。</p>
+</SettingsSection>
+    </SettingsSections></TabsContent>
+
+    <TabsContent value="notify" className="mt-4"><SettingsSections sections={[{ id: "policy", label: "提醒规则与收件人" }, { id: "telegram", label: "Telegram 频道" }, { id: "email", label: "邮件服务与测试" }, { id: "contacts", label: "其他联系人" }]} readOnly={currentRole === "OPERATIONS"}>
+<SettingsSection id="policy">
+<NotificationPolicyPanel />
+</SettingsSection>
+<SettingsSection id="telegram">
+<TelegramChannelPanel />
+</SettingsSection>
+<SettingsSection id="email">
     {/* Notification Channels */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -1973,7 +1990,10 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
-    {/* ========= 需求1新增：风控收件人管理 ========= */}
+
+</SettingsSection>
+<SettingsSection id="contacts">
+<p className="text-xs text-muted-foreground">自动风控邮件以「重要提醒收件人」为准，以下联系人资料不用于自动群发。</p>    {/* ========= 需求1新增：风控收件人管理 ========= */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
@@ -2088,12 +2108,13 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
-    </div></details>
-      </div>
-    </fieldset></TabsContent>
 
-    <TabsContent value="market" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
-      <div className="space-y-6">
+</SettingsSection>
+    </SettingsSections></TabsContent>
+
+    <TabsContent value="market" className="mt-4"><SettingsSections sections={[{ id: "quote", label: "实时行情" }, { id: "source", label: "数据源配置" }]} readOnly={currentRole === "OPERATIONS"}>
+<SettingsSection id="quote">
+
     {/* 实时股票行情（TopBar 展示 & 系统设置） */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -2275,6 +2296,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
+
+</SettingsSection>
+<SettingsSection id="source">
     {/* Data Source */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -2358,10 +2382,11 @@ export default function SettingsPage() {
         </div>
       </CardContent>
     </Card>
-      </div>
-    </fieldset></TabsContent>
 
-    <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
+</SettingsSection>
+    </SettingsSections></TabsContent>
+
+    <TabsContent value="account" className="space-y-4 mt-4"><fieldset disabled={currentRole === "OPERATIONS"} className="contents">
       <div className="space-y-6">
       <RoleGate
         allowed={[APP_ROLES.ADMIN]}
@@ -2398,7 +2423,7 @@ export default function SettingsPage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {users.map((u) => (
+            {users.slice(Math.min(usersPage, Math.max(0, Math.ceil(users.length / 8) - 1)) * 8, (Math.min(usersPage, Math.max(0, Math.ceil(users.length / 8) - 1)) + 1) * 8).map((u) => (
               <div
                 key={u.id}
                 className={cn(
@@ -2478,6 +2503,7 @@ export default function SettingsPage() {
             ))}
           </div>
         )}
+        {users.length > 8 && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs"><span className="text-muted-foreground">共 {users.length} 个账号 · 第 {Math.min(usersPage + 1, Math.ceil(users.length / 8))} / {Math.ceil(users.length / 8)} 页</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={usersPage === 0} onClick={() => setUsersPage(n => Math.max(0, n - 1))}>上一页</Button><Button size="sm" variant="outline" disabled={usersPage >= Math.ceil(users.length / 8) - 1} onClick={() => setUsersPage(n => n + 1)}>下一页</Button></div></div>}
       </CardContent>
     </Card>
     </RoleGate>
@@ -2486,8 +2512,9 @@ export default function SettingsPage() {
 
     <TabsContent value="backup" className="mt-6"><fieldset disabled={currentRole === "OPERATIONS"} className="contents"><RoleGate allowed={[APP_ROLES.ADMIN]}><BackupSettingsPanel /></RoleGate></fieldset></TabsContent>
 
-    <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
-      <div className="space-y-6">
+    <TabsContent value="about" className="mt-4"><SettingsSections sections={[{ id: "info", label: "系统信息" }, { id: "brand", label: "品牌外观" }, { id: "data", label: "数据管理" }]} readOnly={currentRole === "OPERATIONS"}>
+<SettingsSection id="info">
+
     <Card className="border-border/50">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -2510,6 +2537,9 @@ export default function SettingsPage() {
         ))}
       </CardContent>
     </Card>
+
+</SettingsSection>
+<SettingsSection id="brand">
     {/* Branding Logo */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -2578,6 +2608,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
+
+</SettingsSection>
+<SettingsSection id="data">
     <Card className="border-danger/40">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2 text-danger">
@@ -2612,8 +2645,9 @@ export default function SettingsPage() {
         </Button>
       </CardContent>
     </Card>
-      </div>
-    </fieldset></TabsContent>
+
+</SettingsSection>
+    </SettingsSections></TabsContent>
   </Tabs>
 
 {/* ========== 新增/编辑收件人 Dialog ========== */}
