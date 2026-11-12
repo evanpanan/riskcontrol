@@ -173,9 +173,9 @@ export function AppSidebar() {
   return (
     <aside
       className={cn(
-        "hidden lg:flex shrink-0 flex-col border-r border-border/60 bg-card/50 backdrop-blur-sm",
+        "app-sidebar hidden lg:flex shrink-0 flex-col border-r border-border/60 bg-card/50 backdrop-blur-sm",
         collapsedReady && "transition-[width] duration-300 ease-out",
-        collapsed ? "w-[76px]" : "w-64"
+        collapsed ? "w-[76px]" : "w-[232px]"
       )}
     >
       {collapsed ? (
@@ -195,14 +195,14 @@ export function AppSidebar() {
           </Button>
         </div>
       ) : (
-        <div className="relative border-b border-border/60 p-6">
+        <div className="relative border-b border-border/60 px-5 py-5">
           <Link href="/" className="group flex items-center gap-3 pr-7">
             <div className="relative">
               <Logo size={40} />
               <div className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full bg-success border-2 border-card animate-pulse" />
             </div>
             <div className="flex flex-col">
-              <span className="font-bold text-base tracking-tight text-gradient-primary">
+              <span className="font-bold text-base tracking-tight text-foreground">
                 RiskControl
               </span>
               <span className="text-[10px] text-muted-foreground tracking-wider">
@@ -255,12 +255,12 @@ export function AppSidebar() {
             <Link
               key={item.href}
               href={item.href}
-              title={collapsed ? item.title : undefined}
+              title={item.description ? `${item.title} · ${item.description}` : item.title}
               className={cn(
-                "group relative flex items-center rounded-lg text-sm font-medium transition-all duration-200",
+                "sidebar-link group relative flex items-center rounded-lg text-sm font-medium transition-colors duration-150",
                 collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2.5",
                 isActive
-                  ? "bg-primary/10 text-primary shadow-sm"
+                  ? "bg-primary/10 text-primary ring-1 ring-primary/15"
                   : "text-muted-foreground hover:bg-secondary hover:text-foreground"
               )}
             >
@@ -269,7 +269,7 @@ export function AppSidebar() {
               )}
               <Icon
                 className={cn(
-                  "h-4 w-4 shrink-0 transition-transform group-hover:scale-110",
+                  "h-4 w-4 shrink-0",
                   isActive && "text-primary"
                 )}
               />
@@ -282,11 +282,6 @@ export function AppSidebar() {
                   >
                     {item.title}
                   </span>
-                  {item.description && (
-                    <span className="text-[10px] text-muted-foreground truncate">
-                      {item.description}
-                    </span>
-                  )}
                 </div>
               )}
               {!collapsed && badgeText && (
@@ -329,7 +324,7 @@ export function AppSidebar() {
             <Link
               key={item.href}
               href={item.href}
-              title={collapsed ? item.title : undefined}
+              title={item.description ? `${item.title} · ${item.description}` : item.title}
               className={cn(
                 "group flex items-center rounded-lg text-sm font-medium transition-all",
                 collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2.5",

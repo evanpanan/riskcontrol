@@ -1,5 +1,6 @@
 "use client";
 
+import { NotificationDispatchHistory } from "@/components/NotificationDispatchHistory";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -77,14 +78,14 @@ export default function AlertsPage() {
     })),
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
-  // 邮件 / WhatsApp 实际发送记录：仅展示发起过外部通道的条目
+  // 邮件 / Telegram 实际发送记录：仅展示发起过外部通道的条目
   const sendLogs = getNotificationLogs().filter((entry) =>
-    (entry.result?.recipientCount?.emails ?? 0) > 0 ||
-    (entry.result?.recipientCount?.whatsapps ?? 0) > 0
+    !entry.result?.routing && ((entry.result?.recipientCount?.emails ?? 0) > 0 ||
+    (entry.result?.recipientCount?.telegrams ?? 0) > 0)
   );
 
   const emailSentCount = sendLogs.filter((e) => (e.result?.channels?.email?.sentTo?.length ?? 0) > 0).length;
-  const waSentCount = sendLogs.filter((e) => (e.result?.channels?.whatsapp?.sentTo?.length ?? 0) > 0).length;
+  const waSentCount = sendLogs.filter((e) => (e.result?.channels?.telegram?.sentTo?.length ?? 0) > 0).length;
   const failedCount = sendLogs.filter((e) => e.status === "failed" || e.status === "partial").length;
 
   return (
@@ -117,7 +118,7 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 grid-cols-1 md:grid-cols-4">
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
         <Card className="border-danger/30 bg-danger/5">
           <CardContent className="p-5">
             <div className="flex items-center justify-between">
@@ -148,32 +149,7 @@ export default function AlertsPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">邮件已发送</p>
-                <p className="text-3xl font-bold font-mono">{emailSentCount}</p>
-              </div>
-              <div className="h-11 w-11 rounded-xl bg-secondary flex items-center justify-center">
-                <Mail className="h-5 w-5" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-success/30 bg-success/5">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">WhatsApp 已发送</p>
-                <p className="text-3xl font-bold font-mono text-success">{waSentCount}</p>
-              </div>
-              <div className="h-11 w-11 rounded-xl bg-success/15 flex items-center justify-center">
-                <MessageCircle className="h-5 w-5 text-success" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+
       </div>
 
       <Tabs defaultValue="alerts" className="w-full">
@@ -275,31 +251,19 @@ export default function AlertsPage() {
                                 查看批次
                               </Button>
                             </Link>
+
                             <Button
                               size="sm"
                               variant="outline"
                               className="gap-1.5 h-8 text-xs"
                               onClick={async () => {
                                 const batch = getMockData().batches.find((b) => b.id === n.batchId);
-                                try { if (batch) toast.success(await notifyBatchChannel(batch as any, "email")); }
-                                catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
-                              }}
-                            >
-                              <Mail className="h-3.5 w-3.5" />
-                              邮件通知
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-1.5 h-8 text-xs"
-                              onClick={async () => {
-                                const batch = getMockData().batches.find((b) => b.id === n.batchId);
-                                try { if (batch) toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
+                                try { if (batch) toast.success(await notifyBatchChannel(batch as any, "telegram")); }
                                 catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
                               }}
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
-                              推送给订阅者
+                              发送提醒
                             </Button>
                             {n.status === "pending" && n.severity === "critical" && (
                               <Button
@@ -334,11 +298,38 @@ export default function AlertsPage() {
         </TabsContent>
 
         <TabsContent value="records">
+          <NotificationDispatchHistory />
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 mb-4">        <Card className="border-border/50">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">邮件受理记录</p>
+                <p className="text-3xl font-bold font-mono">{emailSentCount}</p>
+              </div>
+              <div className="h-11 w-11 rounded-xl bg-secondary flex items-center justify-center">
+                <Mail className="h-5 w-5" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-success/30 bg-success/5">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">TG 受理记录</p>
+                <p className="text-3xl font-bold font-mono text-success">{waSentCount}</p>
+              </div>
+              <div className="h-11 w-11 rounded-xl bg-success/15 flex items-center justify-center">
+                <MessageCircle className="h-5 w-5 text-success" />
+              </div>
+            </div>
+          </CardContent>
+        </Card></div>
           <Card className="border-border/50">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <Send className="h-4 w-4" />
-                邮件 / WhatsApp 发送记录
+                通道测试与旧版记录（当前浏览器）
                 {failedCount > 0 && (
                   <Badge variant="danger" className="ml-2 gap-1 text-[10px]">
                     <XCircle className="h-2.5 w-2.5" />
@@ -352,7 +343,7 @@ export default function AlertsPage() {
                 <div className="text-center py-16 text-muted-foreground">
                   <Send className="h-10 w-10 mx-auto mb-3 opacity-40" />
                   <p>暂无外部通知发送记录</p>
-                  <p className="text-xs mt-1">在风险警报或批次详情点击「邮件通知 / WhatsApp」后，记录会显示在这里</p>
+                  <p className="text-xs mt-1">在风险警报或批次详情点击「邮件通知 / Telegram」后，记录会显示在这里</p>
                 </div>
               ) : (
                 <div className="divide-y divide-border/60">
@@ -371,7 +362,7 @@ export default function AlertsPage() {
 
 function SendRecordRow({ entry }: { entry: NotificationLogEntry }) {
   const emailCh = entry.result?.channels?.email;
-  const waCh = entry.result?.channels?.whatsapp;
+  const waCh = entry.result?.channels?.telegram;
   const emailSent = emailCh?.sentTo?.length ?? 0;
   const waSent = waCh?.sentTo?.length ?? 0;
   const emailError = emailCh?.error;
@@ -381,7 +372,7 @@ function SendRecordRow({ entry }: { entry: NotificationLogEntry }) {
 
   const recipients = [
     ...(emailCh?.sentTo ?? []).map((v) => ({ ch: "email" as const, v })),
-    ...(waCh?.sentTo ?? []).map((v) => ({ ch: "whatsapp" as const, v })),
+    ...(waCh?.sentTo ?? []).map((v) => ({ ch: "telegram" as const, v })),
   ];
 
   return (

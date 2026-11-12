@@ -200,6 +200,9 @@ export async function PUT(req: Request) {
   const key = typeof body.key === 'string' ? body.key : '';
   if (!ALLOWED_KINDS.has(kind)) return jsonNoStore({ ok: false, error: '未知的数据类别' }, 400);
   // 机构级配置与全局标记不得由商务经理改写（防止绕过界面直接篡改风控阈值 / 预警收件人）。
+  if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy'].includes(key)) {
+    return jsonNoStore({ error: '请使用 Telegram 频道专用配置接口验证权限后保存' }, 403);
+  }
   if ((kind === 'config' || kind === 'meta') && !CONFIG_WRITE_ROLES.includes(session.role)) {
     return forbidden('仅管理员或风控总监可修改机构级配置');
   }

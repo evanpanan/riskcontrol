@@ -237,11 +237,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("critical")}
-                className="group relative flex items-center justify-center px-1.5 text-white bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-danger-foreground bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${critW}%` }}
                 aria-label={`击穿批次 ${critCount}，点击直达`}
               >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
                   <Flame className="h-3 w-3 shrink-0" />
                   击穿 {critCount}
                 </div>
@@ -249,11 +249,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("warning")}
-                className="group relative flex items-center justify-center px-1.5 text-white bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-warning-foreground bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${warnW}%` }}
                 aria-label={`预警批次 ${warnCount}，点击直达`}
               >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
                   <AlertTriangle className="h-3 w-3 shrink-0" />
                   预警 {warnCount}
                 </div>
@@ -261,11 +261,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("normal")}
-                className="group relative flex items-center justify-center px-1.5 text-white bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-primary-foreground bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${normalW}%` }}
                 aria-label={`正常批次 ${normalCount}，点击直达`}
               >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-sm">
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
                   <CheckCircle2 className="h-3 w-3 shrink-0" />
                   正常 {normalCount}
                 </div>
@@ -273,11 +273,11 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
               <button
                 type="button"
                 onClick={() => handleSeg("profit")}
-                className="group relative flex items-center justify-center px-1.5 text-white bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
+                className="group relative flex items-center justify-center px-1.5 text-success-foreground bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
                 style={{ width: `${profitW}%` }}
                 aria-label={`盈利批次 ${profitCount}，点击直达`}
               >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap drop-shadow-md">
+                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
                   盈利 {profitCount}
                   <TrendingUpIcon className="h-3 w-3 shrink-0" />
                 </div>

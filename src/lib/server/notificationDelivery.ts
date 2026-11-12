@@ -1,6 +1,7 @@
-import { prisma } from "@/lib/prisma";
+import { NotificationTransportError, unknownNotificationOutcome } from "./notificationErrors";
+import { sendTelegramChannel } from "./telegram";
 
-type Channel = "email" | "whatsapp";
+type Channel = "email" | "telegram";
 type Env = Record<string, string | undefined>;
 const configured = (value?: string): value is string =>
   !!value?.trim() && !/example\.com|your[-_.]|x{4}|placeholder|riskcontrol\.local/i.test(value);
@@ -10,34 +11,25 @@ const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 function provider(channel: Channel, env: Env) {
-  if (configured(env[channel === "email" ? "EMAIL_WEBHOOK_URL" : "WHATSAPP_WEBHOOK_URL"])) return "webhook";
+  if (channel === "email" && configured(env.EMAIL_WEBHOOK_URL)) return "webhook";
   if (channel === "email") {
     if (configured(env.RESEND_API_KEY)) return "resend";
     if (configured(env.POSTMARK_SERVER_TOKEN)) return "postmark";
     if (configured(env.SENDGRID_API_KEY)) return "sendgrid";
   } else {
-    if (configured(env.TWILIO_ACCOUNT_SID) && configured(env.TWILIO_AUTH_TOKEN)) return "twilio";
-    if (configured(env.META_WA_ACCESS_TOKEN) && configured(env.META_WA_PHONE_NUMBER_ID)) return "meta";
+    if (configured(env.TELEGRAM_BOT_TOKEN)) return "telegram";
   }
   return "none";
 }
 
 export function notificationReadiness(env: Env = process.env) {
   const authConfigured = (env.NOTIFICATION_SEND_TOKEN?.trim().length ?? 0) >= 32;
-  const channels = Object.fromEntries((["email", "whatsapp"] as const).map((channel) => {
+  const channels = Object.fromEntries((["email", "telegram"] as const).map((channel) => {
     const selected = provider(channel, env);
     const issues: string[] = [];
-    if (!authConfigured) issues.push("系统尚未开通通知发送，请联系系统运维启用");
-    if (selected === "none") issues.push(channel === "email" ? "邮件发送服务尚未开通，请联系系统运维启用" : "WhatsApp 消息服务尚未开通，请联系系统运维启用");
+    if (selected === "none") issues.push(channel === "email" ? "邮件发送服务尚未开通，请联系系统运维启用" : "Telegram 频道服务尚未配置，请联系管理员设置 Bot Token");
     if (channel === "email" && selected !== "webhook" && selected !== "none" &&
         !configured(env.NOTIFICATION_FROM_EMAIL)) issues.push("发件邮箱尚未验证，请联系系统运维完成发件地址验证");
-    if (selected === "twilio") {
-      if (!phoneValid((env.TWILIO_WHATSAPP_FROM_NUMBER ?? "").replace(/^whatsapp:/, ""))) issues.push("WhatsApp 发件号码尚未配置");
-      if (!configured(env.TWILIO_WHATSAPP_CONTENT_SID)) issues.push("WhatsApp 消息模板尚未审核通过");
-    }
-    if (selected === "meta" && (!configured(env.META_WA_TEMPLATE_NAME) || !configured(env.META_GRAPH_API_VERSION))) {
-      issues.push("WhatsApp 消息模板或接口版本待更新，请联系系统运维");
-    }
     return [channel, { provider: selected, ready: !issues.length, issues }];
   })) as Record<Channel, { provider: string; ready: boolean; issues: string[] }>;
   return { authConfigured, ...channels };
@@ -48,8 +40,9 @@ async function request(url: string, init: RequestInit) {
   try {
     response = await fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(12000) });
   } catch {
-    throw new Error("服务商响应超时或连接失败；是否受理未知，请先核查服务商记录，勿立即重发。");
+    throw new NotificationTransportError("服务商响应超时或连接失败；是否受理未知，请先核查服务商记录，勿立即重发。", "unknown");
   }
+  if (response.status >= 500 || response.status === 408) throw new NotificationTransportError("服务商响应异常，是否受理未知，请人工核查", "unknown");
   if (!response.ok) {
     // Never return the provider's raw body: webhook URLs, credentials or recipient data may be echoed.
     throw new Error(`服务商拒绝请求（HTTP ${response.status}），请核对凭据、发件资格、模板及收件人授权。`);
@@ -69,7 +62,7 @@ function allowedWebhook(value: string, configuredUrl: string) {
 
 export async function deliverNotification(body: any, env: Env = process.env) {
   const channel = body?.channel as Channel;
-  if (channel !== "email" && channel !== "whatsapp") throw new Error("通知渠道无效。");
+  if (channel !== "email" && channel !== "telegram") throw new Error("通知渠道无效。");
   const payload = body?.payload;
   if (typeof payload?.title !== "string" || typeof payload.message !== "string" ||
       !payload.title.trim() || payload.title.length > 200 || payload.message.length > 4000) {
@@ -84,39 +77,34 @@ export async function deliverNotification(body: any, env: Env = process.env) {
     }
     targets = [...new Set<string>(raw.map((v: string) => v.trim()))];
   } else {
-    // WhatsApp 仅推送给机器人订阅者，忽略手动传入的号码（已废弃手动收件人方案）。
-    try {
-      const subscribers = await prisma.whatsAppSubscriber.findMany({
-        where: { active: true },
-        select: { phone: true },
-      });
-      targets = [...new Set(subscribers.map((s) => s.phone))];
-    } catch {
-      /* 数据库不可用时 targets 为空，后续会抛出明确提示 */
-    }
+    const status = notificationReadiness(env).telegram;
+    if (!status.ready) throw new Error(status.issues.join('；'));
+    if (body.webhookOverride) throw new Error('Telegram 频道不使用自定义转发地址');
+    const sentTo = await sendTelegramChannel(`${payload.title}\n\n${payload.message}`, env);
+    return { success: true, sentTo, status: 'accepted', error: undefined };
   }
 
   if (!targets.length) {
-    throw new Error(channel === "email" ? "请提供收件邮箱。" : "暂无 WhatsApp 订阅者，请先让用户给机器人发消息订阅。");
+    throw new Error("请提供收件邮箱。");
   }
-  if (targets.some((v) => !(channel === "email" ? emailValid(v) : phoneValid(v)))) {
-    throw new Error(channel === "email" ? "收件邮箱格式无效。" : "WhatsApp 号码须含国家区号，例如 +85291234567。");
+  if (targets.some((v) => !emailValid(v))) {
+    throw new Error("收件邮箱格式无效。");
   }
   const status = notificationReadiness(env)[channel];
   if (!status.ready) throw new Error(status.issues.join("；"));
-  const configuredUrl = env[channel === "email" ? "EMAIL_WEBHOOK_URL" : "WHATSAPP_WEBHOOK_URL"] ?? "";
+  const configuredUrl = env.EMAIL_WEBHOOK_URL ?? "";
   if (body.webhookOverride && body.webhookOverride !== configuredUrl) {
     throw new Error("该转发地址未获授权。请让管理员配置相同地址，或清空输入使用系统默认通道。");
   }
   const selected = provider(channel, env);
   const sentTo: string[] = [];
   const errors: string[] = [];
+  let unknownOutcome = false;
   const json = (value: unknown, headers = {}): RequestInit => ({
     method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(value),
   });
   const message = `${payload.title}\n\n${payload.message}`;
-  // WhatsApp template parameters cannot contain newlines or tab characters.
-  const templateMessage = message.replace(/\s+/g, " ").trim();
+
   const from = env.NOTIFICATION_FROM_EMAIL!;
   const html = `<h2>${escapeHtml(payload.title)}</h2><p>${escapeHtml(payload.message).replace(/\n/g, "<br>")}</p>`;
 
@@ -152,33 +140,15 @@ export async function deliverNotification(body: any, env: Env = process.env) {
             from: { email: fromEmail }, personalizations: [{ to: [{ email: target }] }],
             subject: payload.title, content: [{ type: "text/plain", value: message }, { type: "text/html", value: html }],
           }, { Authorization: `Bearer ${env.SENDGRID_API_KEY}` }));
-        } else if (selected === "twilio") {
-          const form = new URLSearchParams({
-            From: `whatsapp:${env.TWILIO_WHATSAPP_FROM_NUMBER!.replace(/^whatsapp:/, "")}`,
-            To: `whatsapp:${target}`, ContentSid: env.TWILIO_WHATSAPP_CONTENT_SID!,
-            ContentVariables: JSON.stringify({ "1": templateMessage }),
-          });
-          await request(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(env.TWILIO_ACCOUNT_SID!)}/Messages.json`, {
-            method: "POST", headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              Authorization: `Basic ${Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString("base64")}`,
-            }, body: form.toString(),
-          });
-        } else if (selected === "meta") {
-          if (!/^v\d+\.\d+$/.test(env.META_GRAPH_API_VERSION!)) throw new Error("Graph API 版本格式应为 v数字.数字。");
-          await request(`https://graph.facebook.com/${env.META_GRAPH_API_VERSION}/${encodeURIComponent(env.META_WA_PHONE_NUMBER_ID!)}/messages`, json({
-            messaging_product: "whatsapp", to: target.slice(1), type: "template",
-            template: { name: env.META_WA_TEMPLATE_NAME, language: { code: env.META_WA_TEMPLATE_LANGUAGE || "zh_CN" },
-              components: [{ type: "body", parameters: [{ type: "text", text: templateMessage }] }] },
-          }, { Authorization: `Bearer ${env.META_WA_ACCESS_TOKEN}` }));
         }
         sentTo.push(target);
       } catch (err) {
+        unknownOutcome ||= unknownNotificationOutcome(err);
         errors.push(`${target}: ${err instanceof Error ? err.message : "发送失败"}`);
       }
     }
   }
   return { success: sentTo.length === targets.length && !errors.length, sentTo,
     status: sentTo.length === targets.length ? "accepted" : sentTo.length ? "partial" : "failed",
-    error: errors.length ? errors.join("；") : undefined };
+    error: errors.length ? errors.join("；") : undefined, failureKind: unknownOutcome ? "unknown" as const : "failed" as const };
 }

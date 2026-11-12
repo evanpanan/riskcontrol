@@ -578,7 +578,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     if (isTopupBlockedByLegacyLedger(batch as any)) { setRecoveryOpen(true); return; }
     setFulfillOpen(true);
   };
-  const handleNotify = async (channel: "email" | "whatsapp") => {
+  const handleNotify = async (channel: "email" | "telegram") => {
     if (user?.role !== APP_ROLES.ADMIN && user?.role !== APP_ROLES.RISK_MANAGER) {
       toast.error("仅管理员和风控总监可发送机构通知。");
       return;
@@ -652,7 +652,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         requestClientExit(draft, clientId, { operatorName: user?.displayName });
       });
       toast.success("已提交退出申请，等待 15 天通知期后可结算");
-      
+
       // 触发内部通知
       import("@/lib/notifier").then(({ pushInternalNotification }) => {
         pushInternalNotification({
@@ -725,21 +725,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <RoleGate
-              allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-              auditResource={`batch:notify_email:${batch.id}`}
-              auditAction="ui_component_denied"
-            >
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 h-9"
-              onClick={() => handleNotify("email")}
-            >
-              <Mail className="h-3.5 w-3.5" />
-              邮件通知商务经理
-            </Button>
-            </RoleGate>
+
             <RoleGate
               allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
               auditResource={`batch:notify_wa:${batch.id}`}
@@ -749,10 +735,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-9"
-              onClick={() => handleNotify("whatsapp")}
+              onClick={() => handleNotify("telegram")}
             >
               <MessageCircle className="h-3.5 w-3.5" />
-              WhatsApp 提醒
+              发送风控提醒
             </Button>
             </RoleGate>
             <Button
@@ -835,7 +821,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               variant="outline"
               size="sm"
               className="gap-1.5 h-8 text-[11px]"
-              onClick={() => handleNotify("whatsapp")}
+              onClick={() => handleNotify("telegram")}
             >
               <MessageCircle className="h-3 w-3" />
               WA
@@ -2027,7 +2013,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             }
             return;
           }
-          
+
           // 触发内部通知：管理员已审批通过退出
           import("@/lib/notifier").then(({ pushInternalNotification }) => {
             pushInternalNotification({
@@ -2037,7 +2023,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               message: `管理员 ${user?.displayName || "未知"} 审批通过了客户 ${clientName} 的退出申请并已完成结算，相关额度已释放。`,
             });
           });
-          
+
           window.dispatchEvent(new CustomEvent("risk-control:client-status-changed"));
           setTick((t) => t + 1);
           onChange?.();

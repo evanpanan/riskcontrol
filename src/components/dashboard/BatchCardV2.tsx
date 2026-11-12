@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { getStoredThresholds } from "@/lib/thresholds";
 import React, { memo, useMemo, useState } from "react";
 import { cn, calculateTradingWindows, formatCurrency, formatDate, formatCompactNumber } from "@/lib/utils";
 import {
@@ -60,9 +61,12 @@ interface BatchCardV2Props {
   onAction?: (type: "notify-email" | "notify-wa" | "fulfill-mc", id: string) => void;
   viewerRole?: AppRole;
   viewerUser?: AppSessionUser | null;
+  density?: "standard" | "compact";
 }
 
-export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAGER, viewerUser }: BatchCardV2Props) {
+export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRole = APP_ROLES.RISK_MANAGER, viewerUser, density = "standard" }: BatchCardV2Props) {
+  const [pnlExpanded, setPnlExpanded] = useState(false);
+  const compact = density === "compact";
   const mv = batch.currentMarketValue ?? batch.initialTotalAmount ?? 0;
   const metrics = getBatchMetrics(batch);
   const tradingInfo = calculateTradingWindows(batch.signDate);
@@ -137,9 +141,9 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
   const chrome = isAllSettled
     ? "border-border/60 border-2 border-dashed bg-secondary/10 grayscale opacity-70 hover:opacity-80 transition-all"
     : isCritical
-    ? "card-chrome-crit animate-card-crit"
+    ? "card-chrome-crit "
     : isWarning
-    ? "card-chrome-warn animate-card-warn"
+    ? "card-chrome-warn "
     : isProfitable
     ? "card-chrome-success hover:-translate-y-0.5 transition-all duration-300"
     : "card-chrome-normal hover:-translate-y-0.5 transition-all duration-300";
@@ -226,16 +230,17 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
     <Link
       href={`/batch/${batch.id}`}
       className={cn(
-        "group relative rounded-2xl overflow-hidden cursor-pointer grid grid-rows-[auto_1fr_auto] h-full w-full",
-        chrome
+        "group relative rounded-2xl overflow-hidden cursor-pointer flex flex-col min-w-0 h-full w-full",
+        chrome, compact && "batch-card-compact"
       )}
       onClick={handleClick}
-      prefetch={true}
+      prefetch={false}
     >
+      <div className="px-5 pt-4 text-xs text-muted-foreground flex justify-between gap-2"><span>处理状态</span><span className={adjustedRequired > 0 ? 'text-danger font-medium' : ''}>{adjustedRequired > 0 ? '待补仓' : (batch.cumulativeMarginCalls ?? 0) > 0 ? '已补仓 · 持续监控' : isCritical || isWarning ? '待核查' : '监控中'}</span></div>
       {/* ===== Header：批次编号 + 状态 ===== */}
-      <div className="px-5 pt-[23px] pb-4 flex items-start justify-between gap-3">
+      <div className="px-5 pt-4 pb-4 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-bold tracking-tight text-foreground">
               {batch.batchNumber}
             </p>
@@ -246,7 +251,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== 股票持仓信息（需求#1新增5项）===== */}
-      <div className="mx-5 mb-4 rounded-xl border border-border/55 bg-background/40 p-3.5 space-y-2 min-h-[156px] flex flex-col">
+      <div data-section="holdings" className="mx-5 mb-4 rounded-xl border border-border/55 bg-background/40 p-3.5 space-y-2 min-h-[156px] flex flex-col">
         <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
             <DollarSign className="h-3 w-3" />
@@ -266,9 +271,9 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
               className={cn(
                 "rounded-md px-2 py-0.5 text-[10.5px] font-bold font-mono tabular-nums tracking-tight shrink-0",
                 priceChangePct > 0
-                  ? "bg-success text-white shadow-[0_0_0_1px_hsl(var(--success)/0.4)_inset]"
+                  ? "bg-success/10 text-success"
                   : priceChangePct < 0
-                  ? "bg-danger text-white shadow-[0_0_0_1px_hsl(var(--danger)/0.4)_inset]"
+                  ? "bg-secondary text-foreground"
                   : "bg-muted text-muted-foreground"
               )}
             >
@@ -308,17 +313,14 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
                 已退出 {settledCount} 位
               </p>
             )}
-            {settledCount === 0 && (
-              <p className="text-[9.5px] font-mono tabular-nums text-muted-foreground/60 leading-tight mt-0.5">
-                已退出 0 位
-              </p>
-            )}
           </div>
         </div>
       </div>
 
+      {!isCritical && <div className="px-5 pb-2 flex justify-between text-xs"><span className="text-muted-foreground">距击穿线</span><span>{Math.max(0, getStoredThresholds().marginDropPercent - metrics.dropPercent).toFixed(2)} 个百分点</span></div>}
+
       {/* ===== 风险程度（左=0% 绿=低风险 → 右=20% 红=已击穿）===== */}
-      <div className="px-5 pb-4 min-h-[92px]">
+      <div data-section="gauge" className="px-5 pb-4 min-h-[92px]">
         <div className="flex items-center justify-between text-[10px] mb-1.5 gap-2">
           <div className="flex items-center gap-1 text-muted-foreground shrink-0">
             {isProfitable ? (
@@ -329,7 +331,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
             ) : (
               <>
                 <Gauge className="h-3 w-3" />
-                <span>风险程度</span>
+                <span>风险阶梯</span>
               </>
             )}
           </div>
@@ -353,7 +355,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
             </Tooltip>
           ) : (
             <span className={cn("font-mono font-bold tabular-nums whitespace-nowrap shrink-0", stageColor)}>
-              {stageLabel}
+              {isCritical ? `回撤 ${Math.abs(drop).toFixed(1)}%` : stageLabel}
             </span>
           )}
         </div>
@@ -402,7 +404,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== Stats row ===== */}
-      <div className="px-5 pb-4 grid grid-cols-3 gap-2 min-h-[96px]">
+      <div data-section="stats" className="px-5 pb-4 grid grid-cols-[repeat(3,minmax(0,1fr))] gap-2 min-h-[96px]">
         <StatTile
           label="当前仓位价值"
           valueNode={
@@ -471,9 +473,10 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
       </div>
 
       {/* ===== P&L split ===== */}
-      <div className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3 min-h-[130px] flex items-stretch">
-        <div className="grid grid-cols-2 gap-2.5 w-full">
+      <div data-section="pnl" className="mx-5 mb-4 rounded-xl border border-border/50 bg-background/30 p-3 min-h-[130px] flex items-stretch">
+        <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-2.5 w-full min-w-0">
           <PnLChip
+            compact={compact && !pnlExpanded}
             label="WIN100 盈利"
             pnl={split.institutionTotalPnL}
             pnlPercent={split.institutionTotalPnLPercent}
@@ -482,6 +485,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
             institutionSide
           />
           <PnLChip
+            compact={compact && !pnlExpanded}
             label="客户盈利"
             pnl={split.clientTotalPnL}
             pnlPercent={split.clientTotalPnLPercent}
@@ -491,9 +495,10 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
         </div>
       </div>
 
+      {compact && <button type="button" aria-expanded={pnlExpanded} className="mx-3 mb-2 text-[11px] text-muted-foreground hover:text-foreground text-right" onClick={event => { event.preventDefault(); event.stopPropagation(); setPnlExpanded(value => !value); }}>{pnlExpanded ? '收起盈亏明细 −' : '展开已实现 / 未实现明细 +'}</button>}
       {/* ===== Footer ===== */}
       <div className="mt-auto px-5 py-3 flex flex-col items-stretch gap-3 border-t border-border/40 justify-end">
-        <div className="flex items-center justify-between gap-3 text-[11px] min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] min-w-0">
           <span className="inline-flex items-center gap-1 whitespace-nowrap text-muted-foreground shrink-0">
             <Building2 className="h-3 w-3 shrink-0" />
             {formatDate(batch.signDate)} → {formatDate(batch.maturityDate)}
@@ -511,33 +516,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
           ) : null}
           {adjustedRequired > 0 ? (
             <div className="flex items-center justify-end gap-2 min-w-0 shrink-0" onClick={(e) => e.preventDefault()}>
-              <RoleGate
-                allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-                auditResource={`batch:notify_email:${batch.id}`}
-                auditAction="ui_component_denied"
-              >
-                <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80 shrink-0"
-                    onClick={async (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      try {
-                        toast.success(await notifyBatchChannel(batch as any, "email"));
-                      } catch (err) {
-                        toast.error(err instanceof Error ? err.message : "通知失败");
-                      }
-                    }}
-                  >
-                    <Mail className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>一键 Email 通知商务经理 及风控</TooltipContent>
-              </Tooltip>
-              </RoleGate>
+
               <RoleGate
                 allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
                 auditResource={`batch:notify_wa:${batch.id}`}
@@ -546,20 +525,21 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
                 <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
+                    aria-label="发送提醒"
                     size="sm"
                     variant="ghost"
                     className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80 shrink-0"
                     onClick={async (e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      try { toast.success(await notifyBatchChannel(batch as any, "whatsapp")); }
+                      try { toast.success(await notifyBatchChannel(batch as any, "telegram")); }
                       catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
                     }}
                   >
                     <MessageCircle className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>一键 WhatsApp 提醒</TooltipContent>
+                <TooltipContent>根据提醒设置发送通知</TooltipContent>
               </Tooltip>
               </RoleGate>
               <RoleGate
@@ -713,6 +693,7 @@ function stageLabelForPnlChip(realized: number, unrealized: number) {
   return "已实现盈利 · 浮亏";
 }
 function PnLChip(props: {
+  compact?: boolean;
   label: string;
   pnl: number;
   pnlPercent: number;
@@ -720,6 +701,11 @@ function PnLChip(props: {
   unrealized: number;
   institutionSide?: boolean;
 }) {
+  if (props.compact) return <div className="rounded-lg border border-border/45 bg-background/55 px-2 py-2 min-w-0">
+    <p className="text-[10px] text-muted-foreground">{props.label}</p>
+    <p title={formatCurrency(props.pnl)} className={cn('text-xs font-semibold font-mono mt-1', props.pnl < 0 ? 'text-danger' : props.pnl > 0 ? 'text-success' : 'text-foreground')}>{props.pnl < 0 ? '-' : props.pnl > 0 ? '+' : ''}${formatCompactNumber(Math.abs(props.pnl))}</p>
+    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{props.pnlPercent.toFixed(2)}%</p>
+  </div>;
   const positive = props.pnl >= 0;
   const z = Math.abs(props.pnl) < CARD_PNL_EPS;
   const stage = stageLabelForPnlChip(props.realized, props.unrealized);
@@ -748,22 +734,22 @@ function PnLChip(props: {
           "flex flex-col justify-center gap-1 rounded-md bg-background/55 border border-border/45 px-3 py-2 hover:border-primary/30 transition-colors w-full",
           hasBoth ? "min-h-[96px]" : "min-h-[64px]"
         )}>
-          <div className="flex items-center justify-between w-full shrink-0 gap-2">
+          <div className="flex flex-wrap items-center justify-between w-full shrink-0 gap-2">
             <span className="text-[10.5px] text-muted-foreground font-medium whitespace-nowrap shrink-0">
               {props.label}
             </span>
             {stage && (
-              <span className={cn("text-[10px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0", stageColor)}>
+              <span className={cn("text-[10px] font-mono leading-none tabular-nums shrink-0", stageColor)}>
                 {stage}
               </span>
             )}
           </div>
           {hasBoth ? (
             <div className="flex flex-col gap-0.5 mt-0.5 min-w-0 w-full overflow-hidden">
-              <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+              <div className="flex flex-wrap items-baseline justify-between w-full gap-1 min-w-0">
                 <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">已实现</span>
                 <span className={cn(
-                  "text-[11px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
+                  "text-[11px] font-bold font-mono leading-tight tabular-nums break-all",
                   Math.abs(props.realized) < CARD_PNL_EPS
                     ? "text-muted-foreground"
                     : props.realized >= 0
@@ -775,10 +761,10 @@ function PnLChip(props: {
                   {Math.abs(props.realized) >= CARD_PNL_EPS && props.realized >= 0 ? "+" : ""}{formatCurrency(props.realized)}
                 </span>
               </div>
-              <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+              <div className="flex flex-wrap items-baseline justify-between w-full gap-1 min-w-0">
                 <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">未实现</span>
                 <span className={cn(
-                  "text-[11px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
+                  "text-[11px] font-bold font-mono leading-tight tabular-nums break-all",
                   Math.abs(props.unrealized) < CARD_PNL_EPS
                     ? "text-muted-foreground"
                     : props.unrealized >= 0
@@ -791,20 +777,20 @@ function PnLChip(props: {
                 </span>
               </div>
               <div className="flex flex-col justify-end gap-0.5 pt-1 mt-0.5 border-t border-border/40 min-w-0 w-full overflow-hidden">
-                <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                <div className="flex flex-wrap items-baseline justify-between w-full gap-1 min-w-0">
                   <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">收益率</span>
                   <span className={cn(
-                    "text-[10px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0 font-semibold truncate",
+                    "text-[10px] font-mono leading-none tabular-nums shrink-0 font-semibold truncate",
                     z ? "text-muted-foreground/80" : positive ? "text-success/90" : (props.institutionSide ? "text-danger/90" : "text-warning/90")
                   )}>
                     {props.pnlPercent >= 0 && !z ? "+" : ""}
                     {props.pnlPercent.toFixed(2)}%
                   </span>
                 </div>
-                <div className="flex items-baseline justify-between w-full gap-2 min-w-0">
+                <div className="flex flex-wrap items-baseline justify-between w-full gap-1 min-w-0">
                   <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">合计</span>
                   <span className={cn(
-                    "text-[12.5px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
+                    "text-[12.5px] font-bold font-mono leading-tight tabular-nums break-all",
                     z ? "text-muted-foreground" : positive ? "text-success" : (props.institutionSide ? "text-danger" : "text-warning")
                   )}>
                     {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}
@@ -814,10 +800,10 @@ function PnLChip(props: {
             </div>
           ) : (
             <div className="flex flex-col gap-0.5 min-w-0 w-full overflow-hidden">
-              <div className="flex items-center justify-between w-full shrink-0 gap-2 min-w-0">
+              <div className="flex flex-wrap items-center justify-between w-full shrink-0 gap-2 min-w-0">
                 <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">收益率</span>
                 <span className={cn(
-                  "text-[10px] font-mono leading-none whitespace-nowrap tabular-nums shrink-0 font-semibold truncate",
+                  "text-[10px] font-mono leading-none tabular-nums shrink-0 font-semibold truncate",
                   z ? "text-muted-foreground/80" : positive ? "text-success/90" : (props.institutionSide ? "text-danger/90" : "text-warning/90")
                 )}>
                   {props.pnlPercent >= 0 && !z ? "+" : ""}
@@ -827,7 +813,7 @@ function PnLChip(props: {
               <div className="flex items-baseline min-w-0 w-full justify-between gap-2">
                 <span className="text-[9.5px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap shrink-0">合计</span>
                 <span className={cn(
-                  "text-[12.5px] font-bold font-mono leading-tight whitespace-nowrap tabular-nums truncate",
+                  "text-[12.5px] font-bold font-mono leading-tight tabular-nums break-all",
                   z ? "text-muted-foreground" : positive ? "text-success" : (props.institutionSide ? "text-danger" : "text-warning")
                 )}>
                   {positive && !z ? "+" : ""}{formatCurrency(props.pnl)}

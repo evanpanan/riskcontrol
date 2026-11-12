@@ -364,8 +364,31 @@ model FlashCrashAlert {
   dedupeKey         String   @unique
   delivered         Boolean  @default(false)
   deliveryNote      String?
+  sentChannels      String[] @default([])
+  nextAttemptAt     DateTime @default(now())
+  deliveryLeaseUntil DateTime?
+  deliveryLeaseToken String?
   createdAt         DateTime @default(now())
 
   @@index([batchId, createdAt])
   @@index([delivered])
+  @@index([delivered, nextAttemptAt])
+}
+
+model NotificationDispatch {
+  id String @id @default(cuid())
+  identity String
+  payload Json
+  policy Json
+  state Json
+  status String @default("PENDING")
+  attemptCount Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseToken String?
+  leaseUntil DateTime?
+  reviewedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([identity, updatedAt])
+  @@index([status, nextAttemptAt])
 }

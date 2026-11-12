@@ -50,7 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isAuthRoute) {
     return (
-      <div className="flex min-h-screen w-full bg-background">
+      <div className="app-shell flex min-h-screen w-full bg-background">
         <main className="flex-1 min-w-0 overflow-y-auto">
           {children}
         </main>
@@ -60,7 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!hydrated || isLoading || !user) {
     return (
-      <div className="flex min-h-screen w-full bg-background items-center justify-center">
+      <div className="app-shell flex min-h-screen w-full bg-background items-center justify-center">
         <div className="flex flex-col items-center gap-2 text-muted-foreground">
           <div className="h-8 w-8 rounded-full border-2 border-border border-t-brand animate-spin" />
           <p className="text-xs font-mono">加载会话中…</p>
@@ -70,11 +70,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen w-full bg-background">
+    <div className="app-shell flex min-h-screen w-full bg-background">
       <AppSidebar />
       <div className="flex flex-1 flex-col min-w-0">
         <TopBar />
-        <main className="flex-1 overflow-y-auto scrollbar-thin p-6">
+        <main className="app-content flex-1 overflow-y-auto scrollbar-thin p-4 sm:p-5 xl:p-6">
           {children}
         </main>
       </div>

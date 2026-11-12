@@ -427,8 +427,12 @@ export async function refreshWorkspaceIfChanged(): Promise<boolean> {
 export function startWorkspaceRealtimeSync(intervalMs = 5000): void {
   if (!isBrowser() || realtimeSyncStarted) return;
   realtimeSyncStarted = true;
-  const tick = () => {
-    void refreshWorkspaceIfChanged();
+  let inflight = false;
+  const tick = async () => {
+    if (document.visibilityState !== 'visible' || inflight) return;
+    inflight = true;
+    try { await refreshWorkspaceIfChanged(); }
+    finally { inflight = false; }
   };
   setInterval(tick, intervalMs);
   const onVisible = () => {

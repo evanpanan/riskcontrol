@@ -319,11 +319,11 @@ export function ClientTable({
   const sortedClientsFinal = sortedClients;
 
   return (
-    <div className="overflow-hidden rounded-[26px] border border-primary/10 bg-[linear-gradient(180deg,rgba(6,15,36,0.98),rgba(3,10,28,0.98))] shadow-[0_22px_54px_rgba(2,8,23,0.42)]">
+    <div className="overflow-hidden rounded-[26px] border border-primary/10 bg-card shadow-[0_22px_54px_rgba(2,8,23,0.42)]">
       {showOverviewCards && (
       <div className="border-b border-white/[0.06] px-4 py-4 sm:px-5">
         <div className="flex flex-wrap gap-3">
-          <div className="min-w-0 flex-1 rounded-[24px] border border-primary/20 bg-[radial-gradient(circle_at_20%_15%,rgba(59,130,246,0.24),transparent_42%),linear-gradient(135deg,rgba(37,99,235,0.28),rgba(16,24,55,0.92))] px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] xl:basis-[30%] xl:flex-[1.45]">
+          <div className="min-w-0 flex-1 rounded-[24px] border border-primary/20 bg-card px-5 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] xl:basis-[30%] xl:flex-[1.45]">
             <div className="flex items-center gap-2 text-[13px] font-semibold text-white/90">
               <Wallet className="h-4 w-4 text-primary" />
               客户总览
@@ -342,7 +342,7 @@ export function ClientTable({
             </div>
           </div>
 
-          <div className="min-w-[152px] flex-1 rounded-[24px] border border-emerald-400/15 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-emerald-400/15 bg-card px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
             <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-emerald-300/80">
               <Landmark className="h-3.5 w-3.5" />
               投资金额
@@ -351,7 +351,7 @@ export function ClientTable({
             <p className="mt-2 text-[11px] text-muted-foreground">客户本金保底口径</p>
           </div>
 
-          <div className="min-w-[152px] flex-1 rounded-[24px] border border-sky-400/15 bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-sky-400/15 bg-card px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
             <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-sky-300/80">
               <TrendingUp className="h-3.5 w-3.5" />
               预计退出
@@ -360,7 +360,7 @@ export function ClientTable({
             <p className="mt-2 text-[11px] text-muted-foreground">按当前口径测算</p>
           </div>
 
-          <div className="min-w-[152px] flex-1 rounded-[24px] border border-rose-400/15 bg-[radial-gradient(circle_at_top,rgba(244,63,94,0.16),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-rose-400/15 bg-card px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
             <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-rose-300/80">
               <TrendingDown className="h-3.5 w-3.5" />
               已实现亏损
@@ -374,7 +374,7 @@ export function ClientTable({
             <p className="mt-2 text-[11px] text-muted-foreground">客户与机构合并口径</p>
           </div>
 
-          <div className="min-w-[152px] flex-1 rounded-[24px] border border-amber-400/15 bg-[radial-gradient(circle_at_top,rgba(250,204,21,0.14),transparent_55%),rgba(255,255,255,0.03)] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
+          <div className="min-w-[152px] flex-1 rounded-[24px] border border-amber-400/15 bg-card px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:basis-0">
             <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-amber-300/80">
               <ShieldCheck className="h-3.5 w-3.5" />
               机构补仓缺口
@@ -388,7 +388,7 @@ export function ClientTable({
             <p className="mt-2 text-[11px] text-muted-foreground">仅机构承担补仓</p>
           </div>
 
-          <div className="min-w-[104px] rounded-[24px] border border-cyan-400/15 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.14),transparent_55%),rgba(255,255,255,0.03)] px-3 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:w-[116px] xl:flex-none">
+          <div className="min-w-[104px] rounded-[24px] border border-cyan-400/15 bg-card px-3 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] xl:w-[116px] xl:flex-none">
             <div className="mx-auto flex w-fit flex-col items-center">
               <div
                 className="relative flex h-20 w-20 items-center justify-center rounded-full"
@@ -396,7 +396,7 @@ export function ClientTable({
                   background: `conic-gradient(rgba(34,211,238,0.95) 0 ${Math.max(6, Math.min(100, protectedPrincipalRatio))}%, rgba(148,163,184,0.18) ${Math.max(6, Math.min(100, protectedPrincipalRatio))}% 100%)`,
                 }}
               >
-                <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-[#08152f] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                <div className="flex h-[58px] w-[58px] items-center justify-center rounded-full bg-background shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
                   <span className="font-mono text-[24px] font-bold text-white">
                     {Math.round(protectedPrincipalRatio)}%
                   </span>
@@ -416,7 +416,7 @@ export function ClientTable({
             <div className="relative">
               <button
                 type="button"
-                className="relative rounded-t-2xl bg-[linear-gradient(180deg,rgba(18,95,246,0.22),rgba(18,95,246,0.08))] px-5 py-2.5 text-sm font-semibold text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                className="relative rounded-t-2xl bg-card px-5 py-2.5 text-sm font-semibold text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
               >
                 客户明细
                 <span className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-primary" />
@@ -546,7 +546,7 @@ export function ClientTable({
                 id={`client-row-${client.id}`}
                 key={`${client.id}-${isSettled ? `S${settledTs}` : "A"}`}
                 className={cn(
-                  "border-t border-white/[0.06] bg-[rgba(5,16,41,0.38)] transition-colors hover:bg-[rgba(255,255,255,0.028)]",
+                  "border-t border-white/[0.06] bg-card/50 transition-colors hover:bg-[rgba(255,255,255,0.028)]",
                   isRedacted && "opacity-60 pointer-events-none select-none",
                   justSettled && "animate-settle-focus-pulse"
                 )}

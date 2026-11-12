@@ -1,7 +1,7 @@
+import { getBatchMetrics, summarizeBatchMarginFromClients } from "./riskEngine";
 import { Batch, Client, MarginCall } from "@prisma/client";
 import {
   getEnabledRecipientEmails,
-  getEnabledRecipientWhatsApps,
   getRiskRecipients,
 } from "./riskRecipients";
 import { readSharedSetting } from "./settingsStore";
@@ -12,8 +12,9 @@ export function setNotificationSendToken(value: string) { notificationSendToken 
 export function hasNotificationSendToken() { return !!notificationSendToken; }
 
 export interface RuntimeNotificationConfig {
+  testOnly?: boolean;
+  channels?: Array<"email" | "telegram">;
   emailWebhook?: string;
-  whatsappWebhook?: string;
   defaultRiskEmail?: string;
   emergencyPhone?: string;
 }
@@ -27,7 +28,6 @@ export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
     const parsed = JSON.parse(raw) as any;
     return {
       emailWebhook: typeof parsed?.emailWebhook === "string" && !/example\.com/.test(parsed.emailWebhook) ? parsed.emailWebhook : undefined,
-      whatsappWebhook: typeof parsed.whatsappWebhook === "string" ? parsed.whatsappWebhook : undefined,
       defaultRiskEmail: typeof parsed.defaultRiskEmail === "string" && parsed.defaultRiskEmail !== "risk-control@institution.com" ? parsed.defaultRiskEmail : undefined,
       emergencyPhone: typeof parsed.emergencyPhone === "string" && parsed.emergencyPhone !== "+852-9123-4567" ? parsed.emergencyPhone : undefined,
     };
@@ -65,7 +65,7 @@ export interface NotificationPayload {
   details?: Record<string, unknown>;
   recipients: {
     emails: string[];
-    whatsapps: string[];
+    telegrams: string[];
     roles?: string[];
   };
   timestamp: Date;
@@ -74,12 +74,13 @@ export interface NotificationPayload {
 export interface NotificationResult {
   success: boolean;
   sentAt: Date;
-  recipientCount: { emails: number; whatsapps: number };
+  recipientCount: { emails: number; telegrams: number };
   channels: {
-    email: { success: boolean; sentTo: string[]; error?: string };
-    whatsapp: { success: boolean; sentTo: string[]; error?: string };
+    email: { success: boolean; sentTo: string[]; error?: string; status?: string };
+    telegram: { success: boolean; sentTo: string[]; error?: string; status?: string };
     internal: { success: boolean; error?: string };
   };
+  routing?: { dispatchId: string; status: string; summary: string; deduplicated: boolean };
   logError?: string;
 }
 
@@ -139,17 +140,17 @@ export function pushInternalNotification(payload: Omit<NotificationPayload, "rec
     id: `n_${crypto.randomUUID()}`,
     payload: {
       ...payload,
-      recipients: payload.recipients || { emails: [], whatsapps: [] },
+      recipients: payload.recipients || { emails: [], telegrams: [] },
       timestamp: payload.timestamp || new Date(),
     },
     result: {
       success: true,
       sentAt: new Date(),
-      recipientCount: { emails: 0, whatsapps: 0 },
+      recipientCount: { emails: 0, telegrams: 0 },
       channels: { 
         internal: { success: true },
         email: { success: true, sentTo: [] },
-        whatsapp: { success: true, sentTo: [] }
+        telegram: { success: true, sentTo: [] }
       }
     },
     createdAt: new Date().toISOString(),
@@ -176,14 +177,7 @@ export function buildMarginCallNotification(
         )
         .map((r) => r.email)
     : [];
-  const bdWhatsApps = bdManagers?.length
-    ? getRiskRecipients()
-        .filter(
-          (r) =>
-            r.enabled && r.role === "BD_MANAGER" && r.whatsapp && bdManagers.includes(r.name.replace(/^(?:BD经理|商务经理)\s*-\s*/, ""))
-        )
-        .map((r) => r.whatsapp as string)
-    : [];
+
 
   const marginPct = typeof opts?.marginDropPercent === "number" && opts.marginDropPercent > 0 ? opts.marginDropPercent : 20;
   const warnPct = typeof opts?.warningDropPercent === "number" && opts.warningDropPercent > 0 ? opts.warningDropPercent : 15;
@@ -202,6 +196,7 @@ export function buildMarginCallNotification(
     batchNumber: batch.batchNumber,
     stockSymbol: batch.stockSymbol,
     details: {
+      marginCallId: marginCall.id,
       batchNumber: batch.batchNumber,
       stockSymbol: batch.stockSymbol,
       stockName: batch.stockName,
@@ -218,7 +213,7 @@ export function buildMarginCallNotification(
     },
     recipients: {
       emails: getEnabledRecipientEmails(roles, bdEmails),
-      whatsapps: getEnabledRecipientWhatsApps(roles, bdWhatsApps),
+      telegrams: [],
       roles,
     },
     timestamp: new Date(),
@@ -263,7 +258,7 @@ export function buildWarningNotification(
     },
     recipients: {
       emails: getEnabledRecipientEmails(roles),
-      whatsapps: getEnabledRecipientWhatsApps(roles),
+      telegrams: [],
       roles,
     },
     timestamp: new Date(),
@@ -298,7 +293,7 @@ export function buildClientAddedNotification(
     },
     recipients: {
       emails: getEnabledRecipientEmails(["RISK_MANAGER", "OPERATIONS"], bdEmails),
-      whatsapps: getEnabledRecipientWhatsApps(["RISK_MANAGER"]),
+      telegrams: [],
     },
     timestamp: new Date(),
   };
@@ -314,52 +309,73 @@ export async function sendNotification(
     success: true,
     sentAt: new Date(),
     recipientCount: {
-      emails: payload.recipients.emails.length,
-      whatsapps: payload.recipients.whatsapps.length,
+      emails: 0,
+      telegrams: 0,
     },
     channels: {
-      email: { success: true, sentTo: payload.recipients.emails },
-      whatsapp: { success: true, sentTo: payload.recipients.whatsapps },
+      email: { success: false, sentTo: [] },
+      telegram: { success: false, sentTo: [] },
       internal: { success: true },
     },
   };
 
-  for (const channel of ["email", "whatsapp"] as const) {
-    const targets = channel === "email" ? payload.recipients.emails : payload.recipients.whatsapps;
+  if (!config.testOnly) {
+    try {
+      const response = await fetch('/api/notify/send', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${notificationSendToken}` }, body: JSON.stringify({ mode: 'policy', payload }) });
+      const data = await response.json();
+      if (!response.ok || !data.dispatchId) throw new Error(data.error || '通知未能持久化，请稍后重试');
+      result.success = data.success;
+      result.channels.email = data.channels.email;
+      result.channels.telegram = data.channels.telegram;
+      result.recipientCount = { emails: data.channels.email.sentTo.length, telegrams: data.channels.telegram.sentTo.length };
+      result.routing = { dispatchId: data.dispatchId, status: data.status, summary: data.summary, deduplicated: data.deduplicated };
+    } catch(error) {
+      const message=error instanceof Error?error.message:'通知连接失败';
+      result.success=false;result.channels.internal={success:false,error:message};
+      result.routing={dispatchId:'',status:'ERROR',summary:message,deduplicated:false};
+    }
+  } else {
+
+  for (const channel of config.channels ?? ["email", "telegram"] as const) {
+    const targets = channel === "email" ? payload.recipients.emails : payload.recipients.telegrams;
     result.channels[channel] = { success: false, sentTo: [] };
-    if (!targets.length) continue;
+    if (channel === "email" && !targets.length) continue;
     try {
       const resp = await fetch("/api/notify/send", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${notificationSendToken}` },
         body: JSON.stringify({
           channel,
+          test: true,
           payload,
-          webhookOverride: channel === "email" ? config.emailWebhook : config.whatsappWebhook,
+          webhookOverride: channel === "email" ? config.emailWebhook : undefined,
         }),
       });
       const data = (await resp.json().catch(() => null)) as any;
       const sentTo = Array.isArray(data?.sentTo) ? data.sentTo : [];
-      const success = resp.ok && data?.success === true && sentTo.length === new Set(targets).size;
+      const success = resp.ok && data?.success === true && (channel === "telegram" ? sentTo.length > 0 : sentTo.length === new Set(targets).size);
+      if (channel === "telegram") result.recipientCount.telegrams = sentTo.length;
+      else result.recipientCount.emails = sentTo.length;
       result.channels[channel] = {
-        success, sentTo,
+        success, sentTo, status: success ? "accepted" : data?.failureKind === "unknown" ? "unknown" : "failed",
         error: success ? undefined : data?.error || "发送未获确认，请先核查服务商记录，勿直接重复发送。",
       };
       if (!success) result.success = false;
     } catch {
-      result.channels[channel] = { success: false, sentTo: [],
+      result.channels[channel] = { success: false, sentTo: [], status: "unknown",
         error: "连接中断，是否已受理未知；请先核查服务商记录，勿直接重复发送。" };
       result.success = false;
     }
   }
-  if (!payload.recipients.emails.length && !payload.recipients.whatsapps.length) result.success = false;
+  if (!result.channels.email.sentTo.length && !result.channels.telegram.sentTo.length) result.success = false;
+  }
   try {
     pushLog({ 
       id: `n_${crypto.randomUUID()}`, 
       payload, 
       result, 
       createdAt: new Date().toISOString(),
-      status: result.success ? "success" : "failed",
+      status: result.success ? "success" : result.routing && ["PENDING", "PROCESSING", "REVIEW"].includes(result.routing.status) ? "queued" : result.recipientCount.emails + result.recipientCount.telegrams > 0 ? "partial" : "failed",
     });
     window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
   } catch {
@@ -370,7 +386,7 @@ export async function sendNotification(
 }
 
 export async function sendTestNotification(
-  channel: "email" | "whatsapp",
+  channel: "email" | "telegram",
   targets: string[],
   overrideWebhook?: string
 ): Promise<NotificationResult> {
@@ -378,36 +394,36 @@ export async function sendTestNotification(
   const basePayload: NotificationPayload = {
     type: "INFO",
     severity: "LOW",
-    title: isEmail ? "【测试】邮箱通道连通测试" : "【测试】WhatsApp 通道连通测试",
+    title: isEmail ? "【测试】邮箱通道连通测试" : "【测试】Telegram 通道连通测试",
     message: isEmail
       ? `这是 RiskControl 风控系统发出的一封测试邮件。\n发送时间：${new Date().toLocaleString()}。\n如果您收到了本邮件，说明通知通道配置成功。`
-      : `这是 RiskControl 风控系统发出的一条测试消息。\n发送时间：${new Date().toLocaleString()}。\n如您收到本条消息，说明 WhatsApp 通道已打通。`,
+      : `这是 RiskControl 风控系统发出的一条测试消息。\n发送时间：${new Date().toLocaleString()}。\n如您收到本条消息，说明 Telegram 通道已打通。`,
     recipients: {
       emails: isEmail ? targets : [],
-      whatsapps: isEmail ? [] : targets,
+      telegrams: isEmail ? [] : targets,
     },
     timestamp: new Date(),
   };
-  return sendNotification(basePayload, isEmail ? { emailWebhook: overrideWebhook } : { whatsappWebhook: overrideWebhook });
+  return sendNotification(basePayload, { testOnly: true, channels: [channel], ...(isEmail ? { emailWebhook: overrideWebhook } : {}) });
 }
 
 export async function triggerMarginCallAlert(
   batch: Batch,
   marginCall: MarginCall,
   bdManagers?: string[],
-  channel?: "email" | "whatsapp"
+  channel?: "email" | "telegram"
 ): Promise<NotificationResult> {
   const notification = buildMarginCallNotification(batch, marginCall, bdManagers, getRuntimeThresholds());
-  if (channel === "email") notification.recipients.whatsapps = [];
-  if (channel === "whatsapp") notification.recipients.emails = [];
-  return sendNotification(notification);
+  if (channel === "email") notification.recipients.telegrams = [];
+  if (channel === "telegram") notification.recipients.emails = [];
+  return sendNotification(notification, channel ? { channels: [channel] } : undefined);
 }
 
 export async function triggerWarningAlert(
   batch: Batch,
   dropPercent: number,
   safetyBufferPercent: number,
-  channel?: "email" | "whatsapp"
+  channel?: "email" | "telegram"
 ): Promise<NotificationResult> {
   const notification = buildWarningNotification(
     batch,
@@ -415,9 +431,9 @@ export async function triggerWarningAlert(
     safetyBufferPercent,
     getRuntimeThresholds()
   );
-  if (channel === "email") notification.recipients.whatsapps = [];
-  if (channel === "whatsapp") notification.recipients.emails = [];
-  return sendNotification(notification);
+  if (channel === "email") notification.recipients.telegrams = [];
+  if (channel === "telegram") notification.recipients.emails = [];
+  return sendNotification(notification, channel ? { channels: [channel] } : undefined);
 }
 
 export async function triggerClientAddedAlert(
@@ -431,52 +447,25 @@ export async function triggerClientAddedAlert(
 const pendingBatchNotifications = new Set<string>();
 export async function notifyBatchChannel(
   batch: Batch & { clients?: Client[]; marginCalls?: MarginCall[] },
-  channel: "email" | "whatsapp"
+  _legacyChannel?: "email" | "telegram"
 ): Promise<string> {
-  const key = `${batch.id}:${channel}`;
-  if (pendingBatchNotifications.has(key)) throw new Error("该通知正在发送，请勿重复点击。");
+  const key = `${batch.id}:policy`;
+  if (pendingBatchNotifications.has(key)) throw new Error('该提醒正在处理，请勿重复点击。');
   pendingBatchNotifications.add(key);
   try {
-    const bds = [...new Set((batch.clients ?? []).map((c) => c.bdManager))];
-    const current = batch.marginCalls?.find((m) => m.status === "PENDING");
+    const bds = [...new Set((batch.clients ?? []).map(c => c.bdManager))];
+    const current = batch.marginCalls?.find(m => m.status === 'PENDING' && m.requiredAmount - (m.fulfilledAmount ?? 0) > 0.005);
     const thresholds = getRuntimeThresholds();
-    const rawDrop = Math.max(0, (1 - (batch.currentMarketValue ?? 0) / (batch.initialTotalAmount ?? 1)) * 100);
-    const safetyBuf = Math.max(0, (typeof thresholds.marginDropPercent === "number" ? thresholds.marginDropPercent : 20) - rawDrop);
-    const payload = current ? buildMarginCallNotification(batch, current, bds, thresholds)
-      : buildWarningNotification(batch, rawDrop, safetyBuf, thresholds);
-    const config = getRuntimeNotificationConfig();
-    if (channel === "email") {
-      payload.recipients.whatsapps = [];
-      if (!payload.recipients.emails.length && config.defaultRiskEmail) payload.recipients.emails = [config.defaultRiskEmail];
-      const targets = payload.recipients.emails;
-      if (!targets.length) throw new Error("请先到系统设置填写并启用真实收件邮箱。");
-    } else {
-      // WhatsApp 仅推送给机器人订阅者，无需手动收件人
-      payload.recipients.emails = [];
-      payload.recipients.whatsapps = [];
-    }
+    const drop = Math.max(0, (1 - (batch.currentMarketValue ?? 0) / (batch.initialTotalAmount ?? 1)) * 100);
+    const payload = current ? buildMarginCallNotification(batch, current, bds, thresholds) : buildWarningNotification(batch, drop, Math.max(0,(thresholds.marginDropPercent ?? 20)-drop), thresholds);
+    const metrics = getBatchMetrics(batch as any);
+    if (metrics.riskLevel === 'CRITICAL' || summarizeBatchMarginFromClients(batch as any).totalPending > 0) payload.severity = 'CRITICAL';
     const result = await sendNotification(payload);
     try {
-      const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
-      logAudit({
-        action: "batch_notify",
-        resource: `batch:notify:${batch.id}:${channel}`,
-        detail: {
-          batchId: batch.id,
-          batchNumber: batch.batchNumber ?? null,
-          channel,
-          notificationType: current ? "margin_call" : "warning",
-          sentToCount: result.channels[channel].sentTo.length,
-          success: result.channels[channel].success,
-          error: result.channels[channel].error ?? null,
-        },
-      });
-    } catch {
-      /* ignore */
-    }
-    if (!result.channels[channel].success) throw new Error(result.channels[channel].error || "通知发送失败。");
-    return `服务商已受理 ${result.channels[channel].sentTo.length} 位收件人，请核对实际收件。${result.logError ?? ""}`;
-  } finally {
-    pendingBatchNotifications.delete(key);
-  }
+      const { logAudit } = await import('@/lib/auth/audit');
+      logAudit({ action: 'batch_notify', resource: `batch:notify:${batch.id}:policy`, detail: { batchId: batch.id, notificationType: current ? 'margin_call' : 'warning', dispatchId: result.routing?.dispatchId, status: result.routing?.status, deduplicated: result.routing?.deduplicated, success: result.success } });
+    } catch { /* The durable dispatch ledger is authoritative. */ }
+    if (!result.success) throw new Error(result.routing?.summary || '通知尚未成功，请检查投递记录');
+    return result.routing?.deduplicated ? '同类风险已在30分钟内通知，本次不重复发送' : result.routing?.summary || '通知已受理';
+  } finally { pendingBatchNotifications.delete(key); }
 }

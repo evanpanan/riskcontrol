@@ -11,6 +11,7 @@
  * - 告警按 (批次, 阈值, 冷却桶) 去重（FlashCrashAlert.dedupeKey 唯一），避免刷屏；
  *   投递失败的告警保留 delivered=false，由后续轮次重试。
  */
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { fetchRealtimeWithFallback, type RealtimeQuote } from '../quote/providers';
@@ -19,7 +20,7 @@ import {
   sanitizeFlashCrashThresholds,
   type FlashCrashThreshold,
 } from '../flashCrashCore';
-import { deliverNotification, notificationReadiness } from './notificationDelivery';
+import { dispatchNotification, retryPendingNotifications } from './notificationDispatch';
 
 const CONFIG_KIND = 'config';
 const FLASH_THRESHOLD_KEY = 'risk_control_flash_crash_thresholds';
@@ -45,6 +46,8 @@ export interface MonitorCycleResult {
   quotesFetched: number;
   quoteFailures: number;
   snapshotsWritten: number;
+  notificationRetries?: number;
+  alertsQueued?: number;
   alertsCreated: number;
   alertsDelivered: number;
   alertsPendingRetry: number;
@@ -81,29 +84,29 @@ export async function loadFlashCrashThresholds(): Promise<FlashCrashThreshold[]>
 
 interface RecipientTargets {
   emails: string[];
-  whatsapps: string[];
+  telegrams: string[];
 }
 
 /** 载入启用的收件人；示例地址与占位地址一律剔除，避免告警发到无主邮箱。 */
 export async function loadRecipientTargets(): Promise<RecipientTargets> {
   const raw = await readConfigValue(RECIPIENTS_KEY);
-  const empty: RecipientTargets = { emails: [], whatsapps: [] };
+  const empty: RecipientTargets = { emails: [], telegrams: [] };
   if (!raw) return empty;
   try {
     const list = JSON.parse(raw) as unknown;
     if (!Array.isArray(list)) return empty;
     const emails = new Set<string>();
-    const whatsapps = new Set<string>();
+    const telegrams = new Set<string>();
     for (const item of list) {
       if (!item || typeof item !== 'object') continue;
       const rec = item as Record<string, unknown>;
       if (rec.enabled === false) continue;
       const email = typeof rec.email === 'string' ? rec.email.trim() : '';
       if (email.includes('@') && !/@(institution\.com|bd-team\.com|example\.com)$/i.test(email)) emails.add(email);
-      const wa = typeof rec.whatsapp === 'string' ? rec.whatsapp.trim() : '';
-      if (/^\+[1-9]\d{7,14}$/.test(wa)) whatsapps.add(wa);
+      const wa = typeof rec.telegram === 'string' ? rec.telegram.trim() : '';
+      if (/^\+[1-9]\d{7,14}$/.test(wa)) telegrams.add(wa);
     }
-    return { emails: [...emails].slice(0, 20), whatsapps: [...whatsapps].slice(0, 20) };
+    return { emails: [...emails].slice(0, 20), telegrams: [...telegrams].slice(0, 20) };
   } catch {
     return empty;
   }
@@ -165,6 +168,7 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
     notes: [],
   };
 
+  result.notificationRetries = await retryPendingNotifications(env);
   const [batches, thresholds, recipients] = await Promise.all([
     loadMonitoredBatches(),
     loadFlashCrashThresholds(),
@@ -173,13 +177,13 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
   result.batches = batches.length;
   if (batches.length === 0) {
     result.notes.push('没有需要监控的在运行批次。');
-    return result;
+
   }
 
   const activeThresholds = thresholds.filter((t) => t.enabled);
   if (activeThresholds.length === 0) {
     result.notes.push('闪跌阈值已全部停用，跳过检测。');
-    return result;
+
   }
 
   const symbols = [...new Set(batches.map((b) => b.symbol))];
@@ -187,9 +191,14 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
 
   // 1) 采集行情：失败即跳过该标的，绝不使用缓存价/离线价参与风控判定。
   const quoteBySymbol = new Map<string, RealtimeQuote>();
-  for (const symbol of symbols) {
+  for (const symbol of activeThresholds.length ? symbols : []) {
     try {
-      const q = await fetchRealtimeWithFallback(symbol);
+      const q = await fetchRealtimeWithFallback(symbol, (quote) => {
+        const age = Date.now() - quote.updatedAt;
+        if (!Number.isFinite(age) || quote.updatedAt <= 0 || age > 120_000 || age < -30_000) {
+          throw new Error('行情时间缺失、过期或超前，暂停该标的风控检测');
+        }
+      });
       if (!q || !Number.isFinite(q.price) || q.price <= 0) throw new Error('行情价格无效');
       quoteBySymbol.set(symbol, q);
       result.quotesFetched += 1;
@@ -197,9 +206,6 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
       result.quoteFailures += 1;
       result.notes.push(`行情不可用，本轮跳过（不使用缓存/离线价）：${symbol} —— ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-  if (quoteBySymbol.size === 0) {
-    return result;
   }
 
   // 2) 落库价格快照。
@@ -278,33 +284,44 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
   const pending = await prisma.flashCrashAlert.findMany({
     where: {
       delivered: false,
-      createdAt: { gte: new Date(now.getTime() - cooldownMs * 2) },
+      nextAttemptAt: { lte: now },
+      OR: [{ deliveryLeaseUntil: null }, { deliveryLeaseUntil: { lte: now } }],
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { nextAttemptAt: 'asc' },
     take: 50,
   });
 
   for (const alert of pending) {
+    const token = randomUUID();
+    const leaseNow = new Date();
+    const claimed = await prisma.flashCrashAlert.updateMany({
+      where: { id: alert.id, delivered: false, OR: [
+        { deliveryLeaseUntil: null }, { deliveryLeaseUntil: { lte: leaseNow } },
+      ] },
+      data: { deliveryLeaseToken: token, deliveryLeaseUntil: new Date(leaseNow.getTime() + 10 * 60_000) },
+    });
+    if (!claimed.count) continue;
     const batch = batchById.get(alert.batchId) ?? {
       batchId: alert.batchId,
       symbol: alert.symbol,
       batchNumber: alert.batchId,
     };
-    const outcome = await deliverFlashCrashAlert(alert, batch, recipients, env);
+    const outcome = await deliverFlashCrashAlert(alert, batch, recipients, env, token);
     if (outcome.delivered) {
-      await prisma.flashCrashAlert.update({
-        where: { id: alert.id },
-        data: { delivered: true, deliveryNote: outcome.note },
+      await prisma.flashCrashAlert.updateMany({
+        where: { id: alert.id, deliveryLeaseToken: token },
+        data: { delivered: true, deliveryNote: outcome.note, deliveryLeaseUntil: null, deliveryLeaseToken: null, nextAttemptAt: new Date(Date.now() + 60_000) },
       });
-      result.alertsDelivered += 1;
+      result.alertsQueued = (result.alertsQueued ?? 0) + 1;
+      if (outcome.accepted) result.alertsDelivered += 1;
     } else {
-      await prisma.flashCrashAlert.update({
-        where: { id: alert.id },
-        data: { deliveryNote: outcome.note },
+      await prisma.flashCrashAlert.updateMany({
+        where: { id: alert.id, deliveryLeaseToken: token },
+        data: { deliveryNote: outcome.note, deliveryLeaseUntil: null, deliveryLeaseToken: null, nextAttemptAt: new Date(Date.now() + 60_000) },
       });
       result.alertsPendingRetry += 1;
     }
-    await recordNotificationLog(alert, outcome, env);
+    // Per-channel results are persisted by the shared dispatch worker.
   }
 
   // 5) 清理过期价格点，避免表无限增长。
@@ -322,23 +339,17 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
 interface DeliveryOutcome {
   delivered: boolean;
   note: string;
+  accepted?: boolean;
 }
 
 /** 按渠道投递一条闪跌告警；任一渠道未就绪/失败即视为未完成，等待重试。 */
-async function deliverFlashCrashAlert(
-  alert: { batchId: string; symbol: string; windowMinutes: number; dropPercent: number; actualDropPercent: number; highPrice: number; currentPrice: number },
+export async function deliverFlashCrashAlert(
+  alert: { id: string; sentChannels: string[]; batchId: string; symbol: string; windowMinutes: number; dropPercent: number; actualDropPercent: number; highPrice: number; currentPrice: number },
   batch: MonitoredBatch,
   recipients: RecipientTargets,
-  env: Record<string, string | undefined>
+  env: Record<string, string | undefined>,
+  leaseToken: string
 ): Promise<DeliveryOutcome> {
-  const readiness = notificationReadiness(env);
-  const channels: Array<'email' | 'whatsapp'> = [];
-  if (recipients.emails.length > 0) channels.push('email');
-  if (recipients.whatsapps.length > 0) channels.push('whatsapp');
-  if (channels.length === 0) {
-    return { delivered: false, note: '未配置可用收件人，告警未送达。' };
-  }
-
   const title = `【闪跌预警】${batch.batchNumber}（${alert.symbol}）${alert.windowMinutes} 分钟内跌幅 ${alert.actualDropPercent.toFixed(2)}%`;
   const message = [
     `批次 ${batch.batchNumber}（${alert.symbol}）触发闪跌预警。`,
@@ -347,81 +358,10 @@ async function deliverFlashCrashAlert(
     `请立即核查行情与仓位。`,
   ].join('\n');
 
-  const problems: string[] = [];
-  let anySent = false;
-  for (const channel of channels) {
-    if (!readiness[channel].ready) {
-      problems.push(`${channel === 'email' ? '邮件' : 'WhatsApp'}通道未就绪：${readiness[channel].issues.join('；')}`);
-      continue;
-    }
-    const payload = {
-      type: 'WARNING' as const,
-      severity: 'CRITICAL' as const,
-      title,
-      message,
-      batchId: alert.batchId,
-      batchNumber: batch.batchNumber,
-      stockSymbol: alert.symbol,
-      details: {
-        windowMinutes: alert.windowMinutes,
-        dropPercent: alert.dropPercent,
-        actualDropPercent: alert.actualDropPercent,
-        highPrice: alert.highPrice,
-        currentPrice: alert.currentPrice,
-      },
-      recipients: {
-        emails: channel === 'email' ? recipients.emails : [],
-        whatsapps: channel === 'whatsapp' ? recipients.whatsapps : [],
-      },
-      timestamp: new Date(),
-    };
-    try {
-      const res = await deliverNotification({ channel, payload }, env);
-      if (res.success) anySent = true;
-      else problems.push(`${channel}：${res.error ?? '未获服务商确认'}`);
-    } catch (err) {
-      problems.push(`${channel}：${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  if (problems.length === 0 && anySent) {
-    return { delivered: true, note: `已送达 ${channels.join('/')} 通道` };
-  }
-  if (anySent) {
-    return { delivered: false, note: `部分通道失败：${problems.join(' | ')}` };
-  }
-  return { delivered: false, note: problems.join(' | ') || '投递失败' };
-}
-
-/** 落一条通知投递记录，便于失败追溯与补发。 */
-async function recordNotificationLog(
-  alert: { batchId: string; symbol: string; windowMinutes: number; actualDropPercent: number },
-  outcome: DeliveryOutcome,
-  env: Record<string, string | undefined>
-): Promise<void> {
-  try {
-    const provider = env.EMAIL_WEBHOOK_URL
-      ? 'webhook'
-      : env.RESEND_API_KEY
-      ? 'resend'
-      : env.POSTMARK_SERVER_TOKEN
-      ? 'postmark'
-      : env.SENDGRID_API_KEY
-      ? 'sendgrid'
-      : 'none';
-    await prisma.notificationLog.create({
-      data: {
-        channel: 'flash_crash',
-        provider,
-        title: `闪跌预警 ${alert.symbol} ${alert.windowMinutes}min -${alert.actualDropPercent.toFixed(2)}%`,
-        recipients: '见收件人配置',
-        status: outcome.delivered ? 'SENT' : 'FAILED',
-        error: outcome.delivered ? null : outcome.note,
-        batchId: alert.batchId,
-        type: 'FLASH_CRASH',
-      },
-    });
-  } catch {
-    /* 日志失败不影响监控主流程 */
-  }
+  const payload = { type: 'WARNING', severity: 'CRITICAL', title, message,
+    batchId: alert.batchId, batchNumber: batch.batchNumber, stockSymbol: alert.symbol,
+    details: { windowMinutes: alert.windowMinutes, actualDropPercent: alert.actualDropPercent },
+  };
+  const dispatched = await dispatchNotification(payload, env, alert.sentChannels);
+  return { delivered: true, accepted: dispatched.success, note: `已交由统一通知队列处理：${dispatched.summary}` };
 }

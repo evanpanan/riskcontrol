@@ -6,12 +6,12 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:translate-y-px",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-white hover:bg-primary/90 hover:text-white shadow-sm shadow-primary/20",
+          "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground shadow-sm shadow-primary/20",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 hover:text-white shadow-sm shadow-destructive/20",
         outline:
@@ -21,11 +21,11 @@ const buttonVariants = cva(
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
         success:
-          "bg-success text-white hover:bg-success/90 hover:text-white shadow-sm shadow-success/20",
+          "bg-success text-success-foreground hover:bg-success/90 hover:text-success-foreground shadow-sm shadow-success/20",
         warning:
           "bg-warning text-warning-foreground hover:bg-warning/90 shadow-sm shadow-warning/20",
         danger:
-          "bg-danger text-white hover:bg-danger/90 hover:text-white shadow-sm shadow-danger/20",
+          "bg-danger text-danger-foreground hover:bg-danger/90 hover:text-danger-foreground shadow-sm shadow-danger/20",
         gradient:
           "gradient-primary text-white hover:text-white hover:opacity-90 shadow-md shadow-primary/30",
       },

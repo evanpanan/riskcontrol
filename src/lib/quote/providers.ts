@@ -51,7 +51,8 @@ export async function finnhubRealtime(symbol: string): Promise<RealtimeQuote> {
     prevClose,
     volume: Number(j.v ?? 0),
     changePct,
-    updatedAt: Number(j.t ?? 0) * 1000 || Date.now(),
+    updatedAt: Number(j.t ?? 0) * 1000,
+    fetchedAt: Date.now(),
   };
 }
 
@@ -137,6 +138,7 @@ export interface RealtimeQuote {
   volume: number;
   changePct: number;
   updatedAt: number;
+  fetchedAt?: number;
 }
 
 export interface HistoryCandle {
@@ -285,7 +287,8 @@ export async function yahooFinanceRealtime(symbol: string): Promise<RealtimeQuot
         provider: "YAHOO_FINANCE",
         symbol,
         price, open, high, low, prevClose, volume, changePct,
-        updatedAt: Date.now(),
+        updatedAt: Number(meta.regularMarketTime ?? 0) * 1000,
+        fetchedAt: Date.now(),
       };
     } catch (e) { lastErr = e; }
   }
@@ -339,7 +342,8 @@ export async function stooqRealtime(symbol: string): Promise<RealtimeQuote> {
     prevClose,
     volume,
     changePct,
-    updatedAt: Date.now(),
+    updatedAt: 0, // Provider timestamp has no reliable timezone; unsuitable for live risk checks.
+    fetchedAt: Date.now(),
   };
 }
 
@@ -439,7 +443,8 @@ export async function nasdaqRealtime(symbol: string): Promise<RealtimeQuote> {
     prevClose: prevClose || price,
     volume: Number(String(pds.volume || pds.Volume || "0").replace(/,/g, "")),
     changePct,
-    updatedAt: Date.now(),
+    updatedAt: 0, // Provider timestamp has no reliable timezone; unsuitable for live risk checks.
+    fetchedAt: Date.now(),
   };
 }
 
@@ -483,7 +488,7 @@ export async function nasdaqHistory(symbol: string, period: HistoryPeriod): Prom
   return out.sort((a, b) => a.time - b.time);
 }
 
-export async function fetchRealtimeWithFallback(symbol: string): Promise<RealtimeQuote> {
+export async function fetchRealtimeWithFallback(symbol: string, validate?: (quote: RealtimeQuote) => void): Promise<RealtimeQuote> {
   if (!symbol || !symbol.trim()) throw new Error("empty symbol");
   const s = symbol.trim().toUpperCase();
   const fns: Array<(s: string) => Promise<RealtimeQuote>> = [];
@@ -492,7 +497,9 @@ export async function fetchRealtimeWithFallback(symbol: string): Promise<Realtim
   let lastError: any = null;
   for (const fn of fns) {
     try {
-      return await fn(s);
+      const quote = await fn(s);
+      validate?.(quote);
+      return quote;
     } catch (e) {
       lastError = e;
     }

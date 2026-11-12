@@ -11,7 +11,7 @@
 import { readSharedSetting, writeSharedSetting } from "./settingsStore";
 
 /** 通知渠道 */
-export type NotifyChannel = "email" | "whatsapp" | "sms";
+export type NotifyChannel = "email" | "telegram" | "sms";
 
 /** 通知对象 */
 export type NotifyTarget = "risk" | "bd" | "all";
@@ -67,7 +67,7 @@ export const DEFAULT_RISK_TIERS: RiskTier[] = [
     name: "预警线",
     level: 2,
     dropPercent: 15,
-    notifyChannels: ["email", "whatsapp"],
+    notifyChannels: ["email", "telegram"],
     notifyTargets: ["risk", "bd"],
     action: "notify",
     color: "warning",
@@ -78,7 +78,7 @@ export const DEFAULT_RISK_TIERS: RiskTier[] = [
     name: "击穿线",
     level: 3,
     dropPercent: 20,
-    notifyChannels: ["email", "whatsapp", "sms"],
+    notifyChannels: ["email", "telegram", "sms"],
     notifyTargets: ["all"],
     action: "margin_call",
     color: "danger",
@@ -89,7 +89,7 @@ export const DEFAULT_RISK_TIERS: RiskTier[] = [
     name: "强平线",
     level: 4,
     dropPercent: 25,
-    notifyChannels: ["email", "whatsapp", "sms"],
+    notifyChannels: ["email", "telegram", "sms"],
     notifyTargets: ["all"],
     action: "liquidation",
     color: "destructive",
@@ -141,7 +141,7 @@ export function getStoredRiskTiers(): RiskTier[] {
       name: t.name ?? "未命名档位",
       level: Number(t.level ?? 1),
       dropPercent: Number(t.dropPercent ?? 20),
-      notifyChannels: Array.isArray(t.notifyChannels) ? t.notifyChannels as NotifyChannel[] : ["email"],
+      notifyChannels: Array.isArray(t.notifyChannels) ? t.notifyChannels.map(ch => String(ch) === "whatsapp" ? "telegram" : ch).filter(ch => ["email", "telegram", "sms"].includes(ch)) as NotifyChannel[] : ["email"],
       notifyTargets: Array.isArray(t.notifyTargets) ? t.notifyTargets as NotifyTarget[] : ["risk"],
       action: (t.action as TriggerAction) ?? "notify",
       color: t.color ?? "warning",

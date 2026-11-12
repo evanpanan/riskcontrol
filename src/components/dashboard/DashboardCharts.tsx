@@ -684,7 +684,7 @@ function ChartShell({
 
   return (
     <Card className="card-chrome overflow-hidden">
-      <CardContent className="p-5 lg:p-6 space-y-3">
+      <CardContent className="p-4 lg:p-5 space-y-3">
         <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
           <div className="flex items-start gap-3 min-w-0">
             <div
@@ -700,12 +700,9 @@ function ChartShell({
                 <h3 className="text-[15px] font-semibold tracking-tight shrink-0">{title}</h3>
                 {leftHeader}
               </div>
-              {subtitle && (
-                <p className="text-[11.5px] text-muted-foreground">{subtitle}</p>
-              )}
             </div>
           </div>
-          <div className="inline-flex items-center gap-1 bg-secondary/50 border border-border/70 rounded-full p-1 self-start shrink-0 overflow-x-auto max-w-full">
+          <div className="inline-flex items-center gap-1 bg-secondary/50 border border-border/70 rounded-lg p-1 self-start shrink-0 overflow-x-auto max-w-full">
             {TIMEFRAMES.map((tf) => {
               const active = tf.key === timeframe;
               return (
@@ -766,7 +763,7 @@ const MiniStat = memo(function MiniStat({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="space-y-1 min-w-0">
-          <p className="text-[10.5px] uppercase text-muted-foreground font-medium tracking-wide">
+          <p className="text-[10.5px] text-muted-foreground font-medium tracking-wide">
             {label}
           </p>
           <FlashNumber

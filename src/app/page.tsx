@@ -1,5 +1,9 @@
 "use client";
 
+import Link from "next/link";
+import { QuoteStatus } from "@/components/dashboard/QuoteStatus";
+import { formatCurrency } from "@/lib/utils";
+import { getStoredThresholds } from "@/lib/thresholds";
 import { Suspense, useMemo, useState, useEffect, useRef } from "react";
 import { getMockData, refreshMockDataPrices, reloadMockData, resetMockTestData } from "@/lib/mockData";
 import { calculatePortfolioSummary, getBatchMetrics, summarizeBatchMarginFromClients } from "@/lib/riskEngine";
@@ -7,6 +11,7 @@ import { toast } from "sonner";
 import { KPICard } from "@/components/dashboard/KPICard";
 import { DashboardCharts } from "@/components/dashboard/DashboardCharts";
 import { RiskLadderBar } from "@/components/dashboard/RiskLadderBar";
+import { CompactBatchCard } from "@/components/dashboard/CompactBatchCard";
 import { BatchCardV2 } from "@/components/dashboard/BatchCardV2";
 import { RiskAlertDialog, RiskAlertItem } from "@/components/dashboard/RiskAlertDialog";
 import { Batch, RiskLevel } from "@prisma/client";
@@ -66,9 +71,9 @@ export default function DashboardPage() {
     }
   }
   const [tick, setTick] = useState(0);
-  const rawBatches = useMemo(() => [...(mockDataRef.current?.batches ?? [])], [hydrated]);
+  const rawBatches = useMemo(() => [...(mockDataRef.current?.batches ?? [])], [hydrated, tick]);
   const batches = useMemo(() => filterBatchesForUser(rawBatches, user ?? null), [rawBatches, user]);
-  const stockHistory = useMemo(() => mockDataRef.current?.stockHistory ?? [], [hydrated]);
+  const stockHistory = useMemo(() => mockDataRef.current?.stockHistory ?? [], [hydrated, tick]);
   const summary = useMemo(() => calculatePortfolioSummary(batches), [batches]);
   const lockedCount = batches.filter((b) => b.status === "LOCKED").length;
   const tradingCount = batches.length - lockedCount;
@@ -81,6 +86,28 @@ export default function DashboardPage() {
   const [monthFilter, setMonthFilter] = useState<string>("ALL");
   const [riskLevelFilter, setRiskLevelFilter] = useState<string>("ALL");
 
+  const [view, setView] = useState<'cards' | 'table'>('cards');
+  const [density, setDensity] = useState<"standard" | "compact">("compact");
+  const [filtersReady, setFiltersReady] = useState(false);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rc_dashboard_filters_v1') || '{}');
+      if (saved.density === 'standard') setDensity('standard');
+      if (typeof saved.year === 'string') setYearFilter(saved.year);
+      if (typeof saved.month === 'string') setMonthFilter(saved.month);
+      if (['ALL', 'CRITICAL', 'WARNING', 'NORMAL', 'PROFIT'].includes(saved.risk)) setRiskLevelFilter(saved.risk);
+      // 首页默认恢复原版批次卡片；表格由用户手动切换。
+    } catch { /* use defaults */ }
+    setFiltersReady(true);
+  }, []);
+  useEffect(() => {
+    if (filtersReady) localStorage.setItem('rc_dashboard_filters_v1', JSON.stringify({ year: yearFilter, month: monthFilter, risk: riskLevelFilter, view, density }));
+  }, [filtersReady, yearFilter, monthFilter, riskLevelFilter, view, density]);
+  const pendingMargin = useMemo(() => batches.reduce((total, batch) => total + summarizeBatchMarginFromClients(batch).totalPending, 0), [batches]);
+  const focusRisk = (risk: string) => {
+    setYearFilter('ALL'); setMonthFilter('ALL'); setRiskLevelFilter(risk);
+    document.getElementById('batch-monitor')?.scrollIntoView({ behavior: 'smooth' });
+  };
   const pad = (n: number) => n.toString().padStart(2, "0");
   const toMonthKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 
@@ -89,6 +116,7 @@ export default function DashboardPage() {
     const s = getWebAlertSettings();
     if (!s.realtimeTickEnabled) return;
     const id = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       const nyse = getNYSEInfo();
       if (!nyse.shouldBreathe) return;
       mockDataRef.current = getMockData();
@@ -104,6 +132,7 @@ export default function DashboardPage() {
     window.addEventListener("risk-control:finance-changed", handler);
     window.addEventListener("risk-control:quote-changed", handler);
     const onStorage = () => {
+      if (document.visibilityState !== "visible") return;
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
     };
@@ -131,8 +160,12 @@ export default function DashboardPage() {
     acksRef.current = getAlertAcks();
     setWebAlertSettings(getWebAlertSettings());
     const onStorage = () => {
+      if (document.visibilityState !== "visible") return;
       acksRef.current = getAlertAcks();
-      setWebAlertSettings(getWebAlertSettings());
+      const nextSettings = getWebAlertSettings();
+      setWebAlertSettings(previous =>
+        JSON.stringify(previous) === JSON.stringify(nextSettings) ? previous : nextSettings
+      );
       try {
         mockDataRef.current = getMockData();
         setTick((t) => t + 1);
@@ -269,7 +302,8 @@ export default function DashboardPage() {
       return {
         b,
         isProfitable,
-        baseWeight: isProfitable ? 1 : (weight[b.riskLevel] ?? 2),
+        baseWeight: summarizeBatchMarginFromClients(b).totalPending > 0 ? 5 : (weight[metrics.riskLevel] === 4 || weight[metrics.riskLevel] === 3) ? weight[metrics.riskLevel] : isProfitable ? 1 : 2,
+        risk: summarizeBatchMarginFromClients(b).totalPending > 0 ? RiskLevel.CRITICAL : metrics.riskLevel,
         dropPercent: metrics.dropPercent,
       };
     });
@@ -277,11 +311,11 @@ export default function DashboardPage() {
       ? withMeta
       : riskLevelFilter === "PROFIT"
         ? withMeta.filter((m) => m.isProfitable)
-        : withMeta.filter((m) => !m.isProfitable && m.b.riskLevel === riskLevelFilter);
+        : withMeta.filter((m) => m.risk === riskLevelFilter && (riskLevelFilter !== RiskLevel.NORMAL || !m.isProfitable));
     return filtered
       .sort((a, z) => {
         if (a.baseWeight !== z.baseWeight) return z.baseWeight - a.baseWeight;
-        return a.dropPercent - z.dropPercent;
+        return z.dropPercent - a.dropPercent;
       })
       .map((m) => m.b);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -300,7 +334,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="space-y-5 max-w-[1920px] mx-auto">
+    <div className="risk-workbench space-y-3 max-w-[1920px] mx-auto">
       {mockError ? (() => {
         const devMode =
           typeof window !== "undefined" &&
@@ -353,13 +387,29 @@ export default function DashboardPage() {
             <span>/</span>
             <span>全局风控大盘</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-            优先劣后股票产品
-            <span className="text-gradient-primary ml-2">全景风控预警</span>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
+            风险监控工作台
           </h1>
         </div>
       </div>
 
+      <section aria-label="优先处理" className="grid gap-3 sm:grid-cols-3">
+        <button onClick={() => focusRisk('CRITICAL')} className="rounded-xl border border-danger/30 bg-card p-3 text-left hover:bg-secondary/50 focus-visible:outline focus-visible:outline-2">
+          <span className="text-sm text-muted-foreground">击穿批次</span><p className="text-2xl font-semibold tabular-nums text-danger mt-2">{summary.criticalCount}<span className="ml-2 text-sm">个</span></p><p className="sr-only">优先核查风险 →</p>
+        </button>
+        <button onClick={() => focusRisk('CRITICAL')} className="rounded-xl border border-border bg-card p-3 text-left hover:bg-secondary/50">
+          <span className="text-sm text-muted-foreground">待补仓金额</span><p className="text-2xl font-semibold tabular-nums mt-2">{formatCurrency(pendingMargin)}</p><p className="sr-only">查看补仓缺口 →</p>
+        </button>
+        <Link href="/alerts" className="rounded-xl border border-border bg-card p-3 hover:bg-secondary/50">
+          <span className="text-sm text-muted-foreground">待确认风险批次</span><p className="text-2xl font-semibold tabular-nums mt-2">{alerts.length}<span className="ml-2 text-sm">个</span></p><p className="sr-only">当前预警范围 · 确认冷却 30 分钟 →</p>
+        </Link>
+      </section>
+      <div className="rounded-xl border border-border bg-card px-3 py-2 space-y-1">
+        {[...new Set(batches.map(b => b.stockSymbol))].map(symbol => <QuoteStatus key={symbol} symbol={symbol} />)}
+        {!batches.length && <p className="text-sm text-muted-foreground">暂无在管批次，添加数据后展示行情状态。</p>}
+      </div>
+
+      <div className="space-y-4">
       {/* ===== 顶部：OKX 风格仪表盘双折线图 ===== */}
       <DashboardCharts summary={summary} />
 
@@ -373,8 +423,9 @@ export default function DashboardPage() {
         <RiskLadderBar batches={batches as any} summary={ladderSummary} />
       </Suspense>
 
+      </div>
       {/* ===== 下部：签约年份筛选 + 风险排序网格 ===== */}
-      <div className="space-y-3">
+      <div id="batch-monitor" className="space-y-3 scroll-mt-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Flame className="h-4 w-4 text-danger" />
@@ -383,20 +434,7 @@ export default function DashboardPage() {
               · 默认排序：需补仓 → 预警 → 正常 → 盈利
             </span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-success" /> PROFIT {summary.profitableCount}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-primary" /> NORMAL {summary.normalCount - summary.profitableCount}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-warning animate-breath-warning" /> WARNING {summary.warningCount}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-danger animate-breath-danger" /> CRITICAL {summary.criticalCount}
-            </span>
-          </div>
+
         </div>
 
         {/* ===== 风险状态筛选 ===== */}
@@ -438,6 +476,7 @@ export default function DashboardPage() {
           />
         </div>
 
+        <details className="rounded-lg border border-border/60 px-3 py-2"><summary className="cursor-pointer text-xs text-muted-foreground">日期筛选{yearMonthFilterActive ? ` · ${yearFilter} / ${monthFilter}` : " · 全部年份与月份"}</summary><div className="space-y-2 mt-2">
         {/* ===== 签约年份选项卡（原股票筛选位置）===== */}
         <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1">
           <FilterTab
@@ -475,10 +514,10 @@ export default function DashboardPage() {
                       {y.count}
                     </Badge>
                     {hasCrit && (
-                      <span className="h-2 w-2 rounded-full bg-danger animate-breath-danger" />
+                      <span className="h-2 w-2 rounded-full bg-danger " />
                     )}
                     {!hasCrit && hasWarn && (
-                      <span className="h-2 w-2 rounded-full bg-warning animate-breath-warning" />
+                      <span className="h-2 w-2 rounded-full bg-warning " />
                     )}
                   </div>
                 }
@@ -516,8 +555,34 @@ export default function DashboardPage() {
           ))}
         </div>
 
+        </div></details>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">显示 {visibleBatches.length} 个批次 · 风险优先</p>
+          <div className="flex flex-wrap gap-1" aria-label="显示方式">
+            {view === 'cards' && <><Button size="sm" variant={density === 'standard' ? 'secondary' : 'ghost'} aria-pressed={density === 'standard'} onClick={() => setDensity('standard')}>标准</Button><Button size="sm" variant={density === 'compact' ? 'secondary' : 'ghost'} aria-pressed={density === 'compact'} onClick={() => setDensity('compact')}>紧凑</Button></>}
+            <Button size="sm" variant={view === 'cards' ? 'secondary' : 'ghost'} aria-pressed={view === 'cards'} onClick={() => setView('cards')}>风险卡片</Button>
+            <Button size="sm" variant={view === 'table' ? 'secondary' : 'ghost'} aria-pressed={view === 'table'} onClick={() => setView('table')}>紧凑表格</Button>
+          </div>
+        </div>
+        {view === 'table' && <div className="max-h-[640px] overflow-auto rounded-xl border border-border">
+          <table className="w-full min-w-[760px] text-sm text-left"><thead className="sticky top-0 bg-card z-10"><tr>{['批次 / 标的', '风险', '当前股价', '距击穿', '补仓缺口', '处理状态', '操作'].map(h => <th key={h} className="px-3 py-2 font-medium text-muted-foreground">{h}</th>)}</tr></thead>
+          <tbody>{visibleBatches.map(b => {
+            const metrics = getBatchMetrics(b);
+            const pending = summarizeBatchMarginFromClients(b).totalPending;
+            const distance = getStoredThresholds().marginDropPercent - metrics.dropPercent;
+            return <tr key={b.id} className="border-t border-border hover:bg-secondary/40">
+              <td className="px-3 py-2 font-medium">{b.batchNumber}<span className="block text-xs text-muted-foreground mt-1">{b.stockSymbol}</span></td>
+              <td className={cn('px-3 py-2', pending > 0 || metrics.riskLevel === 'CRITICAL' ? 'text-danger' : metrics.riskLevel === 'WARNING' ? 'text-warning' : 'text-muted-foreground')}>{pending > 0 || metrics.riskLevel === 'CRITICAL' ? '击穿' : metrics.riskLevel === 'WARNING' ? '预警' : '正常'}</td>
+              <td className="px-3 py-2 tabular-nums">{formatCurrency(b.currentStockPrice ?? b.stockPriceAtStart ?? 0)}</td>
+              <td className="px-3 py-2 tabular-nums">{distance <= 0 ? '已达击穿线' : `${distance.toFixed(2)} 个百分点`}</td>
+              <td className="px-3 py-2 tabular-nums">{formatCurrency(pending)}</td>
+              <td className="px-3 py-2">{pending > 0 ? '待补仓' : (b.cumulativeMarginCalls ?? 0) > 0 ? '已补仓 · 持续监控' : metrics.riskLevel === 'WARNING' || metrics.riskLevel === 'CRITICAL' ? '待核查' : '监控中'}</td>
+              <td className="px-3 py-2"><Link className="text-primary underline-offset-4 hover:underline" href={`/batch/${b.id}`}>查看 / 处理 →</Link></td>
+            </tr>;
+          })}</tbody></table>
+        </div>}
         {/* 批次网格 */}
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className={cn("grid gap-3 items-start", density === "compact" ? "grid-cols-[repeat(auto-fit,minmax(min(100%,270px),1fr))]" : "grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]", view === "table" && "hidden")}>
           {(() => {
             const seen: Record<string, boolean> = { profit: false, normal: false, warning: false, critical: false };
             return visibleBatches.map((b) => {
@@ -530,16 +595,10 @@ export default function DashboardPage() {
               else if (b.riskLevel === RiskLevel.WARNING && !seen.warning) { anchor = "anchor-warning"; seen.warning = true; }
               else if (b.riskLevel === RiskLevel.CRITICAL && !seen.critical) { anchor = "anchor-critical"; seen.critical = true; }
               const card = (
-                <BatchCardV2
-                  key={b.id}
-                  batch={b as any}
-                  onAction={() => setTick((x) => x + 1)}
-                  viewerRole={role}
-                  viewerUser={user ?? undefined}
-                />
+                <BatchCardV2 density={density} key={b.id} batch={b as any} onAction={() => setTick(x => x + 1)} viewerRole={role} viewerUser={user ?? undefined} />
               );
               return (
-                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24 h-full">
+                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24 min-w-0">
                   {anchor ? <div id={anchor} className="h-full">{card}</div> : card}
                 </div>
               );
@@ -578,7 +637,7 @@ function FilterTab(props: {
       type="button"
       onClick={props.onClick}
       className={cn(
-        "group inline-flex items-center gap-2 h-9 px-3.5 rounded-xl border transition-all",
+        "group inline-flex items-center gap-2 h-8 px-3 rounded-lg border transition-colors",
         props.active
           ? "bg-primary/15 border-primary/40 text-primary shadow-[0_0_0_1px_hsl(var(--primary)/0.3)_inset]"
           : "border-border/60 hover:border-primary/30 hover:bg-card/60 text-foreground/85 bg-card/30"

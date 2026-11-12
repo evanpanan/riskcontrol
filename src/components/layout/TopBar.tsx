@@ -1,5 +1,6 @@
 "use client";
 
+import { notificationChannelLabel } from "@/lib/notificationPolicy";
 import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, LogOut, ImagePlus, AlertTriangle, CheckCircle2, Info, TrendingUp, TrendingDown, LineChart } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -37,7 +38,7 @@ import { Logo } from "@/components/branding/Logo";
 import Link from "next/link";
 import { getNotificationLogs, LAST_NOTIFICATIONS_KEY, type NotificationLogEntry, type NotificationPayload } from "@/lib/notifier";
 import { toast } from "sonner";
-import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo, quoteSourceLabel } from "@/lib/liveQuote";
+import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo, quoteSourceLabel, getCachedQuote } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { KLineDialog } from "@/components/quote/KLineDialog";
 import { quoteProviderLabel } from "@/lib/quote/providers";
@@ -70,6 +71,12 @@ export function TopBar() {
   const [klineOpen, setKlineOpen] = useState(false);
   const [nyseTick, setNyseTick] = useState(0);
   const [quoteFlashDir, setQuoteFlashDir] = useState<"up" | "down" | null>(null);
+  const cachedQuote = hydrated ? getCachedQuote(quote.symbol) : null;
+  const quoteAsOf = liveQuote?.data?.updatedAt ?? cachedQuote?.data?.updatedAt ?? 0;
+  const quoteAge = (now?.getTime() ?? Date.now()) - quoteAsOf;
+  const quoteFresh = quoteAsOf > 0 && quoteAge >= -30_000 && quoteAge <= 120_000;
+  const quoteStatus = quoteFetching ? '行情更新中' : quoteFresh ? '行情已更新' : quoteAsOf > 0 ? '行情已过期' : '行情待核验';
+
 
   useEffect(() => {
     setHydrated(true);
@@ -278,7 +285,7 @@ export function TopBar() {
 
   return (
     <>
-      <header className="sticky top-0 z-40 h-14 shrink-0 border-b border-border/50 bg-background/70 backdrop-blur-2xl supports-[backdrop-filter]:bg-background/40">
+      <header className="app-topbar sticky top-0 z-40 h-14 shrink-0 border-b border-border/50 bg-background/70 backdrop-blur-2xl supports-[backdrop-filter]:bg-background/40">
       <div className="flex h-full items-center gap-3 px-5 lg:px-6">
         <Link href="/" aria-label="RiskControl 首页" className="lg:hidden shrink-0"><Logo size={32} /></Link>
         <Button
@@ -300,7 +307,7 @@ export function TopBar() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="搜索批次号 / 客户姓名 / 商务经理 / 签约年份..."
-            className="pl-10 h-9 bg-secondary/40 border-transparent focus:border-primary/40 focus:bg-background/80"
+            className="pl-10 h-9 bg-card border-border/70 focus:border-primary/40 focus:bg-background/80"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -311,21 +318,9 @@ export function TopBar() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2.5 pl-3 pr-3.5 py-1.5 rounded-full bg-secondary/40 border border-border/40">
-            <div className="relative flex items-center justify-center w-5 h-5">
-              <span className={cn("absolute inline-flex h-2.5 w-2.5 rounded-full bg-success", nyse.shouldBreathe && "animate-pulse-green")} />
-              <span className="sr-only">Online</span>
-            </div>
-            <RadioTower className={cn("h-3.5 w-3.5", nyse.shouldBreathe ? "text-success" : "text-muted-foreground")} />
-            <div className="flex items-center gap-1.5 text-xs leading-none">
-              <span className={cn("font-medium", nyse.shouldBreathe ? "text-foreground" : "text-muted-foreground")}>
-                {nyse.shouldBreathe ? "实时连接中" : "全球市场休市 · 价格锁定"}
-              </span>
-              <span className="text-muted-foreground/80">|</span>
-              <span className="font-mono text-muted-foreground tabular-nums">
-                {hydrated ? (nyse.shouldBreathe ? `${secondsLeft} 秒后更新` : '已停止') : '准备中'}
-              </span>
-            </div>
+          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground" title={quoteAsOf > 0 ? `行情时间：${new Date(quoteAsOf).toLocaleString('zh-CN')}；${nyse.shouldBreathe ? '交易时段' : '休市时段'}` : '尚未取得可核验的行情时间'}>
+            <span className={cn('h-1.5 w-1.5 rounded-full', quoteFresh ? 'bg-success' : 'bg-warning')} />
+            {quoteStatus}
           </div>
 
           {/* 实时股票行情徽章（TopBar「实时连接中」旁边展示）：真实数据直出，零任何模拟/抖动 */}
@@ -333,19 +328,19 @@ export function TopBar() {
             if (!quote.showOnTopBar) return null;
             const symbol = (quote.symbol || "").trim().toUpperCase();
             if (!symbol) return null;
-            const price = liveQuote ? Number(liveQuote.price) : 41.88;
-            const chg = liveQuote ? Number(liveQuote.changePct) : 0.36;
+            const price = liveQuote ? Number(liveQuote.price) : NaN;
+            const chg = liveQuote ? Number(liveQuote.changePct) : NaN;
             const up = chg >= 0;
             const badge = (
               <button
                 type="button"
                 onClick={() => setKlineOpen(true)}
                 className={cn(
-                  "hidden md:inline-flex items-center gap-2 pl-3 pr-3.5 py-1.5 rounded-full bg-secondary/40 border border-border/40 hover:bg-secondary/60 hover:border-primary/30 transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
+                  "hidden xl:inline-flex items-center gap-2 pl-3 pr-3.5 py-1.5 rounded-lg bg-secondary/25 border border-border/50 hover:bg-secondary/60 hover:border-primary/30 transition-colors focus:outline-none focus:ring-2 focus:ring-ring",
                   quoteFlashDir === "up" && "animate-price-flash-up",
                   quoteFlashDir === "down" && "animate-price-flash-down",
                 )}
-                title={`${symbol} 最新价 $${Number(price).toFixed(2)} · 点击查看 K 线`}
+                title={Number.isFinite(price) ? `${symbol} 最近行情 $${price.toFixed(2)} · 点击查看 K 线` : `${symbol} 行情暂不可用 · 点击查看 K 线`}
               >
                 {quoteFetching ? (
                   <div className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
@@ -361,12 +356,12 @@ export function TopBar() {
                   <span className="text-[10.5px] font-mono font-bold uppercase tracking-wider text-foreground">{symbol}</span>
                 </div>
                 <span className="font-mono font-bold text-sm tabular-nums tracking-tight text-foreground">
-                  ${Number(price || 0).toFixed(2)}
+                  {Number.isFinite(price) ? `$${price.toFixed(2)}` : '—'}
                 </span>
                 <span
                   className={cn(
                     "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-mono font-semibold",
-                    up ? quote.colorUp : quote.colorDown,
+                    !Number.isFinite(chg) ? "hidden" : up ? quote.colorUp : quote.colorDown,
                     up ? "bg-success/10" : "bg-danger/10"
                   )}
                 >
@@ -435,7 +430,7 @@ export function TopBar() {
             </TooltipContent>
           </Tooltip>
 
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/40 border border-border/40">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/25 border border-border/50">
             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-xs font-mono font-medium tabular-nums tracking-tight">
               {hydrated && now ? formatDateTime(now) : '--'}
@@ -494,7 +489,7 @@ export function TopBar() {
                     size="sm"
                     rounded="xl"
                   />
-                <div className="hidden md:flex flex-col text-left leading-tight">
+                <div className="hidden xl:flex flex-col text-left leading-tight">
                   <span className="text-xs font-semibold truncate max-w-[170px]">
                     {user?.displayName ?? 'Evan Pan'}
                   </span>
@@ -649,13 +644,14 @@ function NotificationDialogContent({
                           ? `${log.payload.batchNumber || ""} · ${log.payload.stockSymbol || ""} ${log.payload?.message || ""}`.trim()
                           : "系统消息"}
                       </p>
+                      {log.result?.routing && <p className="text-[10px] text-muted-foreground mt-1">提交时：{log.result.routing.summary}；最新状态见发送记录。</p>}
                       <div className="flex items-center justify-between mt-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge variant="secondary" className="text-[9px] h-4">
-                            Email {log.payload.recipients.emails.length === 0 ? "未请求" : log.result?.channels?.email?.success ? "已受理" : "失败/部分失败"}
+                            Email {notificationChannelLabel(log.result?.channels?.email)}
                           </Badge>
                           <Badge variant="secondary" className="text-[9px] h-4">
-                            WhatsApp {log.payload.recipients.whatsapps.length === 0 ? "未请求" : log.result?.channels?.whatsapp?.success ? "已受理" : "失败/部分失败"}
+                            Telegram {notificationChannelLabel(log.result?.channels?.telegram)}
                           </Badge>
                         </div>
                         <span className="text-[10px] font-mono text-muted-foreground">
@@ -672,7 +668,7 @@ function NotificationDialogContent({
       </div>
       <DialogFooter className="p-3 border-t border-border/50 flex flex-row justify-between items-center">
         <p className="text-[10px] text-muted-foreground">
-          点击「系统设置 → 通知测试」可发送真实邮件 / WhatsApp
+          点击「系统设置 → 通知测试」可发送真实邮件 / Telegram
         </p>
         <DialogClose asChild>
           <Button variant="default" size="sm" className="text-xs px-3">

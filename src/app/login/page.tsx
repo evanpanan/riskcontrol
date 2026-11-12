@@ -95,12 +95,12 @@ function LoginPageInner() {
 
   // 已登录直接回来源页
   useEffect(() => {
-    if (user && user.email && window.location.pathname === "/login") {
+    if (!isSubmitting && !welcomeState && user && user.email && window.location.pathname === "/login") {
       const dest = nextPath ? decodeURIComponent(nextPath) : "/";
       const t = setTimeout(() => router.replace(dest), 0);
       return () => clearTimeout(t);
     }
-  }, [user, router, nextPath]);
+  }, [user, router, nextPath, isSubmitting, welcomeState]);
 
   const handleLoginForm = (e: React.FormEvent) => {
     e.preventDefault();
@@ -199,191 +199,42 @@ function LoginPageInner() {
       };
 
       const finishLogin = async () => {
+        // Only announce success after the server has issued and verified a session.
+        const serverUser = await serverLoginCredentials(identifier, password);
+        if (!serverUser) {
+          setErrors({ form: "账号或密码校验失败，请重试。" });
+          return false;
+        }
+        const check = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' });
+        if (!check.ok) {
+          setErrors({ form: "登录会话未生效，请刷新后重试。" });
+          return false;
+        }
+        session = serverUser;
         onSuccessAudit();
-        // ============================================================
-        // FIRST: register navigation timers BEFORE rendering the welcome
-        // overlay.  Even if the overlay render throws a runtime error during
-        // React commit / CSS-in-JS style injection, these setTimeouts are
-        // already scheduled on the event loop and will still fire.
-        //
-        // **HARD RULE (v2.9)**: navigation is ALWAYS window.location
-        // replace/href, NEVER next/router.  Next router.push('') on a login
-        // route still in AppShell spinner path → AppShell effect detects
-        // !hydrated || isLoading || !user → router.replace('/login') →
-        // flips back → user sees "闪烁一下" and stays on /login.
-        // Using window.location bypasses AppShell entirely: the next load
-        // is a fresh document request with the new HttpOnly cookie.
-        //
-        // **HARD RULE (v3.1 — 用户需求 #2)**: 登录动画必须播放完毕才允许跳转后台。
-        // WelcomeTransitionOverlay 内部 rc-spin-slow(1.2s) + rc-progress-fill(720ms)
-        // + 各 stagger 总计 ≥1650ms 才能完整播放；onAnimationComplete 回调将在
-        // WelcomeTransitionOverlay 组件内部 useEffect 1650ms 到期时调用一次。
-        // ============================================================
-        let effectiveDestination: string = "/";
-        if (nextPath) {
-          try { effectiveDestination = decodeURIComponent(nextPath) || "/"; } catch { effectiveDestination = "/"; }
-        }
-        const finalDest = effectiveDestination.startsWith("/") ? effectiveDestination : "/";
-        // 用 ref + 闭包，WelcomeTransitionOverlay.onAnimationComplete / setTimeouts / 立即导航三者共享
-        const navStateRef = { canNavigateAt: 0, alreadyNavigated: false, animationFinishedAt: Number.POSITIVE_INFINITY, cookieIssuedAt: Number.POSITIVE_INFINITY,  };
-        const navigateHard = () => {
-          if (typeof window === "undefined") return;
-          if (navStateRef.alreadyNavigated) return;
-          // 动画播放完成标记（WelcomeTransitionOverlay 1650ms 后会把 animationFinishedAt 写入）
-          const now = Date.now();
-          if (now < navStateRef.animationFinishedAt) {
-            // 动画还没播完，不能跳 → 把导航延迟到刚好播完的那一刻（或 failsafeTimer 兜底）
-            const delay = navStateRef.animationFinishedAt - now;
-            if (delay > 0 && delay < 6000) {
-              window.setTimeout(navigateHard, delay + 10);
-              return;
-            }
-          }
-          navStateRef.alreadyNavigated = true;
-          const abs = `${window.location.protocol}//${window.location.host}${finalDest}`;
-          try { window.location.replace(abs); } catch { window.location.href = abs; }
+        if (remember) window.localStorage.setItem('risk_control_remember_email', session.email);
+        else window.localStorage.removeItem('risk_control_remember_email');
+        let dest = '/';
+        try { dest = nextPath ? decodeURIComponent(nextPath) : '/'; } catch { /* use home */ }
+        if (!dest.startsWith('/') || dest.startsWith('//')) dest = '/';
+        let navigated = false;
+        const navigate = () => {
+          if (navigated) return;
+          navigated = true;
+          window.location.replace(dest);
         };
-        // 注册 navigation 状态初始化：动画必须播完才能导航
-        navStateRef.animationFinishedAt = Date.now() + 1700; // WelcomeTransitionOverlay useEffect 1650ms + 50ms 安全裕度
-        // Primary: navigate after the welcome animation + 动画播完 (1700ms total, 与 WelcomeTransitionOverlay 对齐)
-        const primaryTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
-          try { navigateHard(); } catch { /* ignore */ }
-        }, 1750);
-        // Failsafe (HARD GUARANTEE): if pathname is still /login at 4.0s (v3.1 多给动画 1s 裕度), force
-        // navigate.  This works even if the welcome overlay rendered with
-        // errors, or Fast Refresh unmounted the component.  **This timer is
-        // NEVER cleaned up by catch / failure branches** — it must always
-        // fire at 4.0s so we never stall on /login after submission.
-        const failsafeTimer = typeof window === "undefined" ? null : window.setTimeout(() => {
-          try {
-            if (typeof window !== "undefined" && window.location.pathname === "/login") {
-              // failsafe 不再等动画直接跳
-              navStateRef.animationFinishedAt = 0;
-              navigateHard();
-            }
-          } catch { /* ignore */ }
-        }, 4000);
-        const cleanupPrimaryOnly = () => {
-          try {
-            if (typeof window !== "undefined" && primaryTimer !== null) clearTimeout(primaryTimer);
-          } catch { /* ignore */ }
-        };
-        // 把 WelcomeTransitionOverlay.onAnimationComplete 注入 welcomeState，setWelcomeState 时传进去
-        const pendingOnAnimComplete = () => {
-          try {
-            navStateRef.animationFinishedAt = Date.now();
-            // 如果 cookie 已签发，动画刚结束立即导航
-            if (navStateRef.cookieIssuedAt !== Number.POSITIVE_INFINITY && navStateRef.cookieIssuedAt <= Date.now()) {
-              navigateHard();
-            }
-          } catch { /* ignore */ }
-        };
-        (window as any).__RC_LOGIN_ANIM_COMPLETE__ = pendingOnAnimComplete;
-
-        try {
-          // Note: intentionally call setWelcomeState AFTER timer registration.
-          // If overlay render explodes, timers still fire.
-          try {
-            setWelcomeState({
-              visible: true,
-              displayName: session.displayName,
-              role: session.role,
-              email: session.email,
-              __onAnimationComplete: pendingOnAnimComplete,
-            } as any);
-          } catch {
-            /* ignore: welcome state error must not stop navigation */
-          }
-          let cookieIssued = false;
-          if (kind === "builtIn") {
-            const serverUser = await serverLoginCredentials(identifier, password);
-            if (serverUser && serverUser.email) {
-              session = {
-                ...session,
-                id: serverUser.id,
-                email: serverUser.email,
-                role: serverUser.role,
-                displayName: serverUser.displayName || session.displayName,
-                avatarInitials: serverUser.avatarInitials || session.avatarInitials,
-                avatarDataUrl: serverUser.avatarDataUrl || session.avatarDataUrl,
-                bdManagerFullName: serverUser.bdManagerFullName || session.bdManagerFullName,
-              };
-              cookieIssued = true;
-            } else {
-              // Server rejected credentials — keep failsafeTimer so we still navigate to
-              // next(/) even if serverLoginCredentials didn't set cookie yet (i.e.
-              // wrong password — this branch is an explicit user feedback branch, so
-              // we DO NOT navigate away; only clean primaryTimer only. failsafeTimer
-              // MUST live to 3s to guarantee UI doesn't freeze.
-              cleanupPrimaryOnly();
-              try { setWelcomeState(null); } catch { /* ignore */ }
-              setErrors({ form: "账号或密码校验失败，请稍后重试。" });
-              setIsSubmitting(false);
-              logAuthDeny({
-                action: 'login_denied',
-                resource: 'auth:login',
-                reason: 'server_password_verify_rejected',
-                userId: session.id,
-                role: session.role,
-              });
-              try { toast.error("登录失败", { description: "账号或密码不正确，请重新输入。" }); } catch { /* ignore */ }
-              return false;
-            }
-          } else {
-            loginAsCustom(session);
-          }
-          if (remember) {
-            try {
-              if (typeof window !== "undefined") {
-                window.localStorage.setItem("risk_control_remember_email", session.email);
-                window.localStorage.setItem(
-                  "risk_control_last_login_at",
-                  new Date().toISOString().slice(0, 16).replace("T", " ")
-                );
-              }
-            } catch { /* ignore */ }
-          } else {
-            try {
-              if (typeof window !== "undefined") window.localStorage.removeItem("risk_control_remember_email");
-            } catch { /* ignore */ }
-          }
-          const dest = nextPath ? (() => { try { return decodeURIComponent(nextPath) || "/"; } catch { return "/"; } })() : "/";
-          effectiveDestination = dest;
-          try {
-            if (typeof window !== "undefined") {
-              window.setTimeout(() => {
-                try { toast.success(`欢迎回来，${session.displayName}`); } catch { /* ignore */ }
-              }, 80);
-            }
-          } catch { /* ignore */ }
-          // v3.1 用户需求 #2：登录动画必须播放完毕才能进入后台。
-          // 立即注册 cookieIssuedAt 时间戳，动画播放完毕（WelcomeTransitionOverlay
-          // onAnimationComplete 回调，约 1650ms）触发 pendingOnAnimComplete → 立即导航。
-          // 若 cookie 还在途中 1750ms primaryTimer + 4000ms failsafeTimer 仍会兜底。
-          if (cookieIssued && typeof window !== "undefined") {
-            navStateRef.cookieIssuedAt = Date.now();
-            // 不再立刻 navigateHard（防止跳过动画）；交给 onAnimationComplete 触发
-            // 如果 onAnimationComplete 没触发（例如 WelcomeTransitionOverlay 没渲），primaryTimer(1750ms) 兜底。
-          }
-          return true;
-        } catch (err) {
-          // Any runtime error → **DO NOT CLEAN FAILSAFETIMER** (3s will fire
-          // regardless).  Primary timer may have already fired; at this point
-          // we also try an inline final navigation attempt so user doesn't
-          // wait 3 full seconds.
-          cleanupPrimaryOnly();
-          try {
-            if (typeof window !== "undefined" && window.location.pathname === "/login") {
-              const dest = nextPath ? decodeURIComponent(nextPath) : "/";
-              const abs = `${window.location.protocol}//${window.location.host}${dest}`;
-              try { window.location.replace(abs); } catch { window.location.href = abs; }
-            }
-          } catch { /* ignore */ }
-          return true;
-        }
+        setWelcomeState({
+          visible: true, displayName: session.displayName, role: session.role,
+          email: session.email, __onAnimationComplete: navigate,
+        } as any);
+        window.setTimeout(navigate, 1750);
+        return true;
       };
 
-      void finishLogin().finally(() => setIsSubmitting(false));
+      void finishLogin().catch(() => {
+        setWelcomeState(null);
+        setErrors({ form: "登录连接失败，请稍后重试。" });
+      }).finally(() => setIsSubmitting(false));
     })();
   };
 

@@ -239,7 +239,7 @@ export function RiskAlertDialog({
                     onClick={() => onDismissOne(a.batchId)}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    已知晓
+                    确认收到
                   </Button>
                 </div>
               </div>
@@ -253,7 +253,7 @@ export function RiskAlertDialog({
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onDismissAll}>
-              全部知晓
+              全部确认
             </Button>
             <Link href="/margin-calls" onClick={onDismissAll}>
               <Button size="sm" className="gap-1" variant="danger">

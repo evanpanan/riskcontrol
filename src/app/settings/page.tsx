@@ -1,5 +1,7 @@
 "use client";
 
+import { NotificationPolicyPanel } from "@/components/settings-NotificationPolicy";
+import { TelegramChannelPanel } from "@/components/settings-TelegramChannel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -269,7 +271,7 @@ interface SettingsFormState {
   priorityRatio: number;
   subordinateRatio: number;
   emailWebhook: string;
-  whatsappWebhook: string;
+  telegramWebhook: string;
   defaultRiskEmail: string;
   emergencyPhone: string;
   dataSource: string;
@@ -292,7 +294,7 @@ type SettingsFieldName =
   | "priorityRatio"
   | "subordinateRatio"
   | "emailWebhook"
-  | "whatsappWebhook"
+  | "telegramWebhook"
   | "defaultRiskEmail"
   | "emergencyPhone"
   | "apiKey"
@@ -304,7 +306,7 @@ const DEFAULT_FORM: SettingsFormState = {
   priorityRatio: 70,
   subordinateRatio: 30,
   emailWebhook: "",
-  whatsappWebhook: "",
+  telegramWebhook: "",
   defaultRiskEmail: "",
   emergencyPhone: "",
   dataSource: "Yahoo Finance (免费)",
@@ -339,6 +341,7 @@ function SettingsField({ name, value, onValueChange, ...props }: SettingsFieldPr
 }
 
 export default function SettingsPage() {
+  const [settingsTab, setSettingsTab] = useState("risk");
   const { user: currentUser, role: currentRole } = useAuthContext();
   const [saved, setSaved] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<{ title: string; run: () => void } | null>(null);
@@ -472,7 +475,7 @@ export default function SettingsPage() {
       const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       writeSharedSetting(LS_KEY, JSON.stringify({
         ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
-        emailWebhook: stored.emailWebhook ?? "", whatsappWebhook: stored.whatsappWebhook ?? "",
+        emailWebhook: stored.emailWebhook ?? "", telegramWebhook: stored.telegramWebhook ?? "",
         defaultRiskEmail: stored.defaultRiskEmail ?? "", emergencyPhone: stored.emergencyPhone ?? "",
       }));
     } catch (e) {}
@@ -544,7 +547,7 @@ export default function SettingsPage() {
   const [rWA, setRWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
 
   // 通知渠道帮助 Dialog（需求4：? 按钮 → 弹窗显示详细配置方法）
-  type HelpTopic = "email-webhook" | "whatsapp-webhook" | null;
+  type HelpTopic = "email-webhook" | "telegram-channel" | null;
   const [helpOpen, setHelpOpen] = useState<HelpTopic>(null);
   const HELP_CONTENT: Record<Exclude<HelpTopic, null>, { title: string; icon: "mail" | "wa"; steps: { h: string; p: string }[]; tips: string[] }> = {
     "email-webhook": {
@@ -562,20 +565,15 @@ export default function SettingsPage() {
         "同一事件 30 分钟内去重：同批次、同风险等级只发送一次",
       ],
     },
-    "whatsapp-webhook": {
-      title: "WhatsApp 通知配置指南",
-      icon: "wa",
+    "telegram-channel": {
+      title: "Telegram 频道配置指南", icon: "wa",
       steps: [
-        { h: "① 开通企业号码", p: "由系统管理员在 WhatsApp 商务平台完成企业号码验证，审核通过后方可对外发送消息。" },
-        { h: "② 启用系统消息通道", p: "管理员完成 WhatsApp 消息通道配置后即可使用；未配置时该渠道不生效。" },
-        { h: "③ 配置转发地址（可选）", p: "如需将通知同步到内部系统，可填写一个 HTTPS 转发地址；留空则使用系统默认通道。" },
-        { h: "④ 填写紧急联系人并发送测试", p: "为收件人填写带区号的完整号码（如 +852-91234567）并发送测试。首次可能因对方未同意消息模板而失败，需对方先回复一条消息。" },
+        { h: "① 创建频道和机器人", p: "通过 @BotFather 创建机器人，将机器人设为频道管理员并允许发布消息。" },
+        { h: "② 配置服务器凭据", p: "运维配置 TELEGRAM_BOT_TOKEN，密钥不保存在浏览器中。" },
+        { h: "③ 验证频道", p: "填写频道用户名或 ID，点击验证权限并保存。" },
+        { h: "④ 测试并邀请成员", p: "发送测试消息，确认频道收到后，将频道加入链接发给接收人员。" },
       ],
-      tips: [
-        "WhatsApp 仅允许向 24 小时内回复过消息的联系人主动发送非模板消息，建议使用已审核模板",
-        "同一事件 30 分钟内去重，避免被判定为骚扰",
-        "未填写号码的收件人不会收到 WhatsApp 通知，仅走邮件渠道",
-      ],
+      tips: ["用户加入频道即可查看后续风控提醒。", "不使用私聊机器人订阅，也不需要手机号或 WhatsApp 消息模板。"],
     },
   };
 
@@ -1032,7 +1030,7 @@ export default function SettingsPage() {
     try {
       const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       const notificationFields = Object.fromEntries(
-        (["emailWebhook", "whatsappWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
+        (["emailWebhook", "telegramWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
       );
       const beforeWarn = Number(stored?.warningThreshold);
@@ -1233,8 +1231,8 @@ export default function SettingsPage() {
           return { ...prev, realtimeTickIntervalSec: value === "" ? 0 : Number(value) };
         case "emailWebhook":
           return { ...prev, emailWebhook: value };
-        case "whatsappWebhook":
-          return { ...prev, whatsappWebhook: value };
+        case "telegramWebhook":
+          return { ...prev, telegramWebhook: value };
         case "defaultRiskEmail":
           return { ...prev, defaultRiskEmail: value };
         case "emergencyPhone":
@@ -1247,10 +1245,10 @@ export default function SettingsPage() {
 
   const enabledCount = recipients.filter(r => r.enabled).length;
 
-  const [testStatus, setTestStatus] = useState<{ email?: string; whatsapp?: string }>({});
+  const [testStatus, setTestStatus] = useState<{ email?: string; telegram?: string }>({});
   const [channelStatus, setChannelStatus] = useState<ReturnType<typeof notificationReadiness> | null>(null);
-  const [sendToken, setSendToken] = useState("");
-  const [tokenReady, setTokenReady] = useState(false);
+
+
   const checkChannels = async () => {
     try {
       const response = await fetch("/api/notify/send", { cache: "no-store" });
@@ -1258,18 +1256,18 @@ export default function SettingsPage() {
       setChannelStatus(await response.json());
     } catch (err) { toast.error(err instanceof Error ? err.message : "配置检查失败"); }
   };
-  useEffect(() => { void checkChannels(); setTokenReady(hasNotificationSendToken()); }, []);
-  const [sendingTest, setSendingTest] = useState<"email" | "whatsapp" | null>(null);
-  const handleSendTest = async (channel: "email" | "whatsapp") => {
+  useEffect(() => { void checkChannels();  }, []);
+  const [sendingTest, setSendingTest] = useState<"email" | "telegram" | null>(null);
+  const handleSendTest = async (channel: "email" | "telegram") => {
     if (sendingTest) return;
     setSendingTest(channel);
     setTestStatus((s) => ({ ...s, [channel]: undefined }));
     try {
-      const targets = channel === "email" ? [form.defaultRiskEmail] : [form.emergencyPhone];
-      if (!targets[0]) {
+      const targets = channel === "email" ? [form.defaultRiskEmail] : [];
+      if (channel === "email" && !targets[0]) {
         throw new Error(channel === "email" ? "请先填写默认风控收件人" : "请先填写紧急联系人电话");
       }
-      const overrideWebhook = channel === "email" ? form.emailWebhook : form.whatsappWebhook;
+      const overrideWebhook = channel === "email" ? form.emailWebhook : undefined;
       const r = await sendTestNotification(channel, targets, overrideWebhook || undefined);
       const sentTo = r.channels[channel]?.sentTo?.join(", ");
       if (r.channels[channel]?.success) {
@@ -1277,7 +1275,7 @@ export default function SettingsPage() {
         toast.success(`服务商已受理，请核对 ${sentTo || targets[0]} 是否实际收到。`);
         if (r.logError) toast.warning(r.logError);
       } else {
-        throw new Error(r.channels[channel]?.error || (channel === "email" ? "发送测试邮件失败" : "发送测试 WhatsApp 失败"));
+        throw new Error(r.channels[channel]?.error || (channel === "email" ? "发送测试邮件失败" : "发送测试 Telegram 失败"));
       }
     } catch (e: any) {
       const msg = e?.message || String(e);
@@ -1305,7 +1303,7 @@ export default function SettingsPage() {
     </p>
   </div>
 
-  <Tabs defaultValue="risk" className="w-full">
+  <Tabs value={settingsTab} onValueChange={setSettingsTab} className="w-full">
     <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 h-auto p-1.5 gap-1.5">
       <TabsTrigger value="risk" className="h-9 gap-1.5"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
       <TabsTrigger value="market" className="h-9 gap-1.5"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
@@ -1541,46 +1539,7 @@ export default function SettingsPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 flex-wrap pl-5">
-                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="font-medium">通知:</span>
-                      {(["email", "whatsapp", "sms"] as NotifyChannel[]).map((ch) => (
-                        <label key={ch} className="flex items-center gap-1 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={tier.notifyChannels.includes(ch)}
-                            onChange={(e) => {
-                              const channels = e.target.checked
-                                ? [...tier.notifyChannels, ch]
-                                : tier.notifyChannels.filter((c) => c !== ch);
-                              updateRiskTier(tier.id, { notifyChannels: channels });
-                            }}
-                            className="rounded border-border accent-primary"
-                          />
-                          {ch === "email" ? "邮件" : ch === "whatsapp" ? "WhatsApp" : "短信"}
-                        </label>
-                      ))}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="font-medium">对象:</span>
-                      {(["risk", "bd", "all"] as NotifyTarget[]).map((tg) => (
-                        <label key={tg} className="flex items-center gap-1 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={tier.notifyTargets.includes(tg)}
-                            onChange={(e) => {
-                              const targets = e.target.checked
-                                ? [...tier.notifyTargets, tg]
-                                : tier.notifyTargets.filter((c) => c !== tg);
-                              updateRiskTier(tier.id, { notifyTargets: targets });
-                            }}
-                            className="rounded border-border accent-primary"
-                          />
-                          {tg === "risk" ? "风控" : tg === "bd" ? "BD" : "全员"}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+                  <Button variant="link" size="sm" className="h-auto p-0 ml-5 text-xs" onClick={() => setSettingsTab('notify')}>通知按统一策略发送，前往设置</Button>
                 </div>
               );
             })}
@@ -1919,6 +1878,10 @@ export default function SettingsPage() {
 
     <TabsContent value="notify" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
       <div className="space-y-6">
+    <NotificationPolicyPanel />
+    <TelegramChannelPanel />
+    <details className="rounded-xl border border-border p-4"><summary className="text-sm cursor-pointer text-muted-foreground">邮件服务与其他联系人</summary><div className="space-y-6 mt-4">
+    <p className="text-xs text-muted-foreground">自动风控邮件以「重要提醒收件人」为准，以下联系人资料不用于自动群发。</p>
     {/* Notification Channels */}
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -1929,23 +1892,13 @@ export default function SettingsPage() {
       </CardHeader>
       <CardContent className="pt-0 space-y-5">
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3 text-xs">
-          <p className="font-semibold">1. 配置服务商 → 2. 添加真实收件人 → 3. 点击测试并核对收件</p>
-          <p className="text-muted-foreground">邮件与 WhatsApp 通道由系统管理员完成服务商配置后启用。授权密钥等敏感信息由管理员统一保管，无需在此填写。</p>
-          <p className="text-muted-foreground">当前为手动发送；页面内的风险提示不等于已发出外部通知。「已受理」不代表已送达，请以收件箱或服务商回执为准。</p>
-          <div className="flex flex-wrap gap-2 items-center">
-            <Input type="password" aria-label="通知发送授权码" autoComplete="off" value={sendToken}
-              onChange={(e) => setSendToken(e.target.value)} placeholder="管理员提供的发送授权码，仅本次会话有效"
-              className="max-w-md text-xs" />
-            <Button variant="outline" size="sm" onClick={() => {
-              if (sendToken.trim().length < 32) { toast.error("授权码至少 32 位。"); return; }
-              setNotificationSendToken(sendToken); setSendToken(""); setTokenReady(true);
-              toast.success("发送授权码已暂存，刷新页面后需重新输入。");
-            }}>{tokenReady ? "更新发送授权码" : "启用本次发送授权"}</Button>
-            <Button variant="outline" size="sm" onClick={checkChannels}>检查服务配置</Button>
-          </div>
-          {channelStatus && (["email", "whatsapp"] as const).map((channel) => (
+          <p className="font-semibold">1. 配置通道 → 2. 填写邮件收件人或风控频道 → 3. 测试并核对收件</p>
+          <p className="text-muted-foreground">邮件与 Telegram 频道由系统管理员完成服务商配置后启用。授权密钥等敏感信息由管理员统一保管，无需在此填写。</p>
+          <p className="text-muted-foreground">本页支持手动测试；自动闪跌提醒需启用服务端监控任务。页面内提示不等于已发出外部通知。「已受理」不代表已送达，请以收件箱或服务商回执为准。</p>
+          <Button variant="outline" size="sm" onClick={checkChannels}>检查服务配置</Button>
+          {channelStatus && (["email", "telegram"] as const).map((channel) => (
             <p key={channel} className={channelStatus[channel].ready ? "text-success" : "text-warning"}>
-              {channel === "email" ? "邮件" : "WhatsApp"}：{channelStatus[channel].ready
+              {channel === "email" ? "邮件" : "Telegram"}：{channelStatus[channel].ready
                 ? "配置已就绪，待实发验证"
                 : channelStatus[channel].issues.join("；")}
             </p>
@@ -1991,27 +1944,6 @@ export default function SettingsPage() {
           />
         </div>
 
-        <div className="rounded-xl border border-border/50 bg-secondary/30 p-4">
-          <div className="flex items-start justify-between gap-4 mb-3">
-            <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-xl bg-success/15 border border-success/20 flex items-center justify-center shrink-0">
-                <MessageCircle className="h-4 w-4 text-success" />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <p className="font-semibold text-sm">WhatsApp 机器人订阅</p>
-                  <Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0 -mt-0.5 -ml-1"
-                    onClick={() => setHelpOpen("whatsapp-webhook")} title="如何配置 WhatsApp 机器人？">
-                    <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  用户给机器人号码发消息即自动订阅，无需在此手动维护收件人
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
@@ -2180,8 +2112,7 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
 
-    {/* ====== WhatsApp 机器人订阅 ====== */}
-    <WhatsAppBotPanel />
+    </div></details>
       </div>
     </TabsContent>
 
@@ -3201,180 +3132,5 @@ export default function SettingsPage() {
 
 </div>
   </AuthGuard>
-  );
-}
-
-/**
- * WhatsApp 机器人订阅面板：
- * - 展示机器人号码与入站 Webhook 地址
- * - 列出所有已订阅用户，支持退订 / 重新订阅 / 删除
- */
-function WhatsAppBotPanel() {
-  const [subscribers, setSubscribers] = useState<
-    { id: string; phone: string; displayName: string | null; active: boolean; lastMessageAt: string; createdAt: string }[]
-  >([]);
-  const [loading, setLoading] = useState(false);
-  const [botPhone, setBotPhone] = useState(() => {
-    try { return localStorage.getItem("rc_wa_bot_phone") ?? ""; } catch { return ""; }
-  });
-  const webhookUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api/notify/whatsapp/webhook`
-    : "";
-
-  const fetchSubs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/notify/whatsapp/subscribers", { cache: "no-store" });
-      if (!res.ok) throw new Error("加载失败");
-      const data = await res.json();
-      setSubscribers(data.subscribers ?? []);
-    } catch {
-      toast.error("加载订阅者列表失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchSubs(); }, [fetchSubs]);
-
-  const saveBotPhone = () => {
-    try { localStorage.setItem("rc_wa_bot_phone", botPhone.trim()); toast.success("机器人号码已保存"); }
-    catch { toast.error("保存失败"); }
-  };
-
-  const toggleActive = async (id: string, active: boolean) => {
-    try {
-      const res = await fetch(`/api/notify/whatsapp/subscribers/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active }),
-      });
-      if (!res.ok) throw new Error();
-      setSubscribers((prev) => prev.map((s) => (s.id === id ? { ...s, active } : s)));
-      toast.success(active ? "已重新订阅" : "已退订");
-    } catch {
-      toast.error("操作失败");
-    }
-  };
-
-  const removeSub = async (id: string) => {
-    try {
-      const res = await fetch(`/api/notify/whatsapp/subscribers/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error();
-      setSubscribers((prev) => prev.filter((s) => s.id !== id));
-      toast.success("已删除");
-    } catch {
-      toast.error("删除失败");
-    }
-  };
-
-  const copyWebhook = () => {
-    navigator.clipboard?.writeText(webhookUrl).then(
-      () => toast.success("Webhook 地址已复制"),
-      () => toast.error("复制失败，请手动复制")
-    );
-  };
-
-  return (
-    <Card className="border-border/50">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-bold flex items-center gap-2">
-          <Bot className="h-4 w-4 text-success" />
-          WhatsApp 机器人 · 自动订阅
-        </CardTitle>
-        <p className="text-xs text-muted-foreground mt-1">
-          用户给机器人号码发送任意消息即可订阅风控推送；发送「退订」可取消。订阅者会自动并入所有 WhatsApp 通知收件人。
-        </p>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-4">
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">机器人号码</Label>
-            <div className="flex gap-2">
-              <Input
-                placeholder="+85291234567"
-                value={botPhone}
-                onChange={(e) => setBotPhone(e.target.value)}
-                className="font-mono text-sm h-9"
-              />
-              <Button size="sm" variant="outline" className="h-9" onClick={saveBotPhone}>保存</Button>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Twilio 入站 Webhook（粘贴到 Twilio Sandbox / Sender 的 When a message comes in）</Label>
-            <div className="flex gap-2">
-              <Input readOnly value={webhookUrl} className="font-mono text-xs h-9" />
-              <Button size="sm" variant="outline" className="h-9 gap-1" onClick={copyWebhook}>
-                <Link2 className="h-3.5 w-3.5" />复制
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Users className="h-3.5 w-3.5" />
-            订阅者：{subscribers.filter((s) => s.active).length} / {subscribers.length}
-          </div>
-          <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={fetchSubs} disabled={loading}>
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />刷新
-          </Button>
-        </div>
-
-        {subscribers.length === 0 ? (
-          <div className="text-center py-10 text-muted-foreground border rounded-xl border-dashed border-border/60">
-            <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">暂无订阅者</p>
-            <p className="text-[11px] mt-0.5">用户给机器人号码发消息后会自动出现在这里</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-border/60 max-h-80 overflow-y-auto">
-            {subscribers.map((s) => (
-              <div key={s.id} className="py-3 flex items-center justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-sm">{s.phone}</span>
-                    {s.displayName && <span className="text-xs text-muted-foreground">({s.displayName})</span>}
-                    {s.active ? (
-                      <Badge variant="success" className="text-[10px] gap-1">
-                        <CheckCircle2 className="h-2.5 w-2.5" />已订阅
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-[10px]">已退订</Badge>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    最后消息：{formatDateTime(s.lastMessageAt)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {s.active ? (
-                    <Button
-                      size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-warning"
-                      onClick={() => toggleActive(s.id, false)}
-                    >
-                      <UserMinus className="h-3.5 w-3.5" />退订
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-success"
-                      onClick={() => toggleActive(s.id, true)}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />重订阅
-                    </Button>
-                  )}
-                  <Button
-                    size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-danger hover:bg-danger/10"
-                    onClick={() => removeSub(s.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }

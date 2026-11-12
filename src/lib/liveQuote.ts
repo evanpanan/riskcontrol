@@ -176,7 +176,7 @@ export function quoteSourceLabel(q: BrowserQuote | null | undefined): string {
   }
 }
 
-function loadCached(symbol: string): BrowserQuote | null {
+export function getCachedQuote(symbol: string): BrowserQuote | null {
   try {
     if (typeof window === "undefined") return null;
     const raw = localStorage.getItem(LAST_SUCCESSFUL_QUOTE_KEY);
@@ -247,7 +247,7 @@ export async function fetchQuoteBrowser(symbol: string): Promise<BrowserQuote> {
     saveCached(s, q);
     return q;
   } catch {
-    const cached = loadCached(s);
+    const cached = getCachedQuote(s);
     if (cached) {
       // 缓存未超期沿用（标注为 CACHE）；超期则以 STALE 返回，界面提示失效、计算侧拦截。
       return { ...cached, source: cached.stale ? "STALE" : "CACHE", stale: cached.stale };
