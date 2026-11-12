@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { BatchHistoryTooltip } from '../src/components/batch/BatchHistoryTooltip';
+import type { BatchDailySummary } from '../src/lib/batchDaily';
+(globalThis as any).React = React;
+const row: BatchDailySummary = { date:'2026-11-12', price:10, shares:100, cash:20, marketValue:1020, totalPnL:100, yieldPct:10, institutionPnL:60, clientPnL:40, institutionYieldPct:20, clientYieldPct:5.71, requiredMargin:0, cumulativeTopup:50, topupAmount:50, topups:[{amount:50,type:'stock',shares:5,price:10,at:'2026-11-12T16:00:00Z'}], activeClients:2, status:'LOCKED', riskLevel:'NORMAL' };
+const html = renderToStaticMarkup(React.createElement(BatchHistoryTooltip, { row }));
+for (const text of ['整体','Win100','客户','累计盈亏','收益率','收盘价','持股数','现金余额','待补仓','当日补仓','累计补仓','+20.00%','+5.71%','补股票']) assert.ok(html.includes(text), text);
+const legacy = {...row}; delete legacy.institutionYieldPct; delete legacy.clientYieldPct;
+const old = renderToStaticMarkup(React.createElement(BatchHistoryTooltip, {row:legacy}));
+assert.ok(old.includes('—')); assert.ok(!old.includes('+0.00%'));
+console.log('PASS: tooltip renders portfolio/institution/client data and topups; missing legacy yields remain unknown');

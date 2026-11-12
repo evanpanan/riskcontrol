@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/table";
 import {
   isVipClient,
+  getClientProfitSplit,
   allocateClientMarginRequirements,
   executeInstitutionTopup,
   isTopupBlockedByLegacyLedger,
@@ -449,7 +450,7 @@ export function ClientTable({
           <TableRow className="border-border/40 hover:bg-transparent">
               <TableHead className="w-[156px] text-[12px] font-medium text-muted-foreground">客户信息</TableHead>
               <TableHead className="w-[112px] text-[12px] font-medium text-muted-foreground">商务经理</TableHead>
-              <TableHead className="w-[78px] text-[12px] font-medium text-muted-foreground">账户类型</TableHead>
+              <TableHead className="w-[124px] text-[12px] font-medium text-muted-foreground">分成比例</TableHead>
               <TableHead className="w-[112px] text-right text-[12px] font-medium text-muted-foreground">客户权益</TableHead>
               <TableHead className="w-[136px] text-right text-[12px] font-medium text-muted-foreground">投资金额</TableHead>
               <TableHead className="w-[140px] text-right text-[12px] font-medium text-muted-foreground">盈亏 (USD)</TableHead>
@@ -466,6 +467,10 @@ export function ClientTable({
             const StatusIcon = statusConfig.Icon;
             const estExit = client.estimatedExitAmount ?? client.investmentAmount;
             const isSettled = client.status === ClientStatus.SETTLED;
+            const settlement = batch?.finance?.settlements[client.id] ?? (client as any).settlement;
+            const splitClientPct = isSettled && Number.isFinite(settlement?.splitRatioClient)
+              ? settlement.splitRatioClient : getClientProfitSplit(client).client * 100;
+            const splitInstitutionPct = 100 - splitClientPct;
             const settledTs = isSettled && client.settledAt ? new Date(client.settledAt as any).getTime() : 0;
             const justSettled = !!newlySettledIds[client.id] &&
               settledTs >= (mountedAtRef.current - 1500);
@@ -609,11 +614,11 @@ export function ClientTable({
                       <div className="space-y-0.5">
                         <div className="inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[9px] leading-none text-foreground/90">
                         <User className="h-3 w-3" />
-                        客户账户
+                        客户 {Number(splitClientPct.toFixed(2))}%
                       </div>
                         <div className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] leading-none text-primary/90">
                         <Building2 className="h-3 w-3" />
-                        机构分成
+                        Win100 {Number(splitInstitutionPct.toFixed(2))}%
                       </div>
                     </div>
                   )}

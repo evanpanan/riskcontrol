@@ -3,6 +3,7 @@ export type DailyTopup = { amount: number; type: 'cash' | 'stock' | 'unknown'; s
 export type BatchDailySummary = {
   date: string; price: number; shares: number; cash: number; marketValue: number;
   totalPnL: number; yieldPct: number; institutionPnL: number; clientPnL: number;
+  institutionYieldPct?: number; clientYieldPct?: number;
   requiredMargin: number; cumulativeTopup: number; topupAmount: number; topups: DailyTopup[];
   activeClients: number; status: string; riskLevel: string;
 };
@@ -34,6 +35,7 @@ export function summarizeDailyBatch(batch: BatchLike, date: string, close: numbe
     cash: trades.filter(t => t.collateralType === 'cash').reduce((sum, t) => sum + t.amount * t.remainingFraction, 0),
     marketValue: metrics.currentMarketValue, totalPnL: split.institutionTotalPnL + split.clientTotalPnL, yieldPct: (batch.finance?.originalCapital ?? batch.initialTotalAmount) > 0 ? (split.institutionTotalPnL + split.clientTotalPnL) / (batch.finance?.originalCapital ?? batch.initialTotalAmount) * 100 : 0,
     institutionPnL: split.institutionTotalPnL, clientPnL: split.clientTotalPnL,
+    institutionYieldPct: split.institutionTotalPnLPercent, clientYieldPct: split.clientTotalPnLPercent,
     requiredMargin: batch.finance?.rounds.filter(r => r.status === "PENDING" || r.status === "OVERDUE").reduce((sum, r) => sum + Math.max(0, r.requiredAmount - r.fulfilledAmount), 0) ?? metrics.requiredMarginCall, cumulativeTopup: batch.cumulativeMarginCalls,
     topupAmount: topups.reduce((sum, t) => sum + t.amount, 0), topups,
     activeClients: (batch.clients ?? []).filter(c => c.status !== 'SETTLED').length,

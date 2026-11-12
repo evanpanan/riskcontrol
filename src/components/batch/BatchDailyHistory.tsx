@@ -1,4 +1,5 @@
 "use client";
+import { BatchHistoryTooltip } from "@/components/batch/BatchHistoryTooltip";
 import { useEffect, useState } from 'react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceDot } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -32,7 +33,7 @@ export function BatchDailyHistory({ batchId, batchNumber }: { batchId: string; b
       Excel.utils.book_append_sheet(book, Excel.utils.json_to_sheet(rows.map(r => ({
         '交易日（纽约）': r.date, '收盘价': r.price, '持股数（含补仓）': r.shares, '现金余额': r.cash,
         '在管价值': r.marketValue, '整体累计盈亏': r.totalPnL, '整体收益率(%)': r.yieldPct,
-        '机构累计盈亏': r.institutionPnL, '客户累计盈亏': r.clientPnL, '待补仓': r.requiredMargin,
+        '机构累计盈亏': r.institutionPnL, '机构收益率(%)': r.institutionYieldPct ?? null, '客户累计盈亏': r.clientPnL, '客户收益率(%)': r.clientYieldPct ?? null, '待补仓': r.requiredMargin,
         '累计补仓': r.cumulativeTopup, '当日补仓': r.topupAmount, '在持客户数': r.activeClients,
         '状态': r.status, '风险等级': r.riskLevel, '数据类型': r.reconstructed ? '历史回算' : '每日留存', '采集或计算时间': r.capturedAt, '行情来源': r.source,
       }))), '每日数据');
@@ -57,7 +58,7 @@ export function BatchDailyHistory({ batchId, batchNumber }: { batchId: string; b
       {loading ? <p className="text-sm text-muted-foreground">正在读取每日数据…</p> : error ? <p role="alert" className="text-sm text-danger">{error}</p> : !rows.length ? <p className="text-sm text-muted-foreground py-8 text-center">暂无可用历史数据，正在等待可用收盘价或完整业务记录。</p> : <>
         {view === 'chart' ? <div className="h-72 w-full min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 20, right: 18, left: 0, bottom: 8 }} onClick={(e: any) => { const r = e?.activePayload?.[0]?.payload; if (r) setSelected(r.date); }}>
           <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false}/><XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={40}/><YAxis tick={{ fontSize: 10 }} width={65} tickFormatter={n => `${(n / 1000).toFixed(0)}K`}/>
-          <Tooltip content={({ active, payload }) => { const r = payload?.[0]?.payload as Row | undefined; return active && r ? <div className="rounded-lg border border-border bg-background p-3 text-xs shadow-lg space-y-1"><p>{r.date} · {r.reconstructed ? "历史回算" : "每日留存"}</p><p>在管价值 {formatCurrency(r.marketValue)}</p><p>整体盈亏 {formatCurrency(r.totalPnL)} · {r.yieldPct.toFixed(2)}%</p>{r.topups.map((t, i) => <p key={i} className="text-warning">补{t.type === 'cash' ? '现金' : '股票'} {formatCurrency(t.amount)}{t.type === 'stock' ? ` · ${t.shares.toFixed(4)} 股 @ $${t.price?.toFixed(4)}` : ''}</p>)}</div> : null; }}/>
+          <Tooltip content={({ active, payload }) => { const row = payload?.[0]?.payload as Row | undefined; return active && row ? <BatchHistoryTooltip row={row} /> : null; }} />
           <Line type="linear" dataKey="marketValue" stroke="hsl(var(--primary))" strokeWidth={2} dot={rows.length === 1} isAnimationActive={false}/>
           {rows.filter(r => r.topupAmount > 0).map(r => <ReferenceDot key={r.date} x={r.date} y={r.marketValue} r={5} fill="hsl(var(--warning))" stroke="hsl(var(--background))" label={{ value: `补仓 ${(r.topupAmount / 1000).toFixed(1)}K`, position: 'top', fontSize: 10 }} />)}
         </LineChart></ResponsiveContainer></div> : <div className="overflow-x-auto rounded-lg border border-border"><table className="w-full whitespace-nowrap text-xs"><thead className="bg-secondary/40"><tr>{['交易日', '收盘价', '持股数', '现金', '在管价值', '整体盈亏', '收益率', '机构盈亏', '客户盈亏', '当日补仓', '待补仓'].map(h => <th className="px-3 py-3 text-right first:text-left" key={h}>{h}</th>)}</tr></thead><tbody>{[...rows].reverse().map(r => <tr key={r.date} className="border-t border-border hover:bg-secondary/30 cursor-pointer" onClick={() => setSelected(r.date)}><td className="p-3 text-left">{r.date}</td>{[r.price.toFixed(4), r.shares.toLocaleString(undefined, { maximumFractionDigits: 4 }), formatCurrency(r.cash), formatCurrency(r.marketValue), formatCurrency(r.totalPnL), `${r.yieldPct.toFixed(2)}%`, formatCurrency(r.institutionPnL), formatCurrency(r.clientPnL), r.topupAmount ? formatCurrency(r.topupAmount) : '—', formatCurrency(r.requiredMargin)].map((v, i) => <td key={i} className="p-3 text-right font-mono">{v}</td>)}</tr>)}</tbody></table></div>}
