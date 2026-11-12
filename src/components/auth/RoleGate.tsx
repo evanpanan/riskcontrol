@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useCurrentUser } from '@/lib/auth/useCurrentUser';
 import { logAuthDeny } from '@/lib/auth/audit';
 import type { AppRole, AppSessionUser } from '@/types/auth';
@@ -33,26 +33,17 @@ export function RoleGate({
     role: AppRole;
     isLoading: boolean;
   };
-  // 加载中保守：不渲染 children，避免瞬时泄露
-  if (isLoading) {
-    return <>{fallback}</>;
-  }
-  if (allowed.includes(role)) {
-    return <>{children}</>;
-  }
-  if (onDeny) {
-    try {
-      onDeny();
-    } catch {
-      /* ignore */
-    }
-  }
-  logAuthDeny({
-    action: auditAction,
-    resource: auditResource,
-    reason: `role_not_in_allowed_list:${role}`,
-    userId: user?.id,
-    role,
-  });
+  const permitted = allowed.includes(role);
+  const lastDenied = useRef<string | null>(null);
+  useEffect(() => {
+    if (isLoading) return;
+    if (permitted) { lastDenied.current = null; return; }
+    const identity = `${user?.id}:${role}:${auditResource}:${auditAction}`;
+    if (lastDenied.current === identity) return;
+    lastDenied.current = identity;
+    try { onDeny?.(); } catch { /* A consumer callback must not break rendering. */ }
+    logAuthDeny({ action: auditAction, resource: auditResource, reason: `role_not_in_allowed_list:${role}`, userId: user?.id, role });
+  }, [isLoading, permitted, user?.id, role, auditResource, auditAction, onDeny]);
+  if (!isLoading && permitted) return <>{children}</>;
   return <>{fallback}</>;
 }

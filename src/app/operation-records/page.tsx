@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,8 @@ import {
 
 
 export default function OperationRecordsPage() {
+  const requestInFlight = useRef(false);
+  const [hasNewRecords, setHasNewRecords] = useState(false);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState("");
@@ -49,14 +51,17 @@ export default function OperationRecordsPage() {
   const [detailOpen, setDetailOpen] = useState<AuditLogEntry | null>(null);
 
   const loadLogs = async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     setLoading(true);
     try {
       const rows = await fetchAuditLogs({ limit: 1000 });
       setLogs(rows);
+      setHasNewRecords(false);
     } catch {
-      setLogs([]);
       toast.error("操作记录加载失败");
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   };
@@ -66,7 +71,7 @@ export default function OperationRecordsPage() {
   }, []);
 
   useEffect(() => {
-    const onAudit = () => void loadLogs();
+    const onAudit = () => setHasNewRecords(true);
     window.addEventListener("risk-control:audit-updated", onAudit);
     return () => window.removeEventListener("risk-control:audit-updated", onAudit);
   }, []);
@@ -104,9 +109,9 @@ export default function OperationRecordsPage() {
               <Lock className="h-3.5 w-3.5" />
               不可删除
             </Badge>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void loadLogs()}>
+            <Button variant="outline" size="sm" className="h-8 text-xs" disabled={loading} onClick={() => void loadLogs()}>
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              刷新
+              {hasNewRecords ? "有新记录 · 点击刷新" : "刷新"}
             </Button>
           </div>
         </div>
@@ -171,7 +176,7 @@ export default function OperationRecordsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {loading ? (
+                    {loading && logs.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="py-10 text-center text-muted-foreground">加载中…</td>
                       </tr>

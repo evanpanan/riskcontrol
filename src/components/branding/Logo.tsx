@@ -72,8 +72,8 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
   return (
     <div className={cn("flex shrink-0 items-center justify-center rounded-xl bg-[#111d29] ring-1 ring-[#c9ad70]/35", className)} style={{ width: size, height: size }}>
       <svg viewBox="0 0 64 64" role="img" aria-label="Win100 机构标志" className={iconClassName} width={size} height={size}>
-        <path d="M12 15l8 22 12-17 12 17 8-22" fill="none" stroke="#d8bf86" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-        <text x="32" y="53" textAnchor="middle" fill="#ead8ac" fontFamily="Arial,sans-serif" fontWeight="700" fontSize="13" letterSpacing="1">100</text>
+        <text x="32" y="29" textAnchor="middle" fill="#ead8ac" fontFamily="Arial,sans-serif" fontWeight="700" fontSize="21" letterSpacing="-0.4">Win</text>
+        <text x="32" y="51" textAnchor="middle" fill="#d8bf86" fontFamily="Arial,sans-serif" fontWeight="700" fontSize="21" letterSpacing="0.5">100</text>
       </svg>
     </div>
   );

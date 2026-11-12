@@ -510,6 +510,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         parsedUrl.origin === window.location.origin &&
         pathname.startsWith('/api/') &&
         pathname !== '/api/audit' &&
+        pathname !== '/api/dashboard/snapshots' &&
+        pathname !== '/api/data/store/bootstrap' &&
         pathname !== '/api/auth/login' &&
         pathname !== '/api/auth/logout';
       try {
