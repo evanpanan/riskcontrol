@@ -447,9 +447,9 @@ export async function triggerClientAddedAlert(
 const pendingBatchNotifications = new Set<string>();
 export async function notifyBatchChannel(
   batch: Batch & { clients?: Client[]; marginCalls?: MarginCall[] },
-  _legacyChannel?: "email" | "telegram"
+  channel: "email" | "telegram" = "telegram"
 ): Promise<string> {
-  const key = `${batch.id}:policy`;
+  const key = `${batch.id}:${channel}`;
   if (pendingBatchNotifications.has(key)) throw new Error('该提醒正在处理，请勿重复点击。');
   pendingBatchNotifications.add(key);
   try {
@@ -460,12 +460,12 @@ export async function notifyBatchChannel(
     const payload = current ? buildMarginCallNotification(batch, current, bds, thresholds) : buildWarningNotification(batch, drop, Math.max(0,(thresholds.marginDropPercent ?? 20)-drop), thresholds);
     const metrics = getBatchMetrics(batch as any);
     if (metrics.riskLevel === 'CRITICAL' || summarizeBatchMarginFromClients(batch as any).totalPending > 0) payload.severity = 'CRITICAL';
-    const result = await sendNotification(payload);
-    try {
-      const { logAudit } = await import('@/lib/auth/audit');
-      logAudit({ action: 'batch_notify', resource: `batch:notify:${batch.id}:policy`, detail: { batchId: batch.id, notificationType: current ? 'margin_call' : 'warning', dispatchId: result.routing?.dispatchId, status: result.routing?.status, deduplicated: result.routing?.deduplicated, success: result.success } });
-    } catch { /* The durable dispatch ledger is authoritative. */ }
-    if (!result.success) throw new Error(result.routing?.summary || '通知尚未成功，请检查投递记录');
-    return result.routing?.deduplicated ? '同类风险已在30分钟内通知，本次不重复发送' : result.routing?.summary || '通知已受理';
+    const response = await fetch("/api/notify/send", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "manual", channel, payload }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "通知发送失败");
+    const selected = result.channels?.[channel];
+    if (!selected?.success) throw new Error(selected?.error || result.summary || "发送尚未确认，请查看通知记录");
+    return result.deduplicated ? `${channel === "telegram" ? "Telegram" : "邮件"}此前已发送成功，本次未重复发送` : `${channel === "telegram" ? "Telegram" : "邮件"}发送成功`;
+
   } finally { pendingBatchNotifications.delete(key); }
 }

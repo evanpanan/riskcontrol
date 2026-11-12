@@ -522,25 +522,14 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
                 auditResource={`batch:notify_wa:${batch.id}`}
                 auditAction="ui_component_denied"
               >
-                <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="发送提醒"
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/80 shrink-0"
-                    onClick={async (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      try { toast.success(await notifyBatchChannel(batch as any, "telegram")); }
-                      catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
-                    }}
-                  >
-                    <MessageCircle className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>根据提醒设置发送通知</TooltipContent>
-              </Tooltip>
+                {(["email", "telegram"] as const).map(channel => <Tooltip key={channel}>
+                  <TooltipTrigger asChild><Button aria-label={channel === "email" ? "发送邮件" : "发送 Telegram"} size="sm" variant="ghost" className="h-7 px-2 gap-1 text-[10px]" onClick={async e => {
+                    e.preventDefault(); e.stopPropagation();
+                    try { toast.success(await notifyBatchChannel(batch as any, channel)); }
+                    catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
+                  }}>{channel === "email" ? <Mail className="h-3.5 w-3.5" /> : <MessageCircle className="h-3.5 w-3.5" />}{channel === "email" ? "邮件" : "TG"}</Button></TooltipTrigger>
+                  <TooltipContent>{channel === "email" ? "发送风控邮件" : "发送到 Telegram 频道"}</TooltipContent>
+                </Tooltip>)}
               </RoleGate>
               <RoleGate
                 allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}

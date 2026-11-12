@@ -5,7 +5,7 @@ import {
   deliverNotification,
 } from "@/lib/server/notificationDelivery";
 import { unknownNotificationOutcome } from "@/lib/server/notificationErrors";
-import { dispatchNotification } from "@/lib/server/notificationDispatch";
+import { loadNotificationPolicy, dispatchNotification } from "@/lib/server/notificationDispatch";
 import { resolveSessionUser } from "@/lib/server/apiAuth";
 import { prisma } from "@/lib/prisma";
 
@@ -111,9 +111,21 @@ export async function POST(req: NextRequest) {
       );
     }
     const body = JSON.parse(text);
-    if (body.mode === "policy") {
+    if (body.mode === "manual" || body.mode === "policy") {
+      const details = { ...(body.payload?.details ?? {}) };
+      delete details.deliveryContext;
+      if (body.mode === "manual") {
+        if (!user) return NextResponse.json({ error: "请登录后主动发送提醒" }, { status: 401 });
+        if (!["email", "telegram"].includes(body.channel)) return NextResponse.json({ error: "请选择邮件或 Telegram" }, { status: 400 });
+        if (body.channel === "email" && !(await loadNotificationPolicy()).coreEmails.length) return NextResponse.json({ error: "请先在通知设置中配置收件邮箱" }, { status: 400 });
+        details.deliveryContext = { kind: "manual", channel: body.channel, actorId: user.id, actorName: user.displayName, actorEmail: user.email };
+      }
+
       try {
-        const result = await dispatchNotification(body.payload);
+        const result = await dispatchNotification({ ...body.payload, details });
+        if (body.mode === "manual" && user) {
+          await prisma.auditLog.create({ data: { actorId: user.id, actorEmail: user.email, role: user.role, action: "batch_notify", resource: `batch:notify:${body.payload?.batchId || "unknown"}:${body.channel}`, detail: { channel: body.channel, dispatchId: result.dispatchId, status: result.status, deduplicated: result.deduplicated, trigger: "manual" } } }).catch(() => undefined);
+        }
         return NextResponse.json(result, { status: 200 });
       } catch {
         return NextResponse.json(

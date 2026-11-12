@@ -18,6 +18,8 @@ import {
 } from "./notificationDelivery";
 import { unknownNotificationOutcome } from "./notificationErrors";
 
+import { manualContext, scopedDeliveryPolicy, notificationMessage } from "./notificationContext";
+
 type Env = Record<string, string | undefined>;
 type Payload = {
   type: string;
@@ -115,6 +117,7 @@ export function notificationIdentity(payload: Payload): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
+        ...(manualContext(payload) ? ["manual", manualContext(payload)!.channel, manualContext(payload)!.actorId] : []),
         payload.batchId || "",
         payload.type,
         payload.severity,
@@ -133,7 +136,7 @@ export async function enqueueNotification(
   previouslyAccepted: string[] = [],
 ): Promise<{ dispatch: NotificationDispatch; deduplicated: boolean }> {
   const payload = validateDispatchPayload(raw);
-  const policy = await loadNotificationPolicy();
+  const policy = scopedDeliveryPolicy(await loadNotificationPolicy(), payload);
   const identity = notificationIdentity(payload);
   const now = new Date();
   return prisma.$transaction(async (tx) => {
@@ -175,7 +178,7 @@ export async function enqueueNotification(
       )
     )
       return { dispatch: existing, deduplicated: true };
-    const state = initialDispatchState(policy, criticalNotification(payload));
+    const state = initialDispatchState(policy, manualContext(payload)?.channel === "email" || criticalNotification(payload));
     if (previouslyAccepted.includes("telegram"))
       state.telegram = { status: "accepted", sentTo: ["历史记录已受理"] };
     if (previouslyAccepted.includes("email")) {
@@ -328,7 +331,7 @@ export async function processNotificationDispatch(
     slot: ChannelAttempt,
   ) {
     if (!["pending", "failed"].includes(slot.status) || calls >= 3) return;
-    const latest = await loadNotificationPolicy();
+    const latest = scopedDeliveryPolicy(await loadNotificationPolicy(), payload);
     if (channel === "telegram" && !latest.telegramEnabled) {
       Object.assign(slot, {
         status: "skipped",
@@ -376,6 +379,7 @@ export async function processNotificationDispatch(
           channel,
           payload: {
             ...payload,
+            message: notificationMessage(payload),
             recipients: { emails: target ? [target] : [], telegrams: [] },
           },
         },
@@ -429,7 +433,7 @@ export async function processNotificationDispatch(
     }
   }
   try {
-    const livePolicy = await loadNotificationPolicy();
+    const livePolicy = scopedDeliveryPolicy(await loadNotificationPolicy(), payload);
     // Turning a channel off or removing a recipient cancels future attempts immediately.
     // Enabling a channel or adding recipients never broadens an already queued notification.
     if (
