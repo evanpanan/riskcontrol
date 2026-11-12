@@ -784,16 +784,16 @@ export function ClientTable({
                           variant="outline"
                           size="xs"
                           className="h-7 gap-1 rounded-full px-2 text-[9px] text-warning hover:text-warning hover:border-warning"
-                          disabled={!onRequestExit}
+                          disabled={!onRequestExit || !!(batch && getExitEligibility(batch, client as any).lockUpEndDate > new Date() && role !== "ADMIN")}
                           onClick={(e) => {
                             e.stopPropagation();
                             const locked = batch && getExitEligibility(batch, client as any).lockUpEndDate > new Date();
-                            if (locked && (role === "ADMIN" || role === "RISK_MANAGER")) onClientStatusChange?.(client.id, ClientStatus.SETTLED);
+                            if (locked && role === "ADMIN") onClientStatusChange?.(client.id, ClientStatus.SETTLED);
                             else onRequestExit?.(client.id);
                           }}
                         >
                           <LogOut className="h-3.5 w-3.5" />
-                          {batch && getExitEligibility(batch, client as any).lockUpEndDate > new Date() && (role === "ADMIN" || role === "RISK_MANAGER") ? "锁仓期特批退出" : "申请退出"}
+                          {batch && getExitEligibility(batch, client as any).lockUpEndDate > new Date() && role === "ADMIN" ? "锁仓期特批退出" : "申请退出"}
                         </Button>
                       )}
                       {client.status === ClientStatus.EXIT_REQUESTED && institutionRole && (
@@ -815,7 +815,8 @@ export function ClientTable({
                             const elig = batch ? getExitEligibility(batch, client as any) : null;
                             const canSettle = elig?.canExit ?? false;
                             const isAdmin = role === "ADMIN" || role === "RISK_MANAGER";
-                            const effectivelyCanSettle = canSettle || isAdmin;
+                            const locked = !!elig && elig.lockUpEndDate > new Date();
+                            const effectivelyCanSettle = canSettle || (isAdmin && (!locked || role === "ADMIN"));
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -896,8 +897,8 @@ export function ClientTable({
                 { label: "机构归属补仓", value: formatCurrency(req), accent: "danger" as const },
                 { label: "机构已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
                 { label: "补仓形式", value: marginCollateralType === "stock" ? "股票（默认）" : "现金", accent: "primary" as const },
-                ...(marginCollateralType === "stock" ? [{ label: "等值股票 / 计价", value: `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 / $${(batch?.currentStockPrice || batch?.stockPriceAtStart || 0).toFixed(4)}`, accent: "muted" as const }] : []),
-                { label: "本次机构补仓", value: formatCurrency(applyAmount), accent: "warning" as const },
+                ...[{ label: "等值股票 / 计价", value: `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 / $${(batch?.currentStockPrice || batch?.stockPriceAtStart || 0).toFixed(4)}`, accent: "muted" as const }],
+                { label: "本次机构补仓", value: marginCollateralType === "stock" ? `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股（${formatCurrency(applyAmount)}）` : formatCurrency(applyAmount), accent: "warning" as const },
                 { label: "补仓后机构剩余缺口", value: formatCurrency(Math.max(0, pending - applyAmount)), accent: applyAmount >= pending ? "success" : "danger" as const },
                 { label: "归属 商务经理", value: marginDialogClient.bdManager ?? "—", accent: "primary" as const },
               ];
@@ -953,7 +954,7 @@ export function ClientTable({
             const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
             const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
             const amount = Number.isFinite(parsed) && parsed > 0 ? Math.min(pending, parsed) : 0;
-            return amount > 0 ? `确认机构补仓 ${formatCurrency(amount)}` : "确认机构补仓";
+            return amount > 0 ? (marginCollateralType === "stock" ? `确认补入 ${(amount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 ${formatCurrency(amount)}`) : "确认机构补仓";
           })()}
           cancelText="取消"
           onConfirm={async () => {

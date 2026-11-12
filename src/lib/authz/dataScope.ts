@@ -209,8 +209,7 @@ export function canCreateBatch(role: AppRole | null | undefined): boolean {
   if (!role) return false;
   return (
     role === APP_ROLES.ADMIN ||
-    role === APP_ROLES.RISK_MANAGER ||
-    role === APP_ROLES.OPERATIONS
+    role === APP_ROLES.RISK_MANAGER
   );
 }
 

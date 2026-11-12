@@ -190,6 +190,7 @@ function normalizeAuditIntents(raw: unknown): AuditIntent[] {
 export async function PUT(req: Request) {
   const session = await resolveSessionUser();
   if (!session) return unauthorized();
+  if (session.role === "OPERATIONS") return forbidden("运营账号仅可查看，不可操作或录入数据");
 
   let body: PutBody;
   try {

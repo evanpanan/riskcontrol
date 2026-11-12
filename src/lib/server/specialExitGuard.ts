@@ -11,6 +11,7 @@ export function validateSpecialExitWrite(previous: any, next: any, role: string)
     const eligibility = getExitEligibility(previous.batch, client);
     if (!eligibility.canExit && role !== 'ADMIN' && role !== 'RISK_MANAGER') return '仅管理员或风控总监可特批退出';
     if (eligibility.lockUpEndDate > new Date()) {
+      if (role !== "ADMIN") return "仅超级管理员可特批锁仓期退出";
       if (!settlement.lockupExitConfirmedAt || settlement.lockupEndDate !== eligibility.lockUpEndDate.toISOString()) return '锁仓期特批退出需要二次确认并记录锁仓期满日';
       const confirmed = Date.parse(settlement.lockupExitConfirmedAt);
       if (!Number.isFinite(confirmed) || confirmed > Date.now() + 60000) return '锁仓期确认时间无效，请重新确认';

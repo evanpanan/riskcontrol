@@ -1,5 +1,6 @@
 "use client";
 
+import { Logo } from "@/components/branding/Logo";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { usePathname, useRouter } from "next/navigation";
@@ -61,9 +62,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!hydrated || isLoading || !user) {
     return (
       <div className="app-shell flex min-h-screen w-full bg-background items-center justify-center">
-        <div className="flex flex-col items-center gap-2 text-muted-foreground">
-          <div className="h-8 w-8 rounded-full border-2 border-border border-t-brand animate-spin" />
-          <p className="text-xs font-mono">加载会话中…</p>
+        <div role="status" aria-live="polite" className="flex flex-col items-center gap-5 text-center">
+          <div className="relative flex h-24 w-24 items-center justify-center">
+            <div className="absolute inset-0 rounded-full border border-primary/15" />
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary border-r-primary/30 animate-spin motion-reduce:animate-none" />
+            <div className="absolute inset-2 rounded-full bg-primary/5 animate-pulse motion-reduce:animate-none" />
+            <Logo size={48} />
+          </div>
+          <div className="space-y-2"><p className="text-lg font-semibold tracking-tight">RiskControl</p><p className="text-xs text-muted-foreground">正在安全连接您的工作台</p></div>
+          <div className="flex gap-1.5" aria-hidden="true">{[0, 150, 300].map(delay => <span key={delay} className="h-1 w-1 rounded-full bg-primary/70 animate-pulse motion-reduce:animate-none" style={{ animationDelay: `${delay}ms` }} />)}</div>
         </div>
       </div>
     );

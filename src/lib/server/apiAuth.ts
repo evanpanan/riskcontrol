@@ -7,7 +7,7 @@ import { isDevMockAccountsEnabled } from '@/lib/auth/password';
 import { MOCK_USER_META, type AppRole, type AppSessionUser } from '@/types/auth';
 
 /** 允许写入业务数据的角色：商务经理仅可读写自己的客户，写入门槛在业务层再收敛。 */
-export const WRITE_ROLES: readonly AppRole[] = ['ADMIN', 'RISK_MANAGER', 'BD_MANAGER', 'OPERATIONS'];
+export const WRITE_ROLES: readonly AppRole[] = ['ADMIN', 'RISK_MANAGER', 'BD_MANAGER'];
 
 /** 内建演示账号（仅开发环境）没有数据库行，其会话不参与服务端会话表校验。 */
 const BUILTIN_DEV_ACCOUNT_IDS: ReadonlySet<string> = new Set(

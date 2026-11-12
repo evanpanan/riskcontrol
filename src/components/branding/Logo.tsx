@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readSharedSetting, writeSharedSetting } from "@/lib/settingsStore";
 import { WORKSPACE_SYNCED_EVENT } from "@/lib/workspaceStore";
 
-const LOGO_LS_KEY = "risk_control_logo_v1";
+const LOGO_LS_KEY = "risk_control_logo_win100_v2";
 
 export function getStoredLogo(): string | null {
   if (typeof window === "undefined") return null;
@@ -71,40 +70,11 @@ export function Logo({ className, iconClassName, size = 40 }: LogoProps) {
   }
 
   return (
-    <div
-      className={cn(
-        "relative flex shrink-0 items-center justify-center rounded-xl shadow-lg shadow-blue-600/30 bg-gradient-to-br from-blue-500 via-indigo-600 to-violet-600 ring-1 ring-white/20",
-        className
-      )}
-      style={{ width: size, height: size }}
-    >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        role="img"
-        aria-label="RiskControl 标志"
-        className={cn("text-white", iconClassName)}
-        width={Math.round(size * 0.55)}
-        height={Math.round(size * 0.55)}
-      >
-        <path
-          d="M12 2L3 6v6c0 5.25 3.75 10.13 9 11 5.25-.88 9-5.75 9-11V6l-9-4z"
-          stroke="currentColor"
-          strokeWidth={1.8}
-          strokeLinejoin="round"
-          fill="currentColor"
-          fillOpacity={0.12}
-        />
-        <path
-          d="M9 12l2 2 4-4"
-          stroke="currentColor"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
-        />
+    <div className={cn("flex shrink-0 items-center justify-center rounded-xl bg-[#111d29] ring-1 ring-[#c9ad70]/35", className)} style={{ width: size, height: size }}>
+      <svg viewBox="0 0 64 64" role="img" aria-label="Win100 机构标志" className={iconClassName} width={size} height={size}>
+        <path d="M12 15l8 22 12-17 12 17 8-22" fill="none" stroke="#d8bf86" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        <text x="32" y="53" textAnchor="middle" fill="#ead8ac" fontFamily="Arial,sans-serif" fontWeight="700" fontSize="13" letterSpacing="1">100</text>
       </svg>
-      <Shield className="sr-only" />
     </div>
   );
 }

@@ -19,7 +19,7 @@ export function LedgerRecovery({ batch, open, onOpenChange }: {
   const [backups, setBackups] = useState<string[]>([]);
   const finance = batch.finance;
   const warnings = finance?.legacyWarnings ?? [];
-  const institution = ["ADMIN", "RISK_MANAGER", "OPERATIONS"].includes(role);
+  const institution = ["ADMIN", "RISK_MANAGER"].includes(role);
   const canReset = process.env.NODE_ENV === "development" && role === "ADMIN";
   const missing = (batch.clients ?? []).filter(c =>
     c.status === "SETTLED" && !c.settlement && !finance?.settlements[c.id]);

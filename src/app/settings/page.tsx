@@ -360,37 +360,14 @@ export default function SettingsPage() {
   const [quoteTick, setQuoteTick] = useState(0);
   const [quoteLive, setQuoteLive] = useState<BrowserQuote | null>(null);
   const [quoteFetching, setQuoteFetching] = useState(false);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
-  const [auditTick, setAuditTick] = useState(0);
-  const [auditFilterAction, setAuditFilterAction] = useState<"__ALL__" | AuditAction>("__ALL__");
-  const [auditSearchKw, setAuditSearchKw] = useState<string>("");
-  const [auditOpenDetail, setAuditOpenDetail] = useState<AuditLogEntry | null>(null);
   const [clearDataOpen, setClearDataOpen] = useState(false);
   const [clearingData, setClearingData] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setQuoteTick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => {
-    if (!hydrated) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const logs = await fetchAuditLogs({ limit: 1000 });
-        if (!cancelled) setAuditLogs(logs);
-      } catch {
-        if (!cancelled) setAuditLogs([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrated, auditTick]);
-  useEffect(() => {
-    const onAudit = () => setAuditTick((x) => x + 1);
-    window.addEventListener("risk-control:audit-updated", onAudit);
-    return () => window.removeEventListener("risk-control:audit-updated", onAudit);
-  }, []);
+
+
   // 当前业务数据规模，用于清空前核对；已清空时显示为空。
   const ledgerScale = useMemo(() => {
     if (!hydrated || isLedgerEmpty()) return { batches: 0, clients: 0 };
@@ -413,7 +390,6 @@ export default function SettingsPage() {
         resource: "/settings",
         detail: { batchCount: result.batches, clientCount: result.clients },
       });
-      setAuditTick((x) => x + 1);
       setClearDataOpen(false);
       toast.success(`已清空 ${result.batches} 个批次、${result.clients} 位客户，系统已恢复为空白状态。`);
     } catch (err) {
@@ -502,7 +478,7 @@ export default function SettingsPage() {
     setLogoDataUrl(getStoredLogo());
     const onChange = () => setLogoDataUrl(getStoredLogo());
     window.addEventListener("risk-control:logo-changed", onChange);
-    window.addEventListener("storage", (e) => { if (e.key === "risk_control_logo_v1") onChange(); });
+    window.addEventListener("storage", (e) => { if (e.key === "risk_control_logo_win100_v2") onChange(); });
     return () => {
       window.removeEventListener("risk-control:logo-changed", onChange);
       window.removeEventListener("storage", onChange as any);
@@ -1311,12 +1287,11 @@ export default function SettingsPage() {
       <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
       <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
       <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
-      <TabsTrigger value="audit" className="h-9 gap-1.5"><ScrollText className="h-3.5 w-3.5" />操作记录</TabsTrigger>
       <RoleGate allowed={[APP_ROLES.ADMIN]}><TabsTrigger value="backup" className="h-9 w-full gap-1.5"><Database className="h-3.5 w-3.5" />数据备份</TabsTrigger></RoleGate>
       <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
     </TabsList>
 
-    <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
       {/* Risk Thresholds */}
       <RoleGate
@@ -1876,9 +1851,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
 
-    <TabsContent value="notify" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="notify" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
     <NotificationPolicyPanel />
     <TelegramChannelPanel />
@@ -2116,9 +2091,9 @@ export default function SettingsPage() {
 
     </div></details>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
 
-    <TabsContent value="market" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="market" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
     {/* 实时股票行情（TopBar 展示 & 系统设置） */}
     <Card className="border-border/50">
@@ -2385,9 +2360,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
 
-    <TabsContent value="brand" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="brand" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
     {/* Branding Logo */}
     <Card className="border-border/50">
@@ -2457,9 +2432,9 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
 
-    <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
       <RoleGate
         allowed={[APP_ROLES.ADMIN]}
@@ -2580,162 +2555,11 @@ export default function SettingsPage() {
     </Card>
     </RoleGate>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
 
-    <TabsContent value="audit" className="space-y-6 mt-6">
-      <RoleGate
-        allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}
-        auditAction="card_removed"
-        auditResource="settings_audit_log_card"
-        fallback={
-          <Card className="border-border/50">
-            <CardContent className="pt-6 text-center py-10">
-              <p className="text-sm text-muted-foreground">当前角色无权限查看操作记录</p>
-            </CardContent>
-          </Card>
-        }
-      >
-        <Card className="border-border/50">
-          <CardHeader className="pb-3 flex flex-row items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ScrollText className="h-4 w-4 text-primary" />
-              <div>
-                <CardTitle className="text-sm font-bold">全员操作记录</CardTitle>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  共 {auditLogs.length} 条记录 · 不可修改或删除
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 border rounded-md p-1 bg-muted/30">
-              <Search className="h-3.5 w-3.5 text-muted-foreground ml-2" />
-              <Input
-                className="h-7 w-44 border-0 bg-transparent shadow-none text-xs"
-                placeholder="搜索操作人、行为或模块"
-                value={auditSearchKw}
-                onChange={(e) => setAuditSearchKw(e.target.value)}
-              />
-              </div>
-              <div className="flex items-center gap-1">
-                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-                <Select
-                  value={auditFilterAction}
-                  onValueChange={(v) => setAuditFilterAction(v as "__ALL__" | AuditAction)}
-                >
-                  <SelectTrigger className="h-8 w-36 text-xs">
-                    <SelectValue placeholder="过滤行为" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AUDIT_ACTION_FILTER_OPTIONS.map((item) => (
-                      <SelectItem key={item.value} value={item.value} className="text-xs">{item.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => setAuditTick((x) => x + 1)}
-              >
-                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />刷新
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0 space-y-3">
-            <div className="rounded-md border">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-muted/40 text-muted-foreground">
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">时间</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作行为</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作人</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">涉及模块</th>
-                      <th className="px-3 py-2 text-left font-medium whitespace-nowrap">操作详情</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const kw = auditSearchKw.trim().toLowerCase();
-                      const filtered = auditLogs.filter((l) => {
-                        if (auditFilterAction !== "__ALL__" && l.action !== auditFilterAction) return false;
-                        if (!kw) return true;
-                        const hay = [
-                          l.actorEmail ?? "",
-                          getAuditResourceLabel(l.resource),
-                          getAuditActionLabel(l.action),
-                          describeAuditLog(l),
-                        ].join(" ").toLowerCase();
-                        return hay.includes(kw);
-                      });
-                      if (!filtered.length) {
-                        return (
-                          <tr>
-                            <td colSpan={5} className="text-center py-10 text-muted-foreground">
-                              {hydrated ? "暂无操作记录" : "加载中…"}
-                            </td>
-                          </tr>
-                        );
-                      }
-                      return filtered.slice(0, 500).map((l) => (
-                        <tr key={l.id} className="border-t border-border/50 align-top">
-                          <td className="px-3 py-2 font-mono whitespace-nowrap text-muted-foreground">
-                            {formatDateTime(l.createdAt)}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <Badge variant="outline" className={cn(
-                              "text-[11px]",
-                              /failed|denied|delete/.test(l.action) && "border-danger/60 text-danger",
-                              /success|_create|_update|_topup|_settle|_notify/.test(l.action) && "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
-                            )}>
-                              {getAuditActionLabel(l.action)}
-                            </Badge>
-                            {l.role && <span className="ml-2 text-[10px] text-muted-foreground">{APP_ROLE_LABELS[l.role] ?? l.role}</span>}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            {l.actorEmail ? (
-                              <div className="flex items-center gap-1.5">
-                                <ClientAvatar name={(l.actorEmail[0] ?? "?").toUpperCase()} size="xs" />
-                                <span>{l.actorEmail}</span>
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground italic">匿名/未登录</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
-                            {getAuditResourceLabel(l.resource)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 text-[11px] text-muted-foreground max-w-[46ch] truncate">
-                                {describeAuditLog(l)}
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 text-[11px]"
-                                onClick={() => setAuditOpenDetail(l)}
-                              >
-                                <Eye className="h-3 w-3 mr-1" />展开
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ));
-                    })()}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </RoleGate>
-    </TabsContent>
+    <TabsContent value="backup" className="mt-6"><fieldset disabled={currentRole === "OPERATIONS"} className="contents"><RoleGate allowed={[APP_ROLES.ADMIN]}><BackupSettingsPanel /></RoleGate></fieldset></TabsContent>
 
-    <TabsContent value="backup" className="mt-6"><RoleGate allowed={[APP_ROLES.ADMIN]}><BackupSettingsPanel /></RoleGate></TabsContent>
-
-    <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
+    <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
     <Card className="border-border/50">
       <CardHeader className="pb-3">
@@ -2794,7 +2618,7 @@ export default function SettingsPage() {
       </CardContent>
     </Card>
       </div>
-    </TabsContent>
+    </fieldset></TabsContent>
   </Tabs>
 
 {/* ========== 新增/编辑收件人 Dialog ========== */}
@@ -2946,7 +2770,7 @@ export default function SettingsPage() {
               )}
               <SelectItem value="RISK_MANAGER">风控总监（全局权限）</SelectItem>
               <SelectItem value="BD_MANAGER">商务经理（仅管辖客户）</SelectItem>
-              <SelectItem value="OPERATIONS">运营（只读/录入）</SelectItem>
+              <SelectItem value="OPERATIONS">运营（只读）</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -3039,58 +2863,7 @@ export default function SettingsPage() {
   onConfirm={() => confirmation?.run()}
 />
 
-<Dialog open={!!auditOpenDetail} onOpenChange={(open) => { if (!open) setAuditOpenDetail(null); }}>
-  <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
-    <DialogHeader>
-      <DialogTitle className="flex items-center gap-2 text-sm font-bold">
-        <ScrollText className="h-4 w-4 text-primary" />
-        操作详情
-      </DialogTitle>
-    </DialogHeader>
-    {auditOpenDetail && (
-      <div className="space-y-4 text-xs">
-        <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
-          <Badge variant="outline" className="text-[11px]">{getAuditActionLabel(auditOpenDetail.action)}</Badge>
-          <p className="mt-2 text-[12.5px] leading-6 text-foreground">{describeAuditLog(auditOpenDetail)}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <p className="text-muted-foreground">操作时间</p>
-            <p>{formatDateTime(auditOpenDetail.createdAt)}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">操作人</p>
-            <p>
-              {auditOpenDetail.actorEmail ?? "匿名/未登录"}
-              {auditOpenDetail.role ? <span className="ml-1 text-muted-foreground">· {APP_ROLE_LABELS[auditOpenDetail.role] ?? auditOpenDetail.role}</span> : null}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground">涉及模块</p>
-            <p>{getAuditResourceLabel(auditOpenDetail.resource)}</p>
-          </div>
-        </div>
-        {(() => {
-          const fields = getAuditDetailFields(auditOpenDetail);
-          if (!fields.length) return null;
-          return (
-            <div>
-              <p className="mb-2 text-muted-foreground">操作内容</p>
-              <div className="rounded-md border divide-y divide-border/50">
-                {fields.map((field, idx) => (
-                  <div key={`${field.label}-${idx}`} className="flex items-start justify-between gap-4 px-3 py-2">
-                    <span className="shrink-0 text-muted-foreground">{field.label}</span>
-                    <span className="text-right font-medium break-all">{field.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-    )}
-  </DialogContent>
-</Dialog>
+
 
 {/* ====== 通知渠道配置帮助 Dialog（需求4）====== */}
 <Dialog

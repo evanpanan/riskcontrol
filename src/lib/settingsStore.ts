@@ -23,6 +23,7 @@ export const SHARED_SETTING_KEYS = [
   'risk_control_flash_crash_thresholds',
   'risk_control_live_quote_v2',
   'risk_control_logo_v1',
+  'risk_control_logo_win100_v2',
 ] as const;
 
 export type SharedSettingKey = (typeof SHARED_SETTING_KEYS)[number];

@@ -749,7 +749,7 @@ export default function ClientsPage() {
   }, [allClients, bdManagers]);
 
   const canEdit = (c: any): boolean => {
-    if (role === APP_ROLES.ADMIN || role === APP_ROLES.RISK_MANAGER || role === APP_ROLES.OPERATIONS) return true;
+    if (role === APP_ROLES.ADMIN || role === APP_ROLES.RISK_MANAGER) return true;
     if (isBdManager && bdManagerFullName && c.bdManager === bdManagerFullName) return true;
     return false;
   };

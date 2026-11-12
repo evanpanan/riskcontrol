@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { canCreateBatch, canEditClient } from '../src/lib/authz/dataScope';
 import { ClientStatus } from '@prisma/client';
 import { initializeBatchFinance, executeInstitutionTopup, calculateRescueStats, getBatchMetrics, settleClientPosition, requestClientExit, type BatchLike } from '../src/lib/riskEngine';
 import { dailyCaptureDate, marketDate, candleDate, summarizeDailyBatch } from '../src/lib/batchDaily';
@@ -12,6 +13,9 @@ function make(price = 70): BatchLike {
   initializeBatchFinance(b); return b;
 }
 async function main() {
+  assert.equal(canCreateBatch("OPERATIONS"), false);
+  assert.equal(canEditClient("OPERATIONS"), false);
+  assert.equal(canCreateBatch("ADMIN"), true);
   const stock = make(); const required = getBatchMetrics(stock).requiredMarginCall;
   near(executeInstitutionTopup(stock, { amount: required }), required);
   near(calculateRescueStats(stock, 70).totalRescueShares, required / 70);
@@ -30,6 +34,7 @@ async function main() {
   assert.ok(settled.lockupExitConfirmedAt); near(settled.earlyExitFee!, 7000);
   assert.equal(validateSpecialExitWrite({ batch: previous }, { batch: locked }, 'ADMIN'), null);
   assert.match(validateSpecialExitWrite({ batch: previous }, { batch: locked }, 'OPERATIONS')!, /仅管理员/);
+  assert.match(validateSpecialExitWrite({ batch: previous }, { batch: locked }, 'RISK_MANAGER')!, /仅超级管理员/);
   const missing = structuredClone(locked); delete missing.finance!.settlements.a.lockupExitConfirmedAt;
   assert.match(validateSpecialExitWrite({ batch: previous }, { batch: missing }, 'ADMIN')!, /二次确认/);
   console.log('PASS lockup explicit confirmation, role enforcement, fee unchanged');

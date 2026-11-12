@@ -621,7 +621,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       }
       setLockupExitConfirmed(false);
       const isLocked = getExitEligibility(batch as any, target as any).lockUpEndDate > new Date();
-      if (isLocked && (role === "ADMIN" || role === "RISK_MANAGER")) {
+      if (isLocked && role !== "ADMIN") { toast.error("仅超级管理员可特批锁仓期退出"); return; }
+      if (isLocked && role === "ADMIN") {
         setSettleTarget(null);
         setLockedExitTarget(clientId);
         setLockupExitConfirmOpen(true);
@@ -660,7 +661,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       if (!canonical) return;
       const clientName = canonical.clients?.find((c) => c.id === clientId)?.name || clientId;
       commitBatchFinance(canonical, (draft) => {
-        requestClientExit(draft, clientId, { operatorName: user?.displayName, allowLockedRequest: role === "ADMIN" || role === "RISK_MANAGER" });
+        requestClientExit(draft, clientId, { operatorName: user?.displayName, allowLockedRequest: role === "ADMIN" });
       });
       toast.success("已提交退出申请，等待 15 天通知期后可结算");
 
@@ -891,7 +892,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {tradingInfo.isLocked
-                    ? "锁仓期内常规退出受限；管理员或风控总监可二次确认后特批退出。"
+                    ? "锁仓期内常规退出受限；仅超级管理员可二次确认后特批退出。"
                     : tradingInfo.isTradingWindow
                     ? "本次开放窗口持续 14 天，可执行部分或全部退出操作。"
                     : `第 ${tradingInfo.nextTradingMonth} 个月开放，每 3 个月一个交易周期。`}
@@ -1881,9 +1882,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 <p className="font-mono font-bold text-sm">{batch.stockSymbol}</p>
               </div>
               <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 space-y-1 col-span-2">
-                <p className="text-[10px] uppercase tracking-wider text-danger">等值补仓金额</p>
+                <p className="text-[10px] uppercase tracking-wider text-danger">{topupCollateralType === "stock" ? "补仓股数" : "补仓金额"}</p>
                 <p className="font-mono font-extrabold text-2xl text-danger">
-                  ${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {topupCollateralType === "stock" ? `${(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `$${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 </p>
               </div>
             </div>
@@ -1925,7 +1926,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </button>
               </div>
             </div>
-            {topupCollateralType === "stock" && <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值股票：{(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>}
+            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>
             <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
               <div className="space-y-0.5">
@@ -1944,7 +1945,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               try { doFulfill(); } catch (err) { toast.error(err instanceof Error ? err.message : "补仓失败"); }
             }} className="h-9 px-4 gap-1.5">
               <Zap className="h-3.5 w-3.5" />
-              确认补仓 ${metrics.requiredMarginCall.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {topupCollateralType === "stock" ? `确认补入 ${(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 $${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             </Button>
           </DialogFooter>
         </DialogContent>

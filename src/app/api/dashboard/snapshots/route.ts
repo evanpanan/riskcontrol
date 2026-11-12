@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { jsonNoStore, resolveSessionUser, unauthorized } from "@/lib/server/apiAuth";
+import { jsonNoStore, resolveSessionUser, unauthorized, forbidden } from "@/lib/server/apiAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -180,6 +180,7 @@ export async function GET() {
 export async function POST(req: Request) {
   const user = await resolveSessionUser();
   if (!user) return unauthorized();
+  if (user.role === "OPERATIONS") return forbidden("运营账号仅可查看");
   const scope = resolveDashboardScope(user);
   if (!scope) return unauthorized();
 
