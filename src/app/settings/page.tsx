@@ -4,7 +4,7 @@ import { BackupSettingsPanel } from "@/components/settings-Backup";
 import { NotificationPolicyPanel } from "@/components/settings-NotificationPolicy";
 import { TelegramChannelPanel } from "@/components/settings-TelegramChannel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, GlassTabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1281,15 +1281,14 @@ export default function SettingsPage() {
   </div>
 
   <Tabs value={settingsTab} onValueChange={setSettingsTab} className="w-full">
-    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 h-auto p-1.5 gap-1.5">
-      <TabsTrigger value="risk" className="h-9 gap-1.5"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
-      <TabsTrigger value="market" className="h-9 gap-1.5"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
-      <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
-      <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
-      <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
-      <RoleGate allowed={[APP_ROLES.ADMIN]}><TabsTrigger value="backup" className="h-9 w-full gap-1.5"><Database className="h-3.5 w-3.5" />数据备份</TabsTrigger></RoleGate>
-      <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
-    </TabsList>
+    <GlassTabsList activeValue={settingsTab} className="grid w-full grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 h-auto p-1.5 gap-1.5">
+      <TabsTrigger value="risk" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
+      <TabsTrigger value="market" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
+      <TabsTrigger value="notify" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
+      <TabsTrigger value="account" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
+      <RoleGate allowed={[APP_ROLES.ADMIN]}><TabsTrigger value="backup" className="relative z-10 h-9 w-full gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Database className="h-3.5 w-3.5" />数据备份</TabsTrigger></RoleGate>
+      <TabsTrigger value="about" className="relative z-10 h-9 gap-1.5 data-[state=active]:bg-transparent data-[state=active]:shadow-none"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
+    </GlassTabsList>
 
     <TabsContent value="risk" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
@@ -2362,78 +2361,6 @@ export default function SettingsPage() {
       </div>
     </fieldset></TabsContent>
 
-    <TabsContent value="brand" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
-      <div className="space-y-6">
-    {/* Branding Logo */}
-    <Card className="border-border/50">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-bold flex items-center gap-2">
-          <Palette className="h-4 w-4 text-primary" />
-          品牌外观 · Logo
-        </CardTitle>
-        <p className="text-[11px] text-muted-foreground mt-0.5">
-          仅风控总监可修改，保存后全局生效
-        </p>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-4">
-        <div className="flex items-center gap-4 p-4 rounded-xl border border-border/50 bg-secondary/30">
-          <div className="flex shrink-0 items-center justify-center">
-            <Logo size={56} />
-          </div>
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <p className="text-sm font-semibold truncate">当前预览</p>
-            <p className="text-[11px] text-muted-foreground truncate">
-              {logoDataUrl ? "✅ 自定义 Logo 已启用" : "使用系统默认渐变 Logo"}
-            </p>
-            {logoDataUrl && (
-              <p className="text-[10.5px] text-primary/80 font-mono truncate">
-                {(logoDataUrl.length / 1024).toFixed(1)} KB · data URL
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Button
-            variant="outline"
-            className="gap-1.5 h-9"
-            onClick={() => logoFileRef.current?.click()}
-          >
-            <Upload className="h-4 w-4" />
-            上传 Logo 图片
-          </Button>
-          <input
-            ref={logoFileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
-            className="hidden"
-            onChange={onLogoInput}
-          />
-          <Button
-            variant="ghost"
-            className="gap-1.5 h-9 text-muted-foreground hover:text-foreground"
-            onClick={resetLogo}
-          >
-            <RotateCcw className="h-4 w-4" />
-            恢复默认
-          </Button>
-        </div>
-        <div className="rounded-lg border border-dashed border-border/70 bg-background/30 p-3">
-          <div className="flex items-start gap-2">
-            <ImagePlus className="h-4 w-4 shrink-0 mt-0.5 text-primary/80" />
-            <div className="min-w-0 space-y-0.5 text-[11px] text-muted-foreground">
-              <p className="font-medium text-foreground/90">上传规范</p>
-              <p>• 支持 PNG / JPG / WebP / SVG / GIF，最大 2MB</p>
-              <p>• 建议尺寸 256×256 或更大的正方形图标</p>
-              <p>• 透明背景 PNG 效果最佳，会自动应用阴影和圆角</p>
-            </div>
-          </div>
-        </div>
-        {saved === "logo" && <Badge variant="success" className="gap-1 text-[10px] w-fit"><CheckCircle2 className="h-2.5 w-2.5" />Logo 已保存</Badge>}
-      </CardContent>
-    </Card>
-      </div>
-    </fieldset></TabsContent>
-
     <TabsContent value="account" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2"><fieldset disabled={currentRole === "OPERATIONS"} className="contents [&>div]:lg:col-span-2">
       <div className="space-y-6">
       <RoleGate
@@ -2583,6 +2510,74 @@ export default function SettingsPage() {
         ))}
       </CardContent>
     </Card>
+    {/* Branding Logo */}
+    <Card className="border-border/50">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-bold flex items-center gap-2">
+          <Palette className="h-4 w-4 text-primary" />
+          品牌外观 · Logo
+        </CardTitle>
+        <p className="text-[11px] text-muted-foreground mt-0.5">
+          仅风控总监可修改，保存后全局生效
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-4">
+        <div className="flex items-center gap-4 p-4 rounded-xl border border-border/50 bg-secondary/30">
+          <div className="flex shrink-0 items-center justify-center">
+            <Logo size={56} />
+          </div>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="text-sm font-semibold truncate">当前预览</p>
+            <p className="text-[11px] text-muted-foreground truncate">
+              {logoDataUrl ? "✅ 自定义 Logo 已启用" : "使用默认 Win100 机构标识"}
+            </p>
+            {logoDataUrl && (
+              <p className="text-[10.5px] text-primary/80 font-mono truncate">
+                {(logoDataUrl.length / 1024).toFixed(1)} KB · data URL
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            className="gap-1.5 h-9"
+            onClick={() => logoFileRef.current?.click()}
+          >
+            <Upload className="h-4 w-4" />
+            上传 Logo 图片
+          </Button>
+          <input
+            ref={logoFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+            className="hidden"
+            onChange={onLogoInput}
+          />
+          <Button
+            variant="ghost"
+            className="gap-1.5 h-9 text-muted-foreground hover:text-foreground"
+            onClick={resetLogo}
+          >
+            <RotateCcw className="h-4 w-4" />
+            恢复默认
+          </Button>
+        </div>
+        <div className="rounded-lg border border-dashed border-border/70 bg-background/30 p-3">
+          <div className="flex items-start gap-2">
+            <ImagePlus className="h-4 w-4 shrink-0 mt-0.5 text-primary/80" />
+            <div className="min-w-0 space-y-0.5 text-[11px] text-muted-foreground">
+              <p className="font-medium text-foreground/90">上传规范</p>
+              <p>• 支持 PNG / JPG / WebP / SVG / GIF，最大 2MB</p>
+              <p>• 建议尺寸 256×256 或更大的正方形图标</p>
+              <p>• 透明背景 PNG 效果最佳，会自动应用阴影和圆角</p>
+            </div>
+          </div>
+        </div>
+        {saved === "logo" && <Badge variant="success" className="gap-1 text-[10px] w-fit"><CheckCircle2 className="h-2.5 w-2.5" />Logo 已保存</Badge>}
+      </CardContent>
+    </Card>
+
     <Card className="border-danger/40">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-bold flex items-center gap-2 text-danger">
