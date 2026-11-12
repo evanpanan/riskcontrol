@@ -705,7 +705,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const visibleOwnCountInPage = filteredClients.length - redactedCountInPage;
 
   return (
-    <div className={cn("space-y-6", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
+    <div className={cn("space-y-4", compact ? "max-w-full" : "max-w-[1800px] mx-auto")}>
       <LedgerRecovery batch={batch as any} open={recoveryOpen} onOpenChange={setRecoveryOpen} />
       {/* Breadcrumb & Back */}
       {!compact ? (
@@ -713,15 +713,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Link href="/" className="hover:text-primary transition-colors">
-                风控大盘
+                返回风控大盘
               </Link>
               <ChevronRight className="h-3 w-3" />
               <span className="font-mono text-foreground font-medium">{batch.batchNumber}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <Button asChild variant="outline" className="h-10 gap-2 shrink-0 border-primary/50 bg-primary/10 text-foreground font-semibold hover:bg-primary/20 shadow-sm">
-                <Link href="/"><ArrowLeft className="h-4 w-4" />返回风控大盘</Link>
-              </Button>
               <h1 className="text-2xl font-bold tracking-tight">
                 {batch.stockSymbol}
                 {batch.stockName && (
@@ -731,7 +728,6 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <StatusBadge />
             </div>
             <p className="text-sm text-muted-foreground">
-              批次号：<span className="font-mono ml-1 mr-4">{batch.batchNumber}</span>
               创建时间：<span className="font-mono ml-1">{formatDateTime(batch.createdAt ?? batch.signDate)}</span>
             </p>
           </div>
@@ -743,6 +739,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               auditResource={`batch:notify_wa:${batch.id}`}
               auditAction="ui_component_denied"
             >
+            <Button variant="outline" size="sm" className="gap-1.5 h-9" onClick={() => handleNotify("email")}><Mail className="h-3.5 w-3.5" />邮件提醒</Button>
             <Button
               variant="outline"
               size="sm"
@@ -750,7 +747,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               onClick={() => handleNotify("telegram")}
             >
               <MessageCircle className="h-3.5 w-3.5" />
-              发送风控提醒
+              TG 提醒
             </Button>
             </RoleGate>
             <Button
@@ -836,7 +833,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               onClick={() => handleNotify("telegram")}
             >
               <MessageCircle className="h-3 w-3" />
-              WA
+              TG
             </Button>
             {marginSummary.totalPending > 0 && (
               <Button variant="danger" size="sm" className="gap-1.5 h-8 text-[11px]" onClick={handleFulfill}>
@@ -848,123 +845,20 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </div>
       )}
 
-      {/* Trading Window Countdown Banner */}
-      <Card
-        className={cn(
-          "border-border/50 overflow-hidden",
-          tradingInfo.isLocked
-            ? "bg-gradient-to-r from-blue-500/10 via-indigo-500/5 to-purple-500/10 border-blue-500/30"
-            : tradingInfo.isTradingWindow
-            ? "bg-gradient-to-r from-emerald-500/10 via-green-500/5 to-teal-500/10 border-emerald-500/30"
-            : "bg-card"
-        )}
-      >
-        <CardContent className="p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div
-                className={cn(
-                  "h-12 w-12 rounded-xl flex items-center justify-center shrink-0",
-                  tradingInfo.isLocked
-                    ? "bg-blue-500/20 border border-blue-500/30"
-                    : tradingInfo.isTradingWindow
-                    ? "bg-emerald-500/20 border border-emerald-500/30 animate-pulse"
-                    : "bg-secondary"
-                )}
-              >
-                {tradingInfo.isLocked ? (
-                  <Lock className="h-6 w-6 text-blue-400" />
-                ) : tradingInfo.isTradingWindow ? (
-                  <Zap className="h-6 w-6 text-emerald-400" />
-                ) : (
-                  <Unlock className="h-6 w-6 text-muted-foreground" />
-                )}
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <p className="font-bold text-base">
-                    {tradingInfo.isLocked
-                      ? "🔒 批次处于锁仓期"
-                      : tradingInfo.isTradingWindow
-                      ? "🟢 交易窗口已开放"
-                      : "当前处于观望期"}
-                  </p>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {tradingInfo.isLocked
-                    ? "锁仓期内常规退出受限；仅超级管理员可二次确认后特批退出。"
-                    : tradingInfo.isTradingWindow
-                    ? "本次开放窗口持续 14 天，可执行部分或全部退出操作。"
-                    : `第 ${tradingInfo.nextTradingMonth} 个月开放，每 3 个月一个交易周期。`}
-                </p>
-              </div>
-            </div>
-
-            <div className="text-left sm:text-right">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1 sm:justify-end">
-                <Clock className="h-3 w-3" />
-                下次交易窗口
-              </p>
-              <p className="text-xl font-bold font-mono text-gradient-primary">
-                {tradingInfo.countdownText}
-              </p>
-              {tradingInfo.nextTradingDate && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  预计 {formatDate(tradingInfo.nextTradingDate)} 开放
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-5 pt-5 border-t border-border/40">
-            <div className="relative">
-              <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1 bg-secondary rounded-full" />
-              <div
-                className="absolute top-1/2 -translate-y-1/2 left-0 h-1 rounded-full bg-gradient-to-r from-primary/70 to-primary transition-all duration-500"
-                style={{ width: `${Math.min(100, (tradingInfo.monthsElapsed / 24) * 100)}%` }}
-              />
-              <div className="relative flex justify-between">
-                {tradingInfo.tradingWindows.map((w: TradeWin) => (
-                  <div key={w.month} className="flex flex-col items-center">
-                    <div
-                      className={cn(
-                        "h-5 w-5 rounded-full border-2 z-10 transition-all",
-                        w.passed
-                          ? "bg-primary border-primary"
-                          : tradingInfo.nextTradingMonth === w.month
-                          ? "bg-background border-emerald-500 scale-125 shadow-md shadow-emerald-500/30 animate-pulse"
-                          : "bg-card border-border"
-                      )}
-                    />
-                    <p
-                      className={cn(
-                        "mt-2 text-[10px] font-mono font-semibold",
-                        tradingInfo.nextTradingMonth === w.month && "text-emerald-400",
-                        w.passed && "text-primary",
-                        !w.passed && tradingInfo.nextTradingMonth !== w.month && "text-muted-foreground"
-                      )}
-                    >
-                      第 {w.month} 月
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <details className="rounded-xl border border-border/50 bg-card px-4 py-3 text-xs">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
+          <span className="flex items-center gap-2"><Lock className="h-3.5 w-3.5 text-muted-foreground" /><span className="font-medium">{tradingInfo.isLocked ? "锁仓期" : tradingInfo.isTradingWindow ? "交易窗口已开放" : "观望期"}</span><span className="text-muted-foreground">下次窗口 {tradingInfo.countdownText}</span></span>
+          <span className="text-muted-foreground">合约详情 ▾</span>
+        </summary>
+        <div className="mt-3 border-t border-border/40 pt-3 space-y-2 text-muted-foreground">
+          <p>签约 {formatDate(batch.signDate)} · 到期 {formatDate(batch.maturityDate)}{tradingInfo.nextTradingDate ? ` · 下次开放 ${formatDate(tradingInfo.nextTradingDate)}` : ''}</p>
+          <p>{tradingInfo.isLocked ? "锁仓期内常规退出受限；仅超级管理员可二次确认后特批退出。" : "开放窗口持续 14 天，每 3 个月一个交易周期。"}</p>
+          <p>交易节点：{tradingInfo.tradingWindows.map((w: TradeWin) => `第 ${w.month} 月`).join(' · ')}</p>
+        </div>
+      </details>
 
       {/* TOP KPI CARDS */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-4 lg:grid-cols-7">
-        <Card className="border-border/50">
-          <CardContent className="p-3.5">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-              <Calendar className="h-3 w-3" /> 签约 / 到期
-            </p>
-            <p className="text-xs font-mono font-semibold">{formatDate(batch.signDate)}</p>
-            <p className="text-[10px] text-muted-foreground">→ {formatDate(batch.maturityDate)}</p>
-          </CardContent>
-        </Card>
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <Card className="border-border/50">
           <CardContent className="p-3.5">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -1017,7 +911,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <p className="text-[10px] text-muted-foreground">{batch.marginCalls?.length || 0} 次记录</p>
           </CardContent>
         </Card>
-        <Card className={cn(
+
+      </div>
+
+      <details className="rounded-xl border border-border/50 px-4 py-3 text-xs"><summary className="cursor-pointer text-muted-foreground">补仓独立仓位明细 ▾</summary><div className="mt-3 max-w-xl">        <Card className={cn(
           "border-border/50",
           rescueStats.totalRescueAmount > 0 && "border-warning/40 bg-warning/[0.04]"
         )}>
@@ -1060,16 +957,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/50">
-          <CardContent className="p-3.5">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-              <Users className="h-3 w-3" /> 客户
-            </p>
-            <p className="text-sm font-bold font-mono">{batch.clients?.length || 0} 位</p>
-            <p className="text-[10px] text-muted-foreground">{Object.keys(investedByBD).length} 位商务经理</p>
-          </CardContent>
-        </Card>
-      </div>
+</div></details>
+
 
       {/* Safety Buffer Section */}
       <Card className="border-border/50">
@@ -1136,6 +1025,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
+          <details className="border-t border-border/40 pt-3" open={collateralRatio.breached || !!flashCrashStatus?.triggered}>
+            <summary className="cursor-pointer text-xs text-muted-foreground">风控规则与监测明细{collateralRatio.breached || flashCrashStatus?.triggered ? " · 当前存在异常" : " · 展开查看"}</summary>
           {/* Phase 5: 多档风控阈值进度条 */}
           <div className="space-y-2 pt-3 border-t border-border/40">
             <div className="flex items-center justify-between">
@@ -1342,11 +1233,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               </p>
             </div>
           </div>
+          </details>
         </CardContent>
       </Card>
 
+      <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
+
       {/* P&L SPLIT PANEL */}
-      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+      <details className="rounded-xl border border-border/50 p-4"><summary className="cursor-pointer text-sm font-medium">WIN100 与客户收益拆分 ▾</summary><div className="mt-4 grid gap-3 grid-cols-1 sm:grid-cols-2">
         <Card className={cn("border-border/50 overflow-hidden relative")}>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -1476,9 +1370,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </CardContent>
         </Card>
-      </div>
+      </div></details>
 
-      <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
 
       {/* CLIENTS TABLE (Full Width) */}
       <div className="space-y-4">

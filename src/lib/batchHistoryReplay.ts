@@ -1,8 +1,9 @@
-import { type BatchLike, PRIORITY_RATIO, syncBatchFinance, calculateContractDates } from '@/lib/riskEngine';
+import { type BatchLike, PRIORITY_RATIO, syncBatchFinance, calculateContractDates, initializeBatchFinance } from '@/lib/riskEngine';
 import { marketDate, summarizeDailyBatch, type BatchDailySummary } from '@/lib/batchDaily';
 export function replayBatchDay(original: BatchLike, date: string, close: number): BatchDailySummary | null {
   if (date < marketDate(new Date(original.signDate))) return null;
   const batch = structuredClone(original);
+  if (!batch.finance) initializeBatchFinance(batch);
   if (!batch.finance) return null;
   const f = batch.finance;
   const before = (value: unknown) => !!value && marketDate(new Date(value as string)) <= date;

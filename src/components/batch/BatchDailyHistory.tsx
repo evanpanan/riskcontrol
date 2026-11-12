@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 type Row = BatchDailySummary & { capturedAt: string; source: string; reconstructed?: boolean };
 export function BatchDailyHistory({ batchId, batchNumber }: { batchId: string; batchNumber: string }) {
   const [rows, setRows] = useState<Row[]>([]);
+  const [refresh, setRefresh] = useState(0);
   const [view, setView] = useState<'chart' | 'table'>('chart');
   const [selected, setSelected] = useState('');
   const [warning, setWarning] = useState('');
@@ -23,7 +24,7 @@ export function BatchDailyHistory({ batchId, batchNumber }: { batchId: string; b
       setWarning(data.warning || ""); setRows(data.rows); setSelected(data.rows.at(-1)?.date ?? '');
     }).catch(e => { if (e.name !== 'AbortError') setError(e.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [batchId]);
+  }, [batchId, refresh]);
   async function download() {
     setExporting(true);
     try {
@@ -45,7 +46,7 @@ export function BatchDailyHistory({ batchId, batchNumber }: { batchId: string; b
   return <Card className="min-w-0">
     <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div><CardTitle className="text-sm">批次历史</CardTitle><p className="text-xs text-muted-foreground mt-1">按纽约交易日收盘价留存 · 金额为美元</p></div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2"><Button size="sm" variant="ghost" disabled={loading} onClick={() => setRefresh(n => n + 1)}>刷新</Button>
         <Button size="sm" variant={view === 'chart' ? 'secondary' : 'ghost'} onClick={() => setView('chart')}>曲线</Button>
         <Button size="sm" variant={view === 'table' ? 'secondary' : 'ghost'} onClick={() => setView('table')}>每日表格</Button>
         <Button size="sm" variant="outline" disabled={!rows.length || exporting} onClick={download}>{exporting ? '导出中…' : '下载表格'}</Button>
