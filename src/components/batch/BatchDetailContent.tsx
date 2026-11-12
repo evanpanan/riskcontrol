@@ -905,50 +905,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
       </div>
 
-      <details className="rounded-xl border border-border/50 px-4 py-3 text-xs"><summary className="cursor-pointer text-muted-foreground">补仓独立仓位明细 ▾</summary><div className="mt-3 max-w-xl">        <Card className={cn(
-          "border-border/50",
-          rescueStats.totalRescueAmount > 0 && "border-warning/40 bg-warning/[0.04]"
-        )}>
-          <CardContent className="p-3.5">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-              <Archive className="h-3 w-3 text-warning" /> 救援独立仓位
-            </p>
-            <div className="space-y-1">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[9px] text-muted-foreground">注资</span>
-                <span className="font-mono text-[11px] font-semibold text-warning">
-                  {formatCurrency(rescueStats.totalRescueAmount)}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[9px] text-muted-foreground">市值</span>
-                <span className="font-mono text-[11px] font-semibold">
-                  {formatCurrency(rescueStats.rescueCurrentValue)}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[9px] text-muted-foreground">浮PnL</span>
-                <span className={cn(
-                  "font-mono text-[11px] font-semibold",
-                  rescueStats.rescuePnL > 0 && "text-success",
-                  rescueStats.rescuePnL < 0 && "text-danger",
-                  rescueStats.rescuePnL === 0 && "text-muted-foreground"
-                )}>
-                  {rescueStats.rescuePnL >= 0 ? "+" : ""}{formatCurrency(rescueStats.rescuePnL)}
-                </span>
-              </div>
-              {rescueStats.totalRescueAmount > 0 && (
-                <div className="pt-1 mt-1 border-t border-border/40 flex items-baseline justify-between">
-                  <span className="text-[9px] text-muted-foreground">均价 / 份额</span>
-                  <span className="font-mono text-[10px]">
-                    ${rescueStats.weightedAverageEntryPrice.toFixed(2)} / {rescueStats.totalRescueShares.toFixed(0)}
-                  </span>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-</div></details>
+
 
 
         </div>
@@ -1024,11 +981,18 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <div className="flex flex-wrap items-center justify-between gap-1"><span className="text-muted-foreground">担保比例</span><span className={cn("font-mono font-semibold", collateralRatio.breached ? "text-danger" : "text-success")}>{(collateralRatio.ratio * 100).toFixed(1)}%{collateralRatio.breached ? " · 低于警戒线" : ""}</span></div>
             {flashCrashStatus?.triggered && <p className="text-danger font-medium">盘中闪跌预警已触发</p>}
           </div>
-          <details className="border-t border-border/40 pt-3">
-            <summary className="cursor-pointer text-xs text-muted-foreground">风控规则与监测明细{collateralRatio.breached || flashCrashStatus?.triggered ? " · 当前存在异常" : " · 展开查看"}</summary>
+
+        </CardContent>
+      </Card>
+
+        </div>
+      </section>
+
+      <section aria-label="风控与补仓监测" className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 items-start">
+        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-4">
           {/* Phase 5: 多档风控阈值进度条 */}
-          <div className="space-y-2 pt-3 border-t border-border/40">
-            <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
                 <Layers className="h-3.5 w-3.5" />
                 多档风控阈值
@@ -1113,10 +1077,13 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
+          <div className="mt-3 border-t border-border/40 pt-2 text-[10px] text-muted-foreground space-y-1"><p>预警线 {Math.round(warningPct)}% · {formatCurrency((metrics.activeSubsetInitialPrincipal ?? baseCapital) * (1 - warningPct / 100))}</p><p>含补仓在管规模 {formatCurrency(metrics.activeSubsetInitialPrincipal ?? baseCapital)}</p></div>
+        </CardContent></Card>
+        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-3">
           {/* Phase 5.3: 担保比例警戒线 */}
           <div
             className={cn(
-              "rounded-lg p-3 border flex items-center justify-between",
+              "flex flex-wrap items-start justify-between gap-3",
               collateralRatio.breached
                 ? "bg-danger/10 border-danger/40"
                 : "bg-secondary/40 border-border/40"
@@ -1127,7 +1094,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <div>
                 <p className="text-[11px] font-medium">WIN100 担保比例</p>
                 <p className="text-[10px] text-muted-foreground">
-                  担保品市值 / 客户股票市值（协议要求 ≥ 3:7 = {(3 / 7 * 100).toFixed(1)}%）
+                  警戒线 ≥ {(3 / 7 * 100).toFixed(1)}%
                 </p>
               </div>
             </div>
@@ -1148,22 +1115,24 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </div>
 
+        </CardContent></Card>
+        <Card className="min-w-0 h-full border-border/50"><CardContent className="p-3">
           {/* Phase 6.1: 盘中闪跌检测 */}
           <div
             className={cn(
-              "rounded-lg p-3 border",
+              "space-y-3",
               flashCrashStatus?.triggered
                 ? "bg-danger/10 border-danger/40"
                 : "bg-secondary/40 border-border/40"
             )}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Zap className={cn("h-4 w-4", flashCrashStatus?.triggered ? "text-danger" : "text-muted-foreground")} />
                 <div>
                   <p className="text-[11px] font-medium">盘中闪跌检测</p>
                   <p className="text-[10px] text-muted-foreground">
-                    检测 N 分钟内跌幅是否超阈值（即使未到击穿线也预警）
+                    分时跌幅与启用阈值对照
                   </p>
                 </div>
               </div>
@@ -1196,56 +1165,62 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             )}
           </div>
 
-          <div className="grid gap-3 grid-cols-1 pt-4 border-t border-border/40">
-            <div className="rounded-lg bg-secondary/50 p-3">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-                {Math.round(warningPct)}% 预警阈值（含补仓）
-              </p>
-              <p className="text-sm font-mono font-semibold text-warning">
-                {formatCurrency((metrics.activeSubsetInitialPrincipal ?? baseCapital) * (1 - warningPct / 100))}
-              </p>
-            </div>
-            <div className="rounded-lg bg-secondary/50 p-3">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">含补仓在管规模</p>
-              <p className="text-sm font-mono font-semibold">
-                {formatCurrency(metrics.activeSubsetInitialPrincipal ?? baseCapital)}
-              </p>
-            </div>
-            <div
-              className={cn(
-                "rounded-lg p-3 border",
-                batch.riskLevel === RiskLevel.CRITICAL
-                  ? "bg-danger/10 border-danger/30"
-                  : "bg-secondary/50"
+        </CardContent></Card>
+        <div className="min-w-0 h-full">
+        <Card className={cn(
+          "border-border/50",
+          rescueStats.totalRescueAmount > 0 && "border-warning/40 bg-warning/[0.04]"
+        )}>
+          <CardContent className="p-3.5">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
+              <Archive className="h-3 w-3 text-warning" /> 救援独立仓位
+            </p>
+            <div className="space-y-1">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[9px] text-muted-foreground">注资</span>
+                <span className="font-mono text-[11px] font-semibold text-warning">
+                  {formatCurrency(rescueStats.totalRescueAmount)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[9px] text-muted-foreground">市值</span>
+                <span className="font-mono text-[11px] font-semibold">
+                  {formatCurrency(rescueStats.rescueCurrentValue)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[9px] text-muted-foreground">浮PnL</span>
+                <span className={cn(
+                  "font-mono text-[11px] font-semibold",
+                  rescueStats.rescuePnL > 0 && "text-success",
+                  rescueStats.rescuePnL < 0 && "text-danger",
+                  rescueStats.rescuePnL === 0 && "text-muted-foreground"
+                )}>
+                  {rescueStats.rescuePnL >= 0 ? "+" : ""}{formatCurrency(rescueStats.rescuePnL)}
+                </span>
+              </div>
+              {rescueStats.totalRescueAmount > 0 && (
+                <div className="pt-1 mt-1 border-t border-border/40 flex items-baseline justify-between">
+                  <span className="text-[9px] text-muted-foreground">均价 / 份额</span>
+                  <span className="font-mono text-[10px]">
+                    ${rescueStats.weightedAverageEntryPrice.toFixed(2)} / {rescueStats.totalRescueShares.toFixed(0)}
+                  </span>
+                </div>
               )}
-            >
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-                需补仓金额 (击穿 {Math.round(marginPct)}%)
-              </p>
-              <p
-                className={cn(
-                  "text-sm font-mono font-bold",
-                  batch.riskLevel === RiskLevel.CRITICAL ? "text-danger" : "text-muted-foreground"
-                )}
-              >
-                {formatCurrency(metrics.requiredMarginCall)}
-              </p>
             </div>
-          </div>
-          </details>
-        </CardContent>
-      </Card>
-
+          </CardContent>
+        </Card>
         </div>
       </section>
 
-      <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
+      <section aria-label="批次历史与收益" className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
+        <div className="min-w-0 xl:col-span-8"><BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} /></div>
 
       {/* P&L SPLIT PANEL */}
-      <details className="rounded-xl border border-border/50 p-4"><summary className="cursor-pointer text-sm font-medium">WIN100 与客户收益拆分 ▾</summary><div className="mt-4 grid gap-3 grid-cols-1 sm:grid-cols-2">
+      <section aria-label="机构与客户收益" className="grid min-w-0 gap-3 grid-cols-1 lg:grid-cols-2 xl:grid-cols-1 xl:col-span-4">
         <Card className={cn("border-border/50 overflow-hidden relative")}>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
+          <CardHeader className="p-4 pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center">
                   <Landmark className="h-4 w-4 text-primary" />
@@ -1259,7 +1234,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               />
             </div>
           </CardHeader>
-          <CardContent className="pt-1 space-y-3">
+          <CardContent className="p-4 pt-1 space-y-3">
             <div className="space-y-2">
               <PnlCompactRow
                 label="已实现"
@@ -1275,7 +1250,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               />
               <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/50">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">合计</span>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
                   <span className={cn("text-sm font-bold font-mono tabular-nums whitespace-nowrap", split.institutionTotalPnL >= 0 ? "text-success" : "text-danger")}>
                     {split.institutionTotalPnLPercent >= 0 ? "+" : ""}
                     {split.institutionTotalPnLPercent.toFixed(2)}%
@@ -1307,8 +1282,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </Card>
 
         <Card className="border-border/50 overflow-hidden">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
+          <CardHeader className="p-4 pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center">
                   <UserCheck className="h-4 w-4 text-emerald-400" />
@@ -1322,7 +1297,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               />
             </div>
           </CardHeader>
-          <CardContent className="pt-1 space-y-3">
+          <CardContent className="p-4 pt-1 space-y-3">
             <div className="space-y-2">
               <PnlCompactRow
                 label="已实现"
@@ -1340,7 +1315,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               />
               <div className="flex items-center justify-between pt-2 mt-1 border-t border-border/50">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">合计</span>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
                   <span className={cn("text-sm font-bold font-mono tabular-nums whitespace-nowrap", split.clientTotalPnL >= 0 ? "text-success" : "text-warning")}>
                     {split.clientTotalPnLPercent >= 0 ? "+" : ""}
                     {split.clientTotalPnLPercent.toFixed(2)}%
@@ -1372,13 +1347,15 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </div>
           </CardContent>
         </Card>
-      </div></details>
+      </section>
 
+
+      </section>
 
       {/* CLIENTS TABLE (Full Width) */}
       <div className="space-y-4">
         <Card className="border-border/50">
-            <CardHeader className="pb-2">
+            <CardHeader className="p-4 pb-2">
               <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-bold">

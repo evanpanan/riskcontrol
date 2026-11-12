@@ -29,12 +29,12 @@ export function BatchContractCard({ signDate, maturityDate }: { signDate: Date |
           </span>)}
         </div>
       </div>
-      <details className="text-[11px] border-t border-border/40 pt-2"><summary className="cursor-pointer text-muted-foreground">合约日期与退出规则</summary><div className="mt-2 space-y-1.5 text-muted-foreground leading-relaxed">
+      <div className="border-t border-border/40 pt-2 space-y-1.5 text-[11px] text-muted-foreground leading-relaxed">
         <p>签约 {formatDate(signDate)} · 到期 {formatDate(maturityDate)}</p>
         <p>解锁 {formatDate(dates.lockUpEndDate)}</p>
         {info.nextTradingDate && <p>下次窗口 {formatDate(info.nextTradingDate)}</p>}
         <p>{info.isLocked ? '锁仓期内常规退出受限；仅超级管理员可二次确认后特批退出。' : '开放窗口持续 14 天，每 3 个月一个交易周期。'}</p>
-      </div></details>
+      </div>
     </CardContent>
   </Card>;
 }
