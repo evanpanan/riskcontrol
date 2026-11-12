@@ -27,21 +27,11 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { useAuthContext } from "@/lib/auth/authProvider";
-import { MOCK_USER_META, APP_ROLES, MOCK_DEMO_CREDENTIALS, type MockUserKey } from "@/types/auth";
 import { type AppSessionUser } from "@/types/auth";
-import { getCustomMockUsers } from "@/lib/auth/providers/mockProvider";
-import {
-  getCustomMockAccountByEmail,
-  verifyPassword,
-} from "@/lib/auth/password";
 import { cn } from "@/lib/utils";
 import { logAudit, logAuthDeny } from "@/lib/auth/audit";
 
 const PASSWORD_MIN_LENGTH = 6;
-
-function validateEmail(v: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
-}
 
 function validatePassword(v: string): { ok: boolean; hint?: string } {
   if (!v) return { ok: false, hint: "请输入密码" };
@@ -52,7 +42,7 @@ function validatePassword(v: string): { ok: boolean; hint?: string } {
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, switchToMockRole, loginAsCustom } = useCurrentUser();
+  const { user } = useCurrentUser();
   const { serverLoginCredentials } = useAuthContext();
 
   const [hydrated, setHydrated] = useState(false);
@@ -80,13 +70,10 @@ function LoginPageInner() {
   useEffect(() => {
     setHydrated(true);
     try {
-      // 静默加载自定义账号（仅用于邮箱匹配，不在 UI 展示）
-      const entries = Object.values(getCustomMockUsers()) as any[];
-      void entries;
       const storedLast = window.localStorage.getItem("risk_control_last_login_at");
       if (storedLast) setLastLoginAt(storedLast);
       const storedEmail = window.localStorage.getItem("risk_control_remember_email");
-      if (storedEmail && validateEmail(storedEmail)) setEmail(storedEmail);
+      if (storedEmail?.trim()) setEmail(storedEmail);
     } catch {
       /* ignore */
     }
@@ -119,89 +106,10 @@ function LoginPageInner() {
     // setTimeouts for navigation are scheduled in the first synchronous tick
     // of finishLogin so they cannot be lost.
     (async () => {
-      // Step 1: 身份识别（内建账号 / 本地自定义账号）。口令校验以服务端为准：
-      // 内建账号的演示口令只存在于服务端环境变量，客户端无法校验。
-      let kindHint: "builtIn" | "custom" | "unknown" = "unknown";
-      let localSession: AppSessionUser | null = null;
-      const e = identifier;
-      // 内建账号目录（邮箱 / 角色 / 展示名）仅用于身份识别，与演示口令是否可用无关：
-      // 浏览器端读不到 RC_DEV_MOCK_PASSWORDS（非 NEXT_PUBLIC_ 变量），客户端无法校验口令，
-      // 因此这里不再做本地口令预校验，一律交由服务端判定。
-      const builtIn = (Object.entries(MOCK_USER_META) as Array<[MockUserKey, typeof MOCK_USER_META[MockUserKey]]>).find(
-        ([key, m]) => key === e || m.email === e
-      );
-      if (builtIn) {
-        const [, m] = builtIn;
-        kindHint = "builtIn";
-        localSession = {
-          id: m.id,
-          email: m.email,
-          role: m.role,
-          displayName: m.displayName,
-          avatarInitials: m.avatarInitials,
-          avatarDataUrl: m.avatarDataUrl,
-          bdManagerFullName: m.bdManagerFullName,
-        };
-      } else {
-        try {
-          const custom = Object.values(getCustomMockUsers()).find(
-            (a: any) => a.email === e
-          ) as any;
-          if (custom) {
-            const sess: AppSessionUser = {
-              id: custom.id,
-              email: custom.email,
-              role: custom.role,
-              displayName: custom.displayName,
-              avatarInitials: custom.avatarInitials || (custom.displayName || "??").slice(0, 2).toUpperCase(),
-              avatarDataUrl: custom.avatarDataUrl,
-              bdManagerFullName: custom.bdManagerFullName,
-            };
-            const rec = await getCustomMockAccountByEmail(e);
-            if (rec && rec.enabled && (await verifyPassword(password, rec.passwordHash, rec.salt))) {
-              kindHint = "custom";
-              localSession = sess;
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      if (!localSession) {
-        setErrors({ password: "账号或密码不正确，请重试" });
-        setIsSubmitting(false);
-        logAudit({
-          action: "login_failed",
-          actorEmail: identifier,
-          resource: "auth:login",
-          detail: { reason: "local_verify_failed", email: identifier },
-        });
-        toast.error("登录失败：账号或密码不正确", {
-          description: "如忘记密码，请联系系统管理员重置。",
-        });
-        return;
-      }
-
-      // Step 2: builtIn accounts → call serverLoginCredentials (service-side
-      // password re-verify + HttpOnly cookie).  custom accounts → optimistic local.
-      // NOTE: use `let session` because serverLoginCredentials can enrich the
-      // identity with server-returned authoritative fields.
-      let session = localSession;
-      const kind = kindHint;
-      const onSuccessAudit = () => {
-        logAudit({
-          action: "login_success",
-          actorId: session.id,
-          actorEmail: session.email,
-          role: session.role,
-          resource: "auth:login",
-          detail: { kind, role: session.role, displayName: session.displayName },
-        });
-      };
-
       const finishLogin = async () => {
         // Only announce success after the server has issued and verified a session.
-        const serverUser = await serverLoginCredentials(identifier, password);
-        if (!serverUser) {
+        const session = await serverLoginCredentials(identifier, password);
+        if (!session) {
           setErrors({ form: "账号或密码校验失败，请重试。" });
           return false;
         }
@@ -210,8 +118,7 @@ function LoginPageInner() {
           setErrors({ form: "登录会话未生效，请刷新后重试。" });
           return false;
         }
-        session = serverUser;
-        onSuccessAudit();
+        logAudit({ action: "login_success", actorId: session.id, actorEmail: session.email, role: session.role, resource: "auth:login", detail: { kind: "server", role: session.role, displayName: session.displayName } });
         if (remember) window.localStorage.setItem('risk_control_remember_email', session.email);
         else window.localStorage.removeItem('risk_control_remember_email');
         let dest = '/';

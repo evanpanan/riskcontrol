@@ -23,6 +23,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   ledger_clear: '清空业务数据',
   finance_commit: '资金账本提交',
   auth_denied: '权限校验未通过',
+  backup_policy_update: '修改备份设置',
+  backup_download: '下载加密备份',
 };
 
 export type AuditFilterValue = '__ALL__' | AuditAction;
@@ -102,6 +104,11 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   expectedAmount: '应补金额',
   targetClientId: '目标客户',
   source_type: '补仓形式',
+  collateralType: '补仓形式',
+  shares: '补仓股数',
+  entryPrice: '补仓计价',
+  lockupExitConfirmedAt: '锁仓期特批确认时间',
+  lockupEndDate: '锁仓期满日',
   principal: '客户本金',
   clientReceives: '客户应得',
   earlyExitFee: '提前退出费',
@@ -190,7 +197,7 @@ function formatDetailValue(key: string, raw: unknown): string {
     if (ROLE_KEYS.has(key)) return roleLabel(raw);
     if (key === 'method') return METHOD_LABELS[raw.toUpperCase()] ?? raw;
     if (key === 'channel') return CHANNEL_LABELS[raw.toLowerCase()] ?? raw;
-    if (key === 'source_type' || key === 'source') {
+    if (key === 'source_type' || key === 'source' || key === 'collateralType') {
       if (raw === 'cash') return '现金';
       if (raw === 'stock') return '股票';
     }

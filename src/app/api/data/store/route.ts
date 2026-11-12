@@ -10,6 +10,7 @@ import {
   mergeLedgerWriteForBd,
   redactLedgerForBd,
 } from '@/lib/server/workspaceScope';
+import { validateSpecialExitWrite } from '@/lib/server/specialExitGuard';
 import { financeContentChanged } from '@/lib/server/ledgerGuard';
 
 export const runtime = 'nodejs';
@@ -95,9 +96,10 @@ export async function GET(req: Request) {
       where,
       select: { kind: true, key: true, payload: true, revision: true, updatedAt: true },
     });
+    const visibleRows = rows.filter(r => !(r.kind === 'config' && r.key === 'risk_control_backup_policy' && session.role !== 'ADMIN'));
     const scopedRows = isBdManager(session)
-      ? await scopeRowsForBd(rows, session.bdManagerFullName ?? null)
-      : rows;
+      ? await scopeRowsForBd(visibleRows, session.bdManagerFullName ?? null)
+      : visibleRows;
     return jsonNoStore({
       ok: true,
       version,
@@ -200,7 +202,7 @@ export async function PUT(req: Request) {
   const key = typeof body.key === 'string' ? body.key : '';
   if (!ALLOWED_KINDS.has(kind)) return jsonNoStore({ ok: false, error: '未知的数据类别' }, 400);
   // 机构级配置与全局标记不得由商务经理改写（防止绕过界面直接篡改风控阈值 / 预警收件人）。
-  if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy'].includes(key)) {
+  if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy', 'risk_control_backup_policy'].includes(key)) {
     return jsonNoStore({ error: '请使用 Telegram 频道专用配置接口验证权限后保存' }, 403);
   }
   if ((kind === 'config' || kind === 'meta') && !CONFIG_WRITE_ROLES.includes(session.role)) {
@@ -267,6 +269,11 @@ export async function PUT(req: Request) {
         }
         nextPayload = JSON.parse(JSON.stringify(merged.payload)) as Prisma.InputJsonValue;
         blockedFields = merged.blocked ?? [];
+      }
+
+      if (kind === 'ledger' && existing) {
+        const violation = validateSpecialExitWrite(existing.payload, nextPayload, session.role);
+        if (violation) return { ok: false as const, forbidden: violation };
       }
 
       // 2) 资金写入必须携带幂等标识。判定依据是【合并后资金内容的实质变化】，

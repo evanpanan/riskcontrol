@@ -1,5 +1,6 @@
 "use client";
 
+import { BackupSettingsPanel } from "@/components/settings-Backup";
 import { NotificationPolicyPanel } from "@/components/settings-NotificationPolicy";
 import { TelegramChannelPanel } from "@/components/settings-TelegramChannel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1304,13 +1305,14 @@ export default function SettingsPage() {
   </div>
 
   <Tabs value={settingsTab} onValueChange={setSettingsTab} className="w-full">
-    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 h-auto p-1.5 gap-1.5">
+    <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 h-auto p-1.5 gap-1.5">
       <TabsTrigger value="risk" className="h-9 gap-1.5"><Shield className="h-3.5 w-3.5" />风控 · 分成</TabsTrigger>
       <TabsTrigger value="market" className="h-9 gap-1.5"><LineChart className="h-3.5 w-3.5" />行情 · 数据源</TabsTrigger>
       <TabsTrigger value="notify" className="h-9 gap-1.5"><Bell className="h-3.5 w-3.5" />通知 · 收件人</TabsTrigger>
       <TabsTrigger value="brand" className="h-9 gap-1.5"><Palette className="h-3.5 w-3.5" />品牌外观</TabsTrigger>
       <TabsTrigger value="account" className="h-9 gap-1.5"><Users className="h-3.5 w-3.5" />账号权限</TabsTrigger>
       <TabsTrigger value="audit" className="h-9 gap-1.5"><ScrollText className="h-3.5 w-3.5" />操作记录</TabsTrigger>
+      <RoleGate allowed={[APP_ROLES.ADMIN]}><TabsTrigger value="backup" className="h-9 w-full gap-1.5"><Database className="h-3.5 w-3.5" />数据备份</TabsTrigger></RoleGate>
       <TabsTrigger value="about" className="h-9 gap-1.5"><Info className="h-3.5 w-3.5" />关于系统</TabsTrigger>
     </TabsList>
 
@@ -2730,6 +2732,8 @@ export default function SettingsPage() {
         </Card>
       </RoleGate>
     </TabsContent>
+
+    <TabsContent value="backup" className="mt-6"><RoleGate allowed={[APP_ROLES.ADMIN]}><BackupSettingsPanel /></RoleGate></TabsContent>
 
     <TabsContent value="about" className="space-y-6 mt-6 lg:grid lg:grid-cols-3 lg:gap-6 [&>div]:lg:col-span-2">
       <div className="space-y-6">

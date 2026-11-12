@@ -392,3 +392,31 @@ model NotificationDispatch {
   @@index([identity, updatedAt])
   @@index([status, nextAttemptAt])
 }
+
+// 收盘后留存的批次业务快照；不会用今日持仓倒推旧日收益。
+model BatchDailySnapshot {
+  id String @id @default(cuid())
+  batchId String
+  tradingDate String
+  capturedAt DateTime @default(now())
+  source String
+  summary Json
+  ledger Json
+  @@unique([batchId, tradingDate])
+  @@index([tradingDate])
+}
+
+// 每日完整逻辑备份：压缩后 AES-256-GCM 加密。密钥仅由服务器环境提供。
+model BackupArchive {
+  id String @id @default(cuid())
+  backupDate String @unique
+  capturedAt DateTime @default(now())
+  data Bytes
+  sha256 String
+  byteLength Int
+  emailState Json
+  emailStatus String @default("PENDING")
+  leaseToken String?
+  leaseUntil DateTime?
+  lastError String?
+}

@@ -44,7 +44,7 @@ export async function POST(req: Request) {
   for (const item of incoming) {
     const kind = typeof item?.kind === 'string' ? item.kind : '';
     const key = typeof item?.key === 'string' ? item.key : '';
-    if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy'].includes(key)) continue;
+    if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy', 'risk_control_backup_policy'].includes(key)) continue;
     if (!ALLOWED_KINDS.has(kind) || !key || key.length > MAX_KEY_LENGTH) continue;
     if (item.payload === undefined || item.payload === null) continue;
     let payload: Prisma.InputJsonValue;

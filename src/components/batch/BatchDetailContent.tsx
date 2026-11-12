@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BatchDailyHistory } from "@/components/batch/BatchDailyHistory";
 import { useEffect, useMemo, useState, memo } from "react";
 import {
   getBatchMetrics,
@@ -269,6 +270,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [topupCollateralType, setTopupCollateralType] = useState<"cash" | "stock">("stock");
+  const [lockedExitTarget, setLockedExitTarget] = useState<string | null>(null);
+  const [lockupExitConfirmed, setLockupExitConfirmed] = useState(false);
+  const [lockupExitConfirmOpen, setLockupExitConfirmOpen] = useState(false);
   const [settleTarget, setSettleTarget] = useState<string | null>(null);
   const [requestExitTarget, setRequestExitTarget] = useState<string | null>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -576,6 +580,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
   const handleFulfill = () => {
     if (isTopupBlockedByLegacyLedger(batch as any)) { setRecoveryOpen(true); return; }
+    setTopupCollateralType("stock");
     setFulfillOpen(true);
   };
   const handleNotify = async (channel: "email" | "telegram") => {
@@ -614,7 +619,13 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         setRecoveryOpen(true);
         return;
       }
-      setSettleTarget(clientId);
+      setLockupExitConfirmed(false);
+      const isLocked = getExitEligibility(batch as any, target as any).lockUpEndDate > new Date();
+      if (isLocked && (role === "ADMIN" || role === "RISK_MANAGER")) {
+        setSettleTarget(null);
+        setLockedExitTarget(clientId);
+        setLockupExitConfirmOpen(true);
+      } else setSettleTarget(clientId);
       return;
     }
     try {
@@ -649,7 +660,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       if (!canonical) return;
       const clientName = canonical.clients?.find((c) => c.id === clientId)?.name || clientId;
       commitBatchFinance(canonical, (draft) => {
-        requestClientExit(draft, clientId, { operatorName: user?.displayName });
+        requestClientExit(draft, clientId, { operatorName: user?.displayName, allowLockedRequest: role === "ADMIN" || role === "RISK_MANAGER" });
       });
       toast.success("已提交退出申请，等待 15 天通知期后可结算");
 
@@ -880,7 +891,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {tradingInfo.isLocked
-                    ? "锁仓期内禁止一切交易。6 个月后首次开放交易窗口。"
+                    ? "锁仓期内常规退出受限；管理员或风控总监可二次确认后特批退出。"
                     : tradingInfo.isTradingWindow
                     ? "本次开放窗口持续 14 天，可执行部分或全部退出操作。"
                     : `第 ${tradingInfo.nextTradingMonth} 个月开放，每 3 个月一个交易周期。`}
@@ -1466,6 +1477,8 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </Card>
       </div>
 
+      <BatchDailyHistory batchId={batch.id} batchNumber={batch.batchNumber || batch.id} />
+
       {/* CLIENTS TABLE (Full Width) */}
       <div className="space-y-4">
         <Card className="border-border/50">
@@ -1853,7 +1866,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 确认补仓操作
               </DialogTitle>
               <DialogDescription className="text-left">
-                按本轮锁定缺口记录 WIN100 补仓。每笔按当前价格独立记录份额，本金和收益全部归 WIN100。
+                按本轮锁定缺口记录 WIN100 补仓。股票按当前价折算等值份额，现金按金额入账，本金和收益全部归 WIN100。
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -1868,9 +1881,9 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 <p className="font-mono font-bold text-sm">{batch.stockSymbol}</p>
               </div>
               <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 space-y-1 col-span-2">
-                <p className="text-[10px] uppercase tracking-wider text-danger">补仓金额</p>
+                <p className="text-[10px] uppercase tracking-wider text-danger">等值补仓金额</p>
                 <p className="font-mono font-extrabold text-2xl text-danger">
-                  ${metrics.requiredMarginCall.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
               </div>
             </div>
@@ -1892,7 +1905,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     <TrendingUp className="h-3.5 w-3.5 text-primary" />
                     <span className="text-xs font-semibold">股票补仓</span>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">按当前价买入 XMAX 份额，本金及收益归 WIN100</p>
+                  <p className="text-[10px] text-muted-foreground">补入与缺口等值的 {batch.stockSymbol} 股票，本金及收益归 WIN100</p>
                 </button>
                 <button
                   type="button"
@@ -1908,10 +1921,11 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                     <DollarSign className="h-3.5 w-3.5 text-primary" />
                     <span className="text-xs font-semibold">现金补仓</span>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">仅记金额，不买入股票，独立于市值计算</p>
+                  <p className="text-[10px] text-muted-foreground">补入现金，按现金余额计值，不随股价波动</p>
                 </button>
               </div>
             </div>
+            {topupCollateralType === "stock" && <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值股票：{(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>}
             <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
               <div className="space-y-0.5">
@@ -1938,7 +1952,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       <ConfirmDialog
         open={!!settleTarget}
         onOpenChange={(open) => { if (!open) setSettleTarget(null); }}
-        title="确认客户退出结算"
+        title={lockupExitConfirmed ? "锁仓期特批退出 · 确认结算" : "确认客户退出结算"}
         description="按签约比例结算客户利润；对应 WIN100 原始担保仓位、历次补仓本金和收益同时按占比结清。结算后金额、价格和比例永久冻结，不可重新激活。"
         summary={(() => {
           const client = batch.clients?.find((c) => c.id === settleTarget);
@@ -2004,7 +2018,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           const clientName = canonical.clients?.find((c) => c.id === settleTarget)?.name || settleTarget;
           try {
             const isAdmin = role === "ADMIN" || role === "RISK_MANAGER";
-            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget, { force: isAdmin }));
+            commitBatchFinance(canonical, (draft) => settleClientPosition(draft, settleTarget, { force: isAdmin, confirmLockedExit: lockupExitConfirmed, operatorName: user?.displayName, reason: lockupExitConfirmed ? "锁仓期特批退出，已二次确认" : undefined }));
           } catch (err) {
             if (err instanceof Error && err.name === "RevisionMismatchError") {
               toast.error(err.message);
@@ -2028,6 +2042,16 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
           setTick((t) => t + 1);
           onChange?.();
         }}
+      />
+      <ConfirmDialog
+        open={lockupExitConfirmOpen}
+        onOpenChange={setLockupExitConfirmOpen}
+        title="该客户仍在锁仓期"
+        tone="danger"
+        description="您正在特批锁仓期内退出，将跳过锁仓和通知等待期。提前退出手续费及资产校验仍照常执行，确认后请核对结算明细。"
+        summary={lockedExitTarget ? [{ label: "锁仓期满日", value: formatDate(getExitEligibility(batch as any, batch.clients!.find(c => c.id === lockedExitTarget) as any).lockUpEndDate) }] : []}
+        confirmText="确认特批，核对结算"
+        onConfirm={() => { setLockupExitConfirmed(true); setSettleTarget(lockedExitTarget); setLockupExitConfirmOpen(false); }}
       />
       <ConfirmDialog
         open={!!requestExitTarget}

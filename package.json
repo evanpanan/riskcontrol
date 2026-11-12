@@ -23,7 +23,9 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "verify:notification-policy": "tsx scripts/check-notification-policy.ts"
+    "verify:notification-policy": "tsx scripts/check-notification-policy.ts",
+    "db:restore-daily": "tsx scripts/restore-daily-backup.ts",
+    "verify:daily": "tsx scripts/check-daily-operations.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",

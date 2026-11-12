@@ -95,6 +95,8 @@ export interface SettlementSnapshot extends SettlementResult {
   earlyExitFee?: number;           // 提前退出手续费（本金 × 1%）
   earlyExitFeeRecipient?: string;  // 手续费接收方（中阳证券）
   isEarlyExit?: boolean;           // 是否提前退出（最终到期日前）
+  lockupExitConfirmedAt?: string;
+  lockupEndDate?: string;
   exitRequestedAt?: string;        // 退出申请时间
 }
 export interface InstitutionTrade {
@@ -352,7 +354,7 @@ export function getExitEligibility(batch: BatchLike, client: ClientLike): {
  * Phase 3: 客户提交退出申请
  * 状态变为 EXIT_REQUESTED，记录申请时间和资格时间
  */
-export function requestClientExit(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string } = {}): void {
+export function requestClientExit(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string; allowLockedRequest?: boolean } = {}): void {
   initializeBatchFinance(batch);
   const client = batch.clients?.find((c) => c.id === clientId);
   if (!client) throw new Error("未找到该客户。");
@@ -360,7 +362,7 @@ export function requestClientExit(batch: BatchLike, clientId: string, opts: { op
   if (client.status === ClientStatus.EXIT_REQUESTED) throw new Error("客户已提交退出申请。");
 
   const eligibility = getExitEligibility(batch, client);
-  if (eligibility.lockUpEndDate > new Date()) {
+  if (eligibility.lockUpEndDate > new Date() && !opts.allowLockedRequest) {
     throw new Error("锁仓期内不可申请退出。");
   }
 
@@ -523,16 +525,16 @@ export function calculateRescueStats(batch: BatchLike, currentStockPrice: number
     // Missing historical execution data is held at cost, never assigned a fabricated return.
     const currentValue = t.needsReconciliation || !t.entryPrice ? amount : shares * currentStockPrice;
     const pnl = currentValue - amount;
-    return { id: t.id, amount, entryPrice: t.entryPrice ?? 0, shares, currentValue, pnl, pnlPercent: amount > 0 ? pnl / amount * 100 : 0, originalAmount: t.amount, originalShares: t.shares };
+    return { id: t.id, amount, entryPrice: t.entryPrice ?? 0, collateralType: t.collateralType, shares, currentValue, pnl, pnlPercent: amount > 0 ? pnl / amount * 100 : 0, originalAmount: t.amount, originalShares: t.shares };
   });
   const totalRescueAmount = perCall.reduce((s, t) => s + t.amount, 0);
   const totalRescueShares = perCall.reduce((s, t) => s + t.shares, 0);
   const rescueCurrentValue = perCall.reduce((s, t) => s + t.currentValue, 0);
-  const unpricedAmount = perCall.filter((t) => !t.entryPrice).reduce((s, t) => s + t.amount, 0);
+  const unpricedAmount = perCall.filter((t) => !t.entryPrice && t.collateralType !== "cash").reduce((s, t) => s + t.amount, 0);
   const rescuePnL = rescueCurrentValue - totalRescueAmount;
   return {
     totalRescueAmount, totalRescueShares, rescueCurrentValue, rescuePnL, perCall, unpricedAmount,
-    weightedAverageEntryPrice: totalRescueShares > 0 ? (totalRescueAmount - unpricedAmount) / totalRescueShares : 0,
+    weightedAverageEntryPrice: totalRescueShares > 0 ? perCall.filter((t) => t.collateralType !== "cash" && t.entryPrice > 0).reduce((sum, t) => sum + t.amount, 0) / totalRescueShares : 0,
     rescuePnLPercent: totalRescueAmount > 0 ? rescuePnL / totalRescueAmount * 100 : 0,
   };
 }
@@ -977,6 +979,9 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
           batchNumber: (batch as any).batchNumber ?? null,
           roundId: round.id,
           appliedAmount: applied,
+          collateralType: ct,
+          entryPrice: ct === "stock" ? price : null,
+          shares: ct === "stock" ? applied / price : 0,
           expectedAmount: options.amount,
           targetClientId: options.clientId ?? null,
           operatorName: options.operatorName ?? null,
@@ -1034,7 +1039,7 @@ function releaseClientObligation(batch: BatchLike, clientId: string): void {
   }
 }
 
-export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string; force?: boolean } = {}): SettlementSnapshot {
+export function settleClientPosition(batch: BatchLike, clientId: string, opts: { operatorName?: string; reason?: string; force?: boolean; confirmLockedExit?: boolean } = {}): SettlementSnapshot {
   initializeBatchFinance(batch);
   const f = batch.finance!;
   if (f.settlements[clientId]) return f.settlements[clientId];
@@ -1044,6 +1049,8 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
 
   // Phase 3: 检查退出资格 — 必须已提交退出申请且通知期已过
   const eligibility = getExitEligibility(batch, client);
+  const inLockup = eligibility.lockUpEndDate > new Date();
+  if (inLockup && opts.force && !opts.confirmLockedExit) throw new Error("该客户仍在锁仓期，请二次确认锁仓期特批退出。");
   if (!opts.force) {
     if (client.status !== ClientStatus.EXIT_REQUESTED) {
       throw new Error("请先提交退出申请，待通知期结束后再结算。");
@@ -1086,6 +1093,7 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     institutionRescuePnL: money(rescue.rescuePnL),
     operatorName: opts.operatorName,
     settleReason: opts.reason,
+    ...(inLockup ? { lockupExitConfirmedAt: new Date().toISOString(), lockupEndDate: eligibility.lockUpEndDate.toISOString() } : {}),
     // Phase 3: 退出全流程字段
     earlyExitFee,
     earlyExitFeeRecipient: isEarlyExit ? EARLY_EXIT_FEE_RECIPIENT : undefined,
@@ -1124,6 +1132,8 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
         earlyExitFee,
         isEarlyExit,
         settlementSnapshotId: snapshot.id,
+        lockupExitConfirmedAt: snapshot.lockupExitConfirmedAt ?? null,
+        lockupEndDate: snapshot.lockupEndDate ?? null,
         operatorName: opts.operatorName ?? null,
         reason: opts.reason ?? null,
       },

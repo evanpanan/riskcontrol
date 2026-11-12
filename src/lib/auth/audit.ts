@@ -25,6 +25,8 @@ export type AuditAction =
   | 'batch_notify'
   | 'ledger_clear'
   | 'finance_commit'
+  | 'backup_policy_update'
+  | 'backup_download'
   | 'auth_denied';
 
 export interface AuditLogEntry {

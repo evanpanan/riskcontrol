@@ -60,7 +60,9 @@ function allowedWebhook(value: string, configuredUrl: string) {
   return url.toString();
 }
 
-export async function deliverNotification(body: any, env: Env = process.env) {
+export type EmailAttachment = { filename: string; content: string; contentType: string };
+
+export async function deliverNotification(body: any, env: Env = process.env, attachments: EmailAttachment[] = []) {
   const channel = body?.channel as Channel;
   if (channel !== "email" && channel !== "telegram") throw new Error("通知渠道无效。");
   const payload = body?.payload;
@@ -113,6 +115,7 @@ export async function deliverNotification(body: any, env: Env = process.env) {
       channel, to: targets, subject: payload.title, title: payload.title,
       message: payload.message, body: payload.message, text: message, html,
       severity: payload.severity, type: payload.type, batchId: payload.batchId, details: payload.details,
+      ...(attachments.length ? { attachments } : {}),
     }));
     const data = await response.json().catch(() => null);
     if (data?.success === false) throw new Error("通知转发目标返回失败，请检查自动化流程执行记录。");
@@ -126,11 +129,12 @@ export async function deliverNotification(body: any, env: Env = process.env) {
       try {
         if (selected === "resend") {
           await request("https://api.resend.com/emails", json(
-            { from, to: [target], subject: payload.title, text: message, html },
+            { from, to: [target], subject: payload.title, text: message, html, ...(attachments.length ? { attachments: attachments.map(a => ({ filename: a.filename, content: a.content, content_type: a.contentType })) } : {}) },
             { Authorization: `Bearer ${env.RESEND_API_KEY}` }));
         } else if (selected === "postmark") {
           const response = await request("https://api.postmarkapp.com/email", json({
             From: from, To: target, Subject: payload.title, TextBody: message, HtmlBody: html,
+            ...(attachments.length ? { Attachments: attachments.map(a => ({ Name: a.filename, Content: a.content, ContentType: a.contentType })) } : {}),
           }, { "X-Postmark-Server-Token": env.POSTMARK_SERVER_TOKEN! }));
           const data = await response.json().catch(() => null);
           if (!data || data.ErrorCode !== 0) throw new Error("Postmark 未确认受理，请检查服务商日志。");
@@ -139,6 +143,7 @@ export async function deliverNotification(body: any, env: Env = process.env) {
           await request("https://api.sendgrid.com/v3/mail/send", json({
             from: { email: fromEmail }, personalizations: [{ to: [{ email: target }] }],
             subject: payload.title, content: [{ type: "text/plain", value: message }, { type: "text/html", value: html }],
+            ...(attachments.length ? { attachments: attachments.map(a => ({ filename: a.filename, content: a.content, type: a.contentType, disposition: "attachment" })) } : {}),
           }, { Authorization: `Bearer ${env.SENDGRID_API_KEY}` }));
         }
         sentTo.push(target);
