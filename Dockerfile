@@ -51,6 +51,4 @@ COPY --from=builder /app/tsconfig.json ./tsconfig.json
 EXPOSE 3000
 
 # 启动前先跑迁移 + 上线自检，再启动服务。
-# 账号初始化（seed）改为一次性、需显式授权：默认不执行，仅当 RC_ALLOW_SEED=1 时运行，
-# 避免容器每次启动都把演示账号 / 默认口令重新写回生产库。
-CMD ["sh", "-c", "npx prisma migrate deploy && if [ \"$RC_ALLOW_SEED\" = \"1\" ]; then npx prisma db seed; else echo '[seed] skipped (RC_ALLOW_SEED != 1)'; fi && npm run preflight && npm run start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run preflight && npm run start"]

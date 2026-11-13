@@ -58,19 +58,6 @@ async function main() {
   await runNodeScript(prismaCli, ['generate']);
   await runNodeScript(prismaCli, ['migrate', 'deploy']);
 
-  const hasSeedPasswords = Boolean((process.env.RC_SEED_PASSWORDS ?? '').trim());
-  const allowSeed = (process.env.RC_ALLOW_SEED ?? '').trim() === '1';
-  if (!allowSeed && hasSeedPasswords) {
-    process.env.RC_ALLOW_SEED = '1';
-    console.log('[seed] auto-enabled because RC_SEED_PASSWORDS is present');
-  }
-
-  if ((process.env.RC_ALLOW_SEED ?? '').trim() === '1') {
-    await runNodeScript(prismaCli, ['db', 'seed']);
-  } else {
-    console.log('[seed] skipped (RC_ALLOW_SEED != 1)');
-  }
-
   await runNodeScript(nextCli, ['build']);
 }
 

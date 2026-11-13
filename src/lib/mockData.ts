@@ -1250,8 +1250,10 @@ export function tryAutoUpgradeTestLedger(): { didReset: boolean; backupKey?: str
 }
 
 export function getMockData(): MockDataSet {
-  // 已清空业务数据：只从账本读取管理员后续新建的批次，不再载入演示数据。
-  if (typeof window !== "undefined" && isLedgerEmpty()) {
+  const production = process.env.NODE_ENV === "production";
+  // 生产环境只读取服务器账本，等待同步时显示空数据。
+  if (production && !isWorkspaceHydrated()) return { batches: [], stockHistory: [] };
+  if (production || isLedgerEmpty()) {
     if (!cachedMockData) {
       const empty: MockDataSet = { batches: [], stockHistory: [] };
       const store = readFinanceStore();

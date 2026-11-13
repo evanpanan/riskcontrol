@@ -37,6 +37,9 @@ export async function POST(req: Request) {
     ? body.kinds.filter((k): k is string => typeof k === 'string' && ALLOWED_KINDS.has(k))
     : [];
   const kinds = requested.length > 0 ? requested : DEFAULT_CLEAR_KINDS;
+  if (body.markEmpty === false && process.env.NODE_ENV === 'production') {
+    return forbidden('正式环境不能重置为演示账本');
+  }
   const markEmpty = body.markEmpty !== false;
 
   try {
