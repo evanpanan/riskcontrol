@@ -446,9 +446,12 @@ export default function ClientsPage() {
     () => [
       { label: "客户姓名", value: addForm.name.trim() || "—" },
       { label: "所属批次", value: selectedAddBatch?.batchNumber ?? "—", accent: "primary" as const },
-      { label: "客户入金", value: addClientAmount > 0 ? formatCurrency(addClientAmount) : "—" },
+      {
+        label: "客户入金",
+        value: addClientAmount > 0 ? formatCurrency(addClientAmount) : "—",
+        detail: addClientTier ? `${addClientTier} · ${addClientSplitLabel}` : undefined,
+      },
       { label: "机构应入金", value: addClientInstitutionAmount > 0 ? formatCurrency(addClientInstitutionAmount) : "—", accent: "primary" as const },
-      { label: "档位与分成", value: addClientTier ? `${addClientTier} · ${addClientSplitLabel}` : "—" },
       { label: "客户入场价", value: addForm.entryPrice || "—" },
       { label: "签约日期", value: addForm.signDate || "—" },
     ],
@@ -1914,9 +1917,6 @@ export default function ClientsPage() {
                       className="pl-7 font-mono tabular-nums"
                     />
                   </div>
-                  <p className="text-[11px] text-muted-foreground" aria-live="polite">
-                    分成比例 <span className="font-medium text-foreground">{addClientSplitLabel}</span>
-                  </p>
                   {addErrors.investment && <p className="text-[10px] text-danger font-mono">{addErrors.investment}</p>}
                 </div>
                 <div className="space-y-1.5">
@@ -2074,6 +2074,10 @@ export default function ClientsPage() {
                 <div>
                   <p className="text-muted-foreground mb-0.5">客户入金</p>
                   <p className="font-mono font-semibold">{addClientAmount > 0 ? formatCurrency(addClientAmount) : "-"}</p>
+                  <p className="mt-1 flex flex-wrap gap-x-1.5 leading-4" aria-live="polite">
+                    <span className="text-muted-foreground">分成比例</span>
+                    <span className="font-semibold text-foreground">{addClientSplitLabel}</span>
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground mb-0.5">机构应入金</p>

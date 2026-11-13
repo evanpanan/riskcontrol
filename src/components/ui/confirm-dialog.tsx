@@ -28,7 +28,7 @@ export interface ConfirmDialogProps {
   confirmLoading?: boolean;
   confirmDisabled?: boolean;
   footerExtra?: React.ReactNode;
-  summary?: Array<{ label: string; value: React.ReactNode; accent?: "danger" | "warning" | "success" | "primary" | "muted" }>;
+  summary?: Array<{ label: string; value: React.ReactNode; detail?: React.ReactNode; accent?: "danger" | "warning" | "success" | "primary" | "muted" }>;
   contentClassName?: string;
 }
 
@@ -166,25 +166,28 @@ export function ConfirmDialog({
                 <div
                   key={i}
                   className={cn(
-                    "flex items-center justify-between gap-4",
+                    "min-w-0",
                     i % 2 === 1 ? "sm:justify-self-end sm:min-w-0 sm:w-full" : ""
                   )}
                 >
-                  <span className="text-[11px] font-medium text-muted-foreground shrink-0">
-                    {s.label}
-                  </span>
-                  <span
-                    className={cn(
-                      "text-[12.5px] font-semibold tabular-nums",
-                      s.accent === "danger" && "text-danger",
-                      s.accent === "warning" && "text-warning",
-                      s.accent === "success" && "text-success",
-                      s.accent === "primary" && "text-primary",
-                      (!s.accent || s.accent === "muted") && "text-foreground"
-                    )}
-                  >
-                    {s.value}
-                  </span>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-[11px] font-medium text-muted-foreground shrink-0">
+                      {s.label}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-[12.5px] font-semibold tabular-nums",
+                        s.accent === "danger" && "text-danger",
+                        s.accent === "warning" && "text-warning",
+                        s.accent === "success" && "text-success",
+                        s.accent === "primary" && "text-primary",
+                        (!s.accent || s.accent === "muted") && "text-foreground"
+                      )}
+                    >
+                      {s.value}
+                    </span>
+                  </div>
+                  {s.detail && <div className="mt-1 text-xs text-muted-foreground">{s.detail}</div>}
                 </div>
               ))}
             </div>
