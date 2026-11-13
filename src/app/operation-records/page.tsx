@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useRef } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { APP_ROLES, ROLE_LABELS } from "@/types/auth";
-import { fetchAuditLogs, type AuditAction, type AuditLogEntry } from "@/lib/auth/audit";
+import { type AuditAction, type AuditLogEntry } from "@/lib/auth/audit";
 import {
   AUDIT_ACTION_FILTER_OPTIONS,
   describeAuditLog,
@@ -37,7 +38,8 @@ import {
   RefreshCw,
   Eye,
   Shield,
-  Lock,
+  Download,
+  Trash2,
 } from "lucide-react";
 
 
@@ -45,6 +47,8 @@ export default function OperationRecordsPage() {
   const requestInFlight = useRef(false);
   const [hasNewRecords, setHasNewRecords] = useState(false);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AuditLogEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState("");
   const [actionFilter, setActionFilter] = useState<"__ALL__" | AuditAction>("__ALL__");
@@ -55,10 +59,15 @@ export default function OperationRecordsPage() {
     requestInFlight.current = true;
     setLoading(true);
     try {
-      const rows = await fetchAuditLogs({ limit: 1000 });
-      setLogs(rows);
+      const response = await fetch("/api/audit?limit=1000", { cache: "no-store" });
+      if (!response.ok) throw new Error("操作记录加载失败");
+      const data = await response.json() as { logs: AuditLogEntry[]; canDelete: boolean };
+      setLogs(data.logs);
+      setCanDelete(data.canDelete);
+
       setHasNewRecords(false);
     } catch {
+      setCanDelete(false);
       toast.error("操作记录加载失败");
     } finally {
       requestInFlight.current = false;
@@ -91,6 +100,23 @@ export default function OperationRecordsPage() {
     });
   }, [actionFilter, keyword, logs]);
 
+  const deleteRecord = async () => {
+    if (!deleteTarget) return;
+    const response = await fetch("/api/audit", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: deleteTarget.id }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error ?? "删除失败，请稍后重试");
+    }
+    setLogs((current) => current.filter((entry) => entry.id !== deleteTarget.id));
+    setDetailOpen((current) => current?.id === deleteTarget.id ? null : current);
+    toast.success("操作记录已删除");
+    await loadLogs();
+  };
+
   return (
     <AuthGuard route="/operation-records" allowed={[APP_ROLES.ADMIN, APP_ROLES.RISK_MANAGER]}>
       <div className="space-y-6">
@@ -101,14 +127,16 @@ export default function OperationRecordsPage() {
               操作记录
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              全员页面访问与关键业务操作的完整记录，供审计追溯。
+              全员页面访问与关键业务操作记录。
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-1.5 px-3 py-1 text-[11px]">
-              <Lock className="h-3.5 w-3.5" />
-              不可删除
-            </Badge>
+            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+              <a href="/api/audit?download=1" download>
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                下载全部记录
+              </a>
+            </Button>
             <Button variant="outline" size="sm" className="h-8 text-xs" disabled={loading} onClick={() => void loadLogs()}>
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               {hasNewRecords ? "有新记录 · 点击刷新" : "刷新"}
@@ -121,7 +149,7 @@ export default function OperationRecordsPage() {
             <div className="flex items-start gap-3">
               <Shield className="mt-0.5 h-4 w-4 text-primary shrink-0" />
               <p className="text-xs leading-5 text-muted-foreground">
-                操作记录由系统统一写入，仅系统管理员与风控总监可查看，不支持修改或删除。
+                系统管理员与风控总监可查看和下载。首位超级管理员可逐条删除，系统会保留删除留痕。
               </p>
             </div>
           </CardContent>
@@ -132,7 +160,7 @@ export default function OperationRecordsPage() {
             <div>
               <CardTitle className="text-sm font-bold">全员操作留痕</CardTitle>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                共 {logs.length} 条记录，按时间倒序排列
+                显示最近 {logs.length} 条记录，按时间倒序排列
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -223,6 +251,12 @@ export default function OperationRecordsPage() {
                                 <Eye className="mr-1 h-3 w-3" />
                                 展开
                               </Button>
+                              {canDelete && log.action !== "audit_record_delete" && log.action !== "ledger_clear" && (
+                                <Button variant="ghost" size="sm" className="h-6 text-danger"
+                                  aria-label="删除操作记录" disabled={loading} onClick={() => setDeleteTarget(log)}>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -292,6 +326,15 @@ export default function OperationRecordsPage() {
           </DialogContent>
         </Dialog>
       </div>
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        title="删除这条操作记录？"
+        description={deleteTarget ? `${formatDateTime(deleteTarget.createdAt)} · ${getAuditActionLabel(deleteTarget.action)}。删除后无法从列表恢复，系统会保留此次删除的留痕。` : undefined}
+        tone="danger"
+        confirmText="确认删除"
+        onConfirm={deleteRecord}
+      />
     </AuthGuard>
   );
 }

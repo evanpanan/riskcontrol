@@ -73,16 +73,16 @@ global.window = {
   addEventListener: (name, fn) => (listener = fn),
   removeEventListener() {},
 };
+global.fetch = () => {
+  fetches++;
+  return new Promise((done) => {
+    resolve = (logs) => done({ ok: true, json: () => ({ logs, canDelete: false }) });
+  });
+};
 const app = harness("src/app/operation-records/page.tsx", {
   "@/types/auth": {
     APP_ROLES: { ADMIN: "ADMIN", RISK_MANAGER: "RISK_MANAGER" },
     ROLE_LABELS: {},
-  },
-  "@/lib/auth/audit": {
-    fetchAuditLogs() {
-      fetches++;
-      return new Promise((r) => (resolve = r));
-    },
   },
   "@/lib/auth/auditDisplay": {
     AUDIT_ACTION_FILTER_OPTIONS: [],

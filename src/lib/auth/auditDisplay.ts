@@ -21,6 +21,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   client_exit_cancel: '撤销退出申请',
   batch_notify: '批次通知客户',
   ledger_clear: '清空业务数据',
+  audit_record_delete: '删除操作记录',
   finance_commit: '资金账本提交',
   auth_denied: '权限校验未通过',
   backup_policy_update: '修改备份设置',

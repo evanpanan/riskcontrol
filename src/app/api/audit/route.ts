@@ -229,12 +229,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (session.role !== "ADMIN" && session.role !== "RISK_MANAGER") {
     return NextResponse.json({ ok: false, error: "当前角色无权限查看操作记录" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
+  const download = req.nextUrl.searchParams.get("download") === "1";
   const limitRaw = req.nextUrl.searchParams.get("limit");
   const limit = Math.max(1, Math.min(2000, Number(limitRaw) || 500));
   try {
+    const account = session.role === "ADMIN" && !download
+      ? await prisma.appUser.findUnique({
+          where: { id: session.id },
+          select: { isPrimaryAdmin: true },
+        })
+      : null;
     const rows = await prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
-      take: limit,
+      ...(download ? {} : { take: limit }),
       select: {
         id: true,
         actorId: true,
@@ -249,17 +256,71 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json(
       {
         ok: true,
+        canDelete: account?.isPrimaryAdmin === true,
         logs: rows.map((row) => ({
           ...row,
           createdAt: row.createdAt.toISOString(),
         })),
       },
-      { status: 200, headers: { "Cache-Control": "no-store" } },
+      { status: 200, headers: {
+        "Cache-Control": "no-store",
+        ...(download ? { "Content-Disposition": 'attachment; filename="riskcontrol-audit.json"' } : {}),
+      } },
     );
   } catch {
     return NextResponse.json(
       { ok: false, error: "操作记录暂时不可用" },
       { status: 503, headers: { "Cache-Control": "no-store" } },
     );
+  }
+}
+
+export async function DELETE(req: NextRequest): Promise<NextResponse> {
+  const headers = { "Cache-Control": "no-store" };
+  const token = (await cookies()).get(RC_SESSION_COOKIE)?.value ?? null;
+  const session = await resolveSessionUserFromToken(token);
+  if (!session) return NextResponse.json({ error: "未登录" }, { status: 401, headers });
+  if (session.role !== "ADMIN") {
+    return NextResponse.json({ error: "仅首位超级管理员可删除操作记录" }, { status: 403, headers });
+  }
+
+  if (req.headers.get("content-type")?.split(";")[0] !== "application/json") {
+    return NextResponse.json({ error: "请求格式无效" }, { status: 400, headers });
+  }
+  const { id } = await req.json().catch(() => ({})) ?? {};
+  if (typeof id !== "string" || !id || id.length > 255) {
+    return NextResponse.json({ error: "操作记录编号无效" }, { status: 400, headers });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const account = await tx.appUser.findUnique({
+        where: { id: session.id },
+        select: { isPrimaryAdmin: true, enabled: true, role: true },
+      });
+      if (!account?.isPrimaryAdmin || !account.enabled || account.role !== "ADMIN") return 403;
+      const deleted = await tx.auditLog.deleteMany({
+        where: { id, action: { notIn: ["audit_record_delete", "ledger_clear"] } },
+      });
+      if (!deleted.count) return 404;
+      await tx.auditLog.create({
+        data: {
+          action: "audit_record_delete",
+          actorId: session.id,
+          actorEmail: session.email,
+          role: session.role,
+          resource: "/operation-records",
+          detail: { deletedRecordId: id },
+        },
+      });
+      return 200;
+    });
+    if (result === 403)
+      return NextResponse.json({ error: "仅首位超级管理员可删除操作记录" }, { status: result, headers });
+    if (result === 404)
+      return NextResponse.json({ error: "记录已删除、找不到或属于受保护的审计留痕" }, { status: result, headers });
+    return NextResponse.json({ ok: true }, { headers });
+  } catch {
+    return NextResponse.json({ error: "删除失败，请稍后重试" }, { status: 503, headers });
   }
 }

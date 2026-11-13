@@ -24,6 +24,7 @@ export type AuditAction =
   | 'client_exit_cancel'
   | 'batch_notify'
   | 'ledger_clear'
+  | 'audit_record_delete'
   | 'finance_commit'
   | 'backup_policy_update'
   | 'backup_download'
