@@ -401,7 +401,7 @@ export default function DashboardPage() {
       </section>
       <div className="space-y-4">
       {/* ===== 顶部：OKX 风格仪表盘双折线图 ===== */}
-      <DashboardCharts summary={summary} />
+      {batches.length > 0 && <DashboardCharts summary={summary} />}
 
       {/* ===== 中部：风险阶梯状态分布条 ===== */}
       <Suspense fallback={

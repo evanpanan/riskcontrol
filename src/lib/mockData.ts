@@ -942,7 +942,7 @@ export function resetMockTestData(): { batches: number; clients: number; backupK
     fresh.batches.push(revived);
   }
   // Both writes precede removal. A quota failure cannot destroy the old active ledger.
-  storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
+  storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup, ledger: readFinanceStore() }));
   storage.setItem(FINANCE_STORE_KEY, JSON.stringify(store));
   for (const key of keys.slice(1)) storage.removeItem(key);
   // 工作区已就绪（浏览器多端环境）时，把重建后的账本同步到服务端，保证各端一致。
@@ -1023,11 +1023,8 @@ export async function clearAllBusinessData(): Promise<{ batches: number; clients
   // 先落备份，任一步抛错都不会丢失原始数据。
   storage.setItem(backupKey, JSON.stringify({ createdAt: new Date().toISOString(), records: backup }));
   // 服务端为唯一事实来源：先清空工作区（批次/补仓/客户状态），由服务端置位空账本标记。
-  if (isWorkspaceHydrated()) {
-    const ok = await clearWorkspace(["ledger", "patches", "client_status"]);
-    if (!ok) throw new Error("清空失败，请检查网络后重试。");
-    await flushWorkspaceWrites();
-  }
+  const ok = await clearWorkspace(["ledger", "patches", "client_status"]);
+  if (!ok) throw new Error("服务器未确认清空，请检查网络后重试。");
   // 本地镜像与派生键清理。
   storage.setItem(FINANCE_STORE_KEY, JSON.stringify({}));
   storage.setItem(EMPTY_LEDGER_KEY, "1");

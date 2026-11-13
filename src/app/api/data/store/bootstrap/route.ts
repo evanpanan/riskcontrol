@@ -45,6 +45,7 @@ export async function POST(req: Request) {
     const kind = typeof item?.kind === 'string' ? item.kind : '';
     const key = typeof item?.key === 'string' ? item.key : '';
     if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy', 'risk_control_backup_policy'].includes(key)) continue;
+    if (kind === 'meta' && key === 'empty') continue;
     if (!ALLOWED_KINDS.has(kind) || !key || key.length > MAX_KEY_LENGTH) continue;
     if (item.payload === undefined || item.payload === null) continue;
     let payload: Prisma.InputJsonValue;
@@ -60,7 +61,16 @@ export async function POST(req: Request) {
   if (rows.length === 0) return jsonNoStore({ ok: true, inserted: 0 });
 
   try {
-    const result = await prisma.workspaceRecord.createMany({ data: rows, skipDuplicates: true });
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(701841323)`;
+      const marker = await tx.workspaceRecord.findUnique({
+        where: { kind_key: { kind: 'meta', key: 'empty' } },
+        select: { payload: true },
+      });
+      const empty = (marker?.payload as { empty?: boolean } | undefined)?.empty === true;
+      const eligible = empty ? rows.filter((row) => row.kind === 'config' || row.kind === 'meta') : rows;
+      return tx.workspaceRecord.createMany({ data: eligible, skipDuplicates: true });
+    });
     return jsonNoStore({ ok: true, inserted: result.count });
   } catch (err) {
     console.error('[data:store] bootstrap failed:', err instanceof Error ? err.message : String(err));

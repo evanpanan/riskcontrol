@@ -142,11 +142,19 @@ export async function GET() {
   const scope = resolveDashboardScope(user);
   if (!scope) return unauthorized();
 
+  const reset = await prisma.workspaceRecord.findUnique({
+    where: { kind_key: { kind: "meta", key: "empty" } },
+    select: { payload: true, updatedAt: true },
+  });
+  const historyStart = Date.now() - 370 * 24 * 60 * 60 * 1000;
+  const clearedAt = (reset?.payload as { empty?: boolean } | undefined)?.empty === true
+    ? reset!.updatedAt.getTime()
+    : 0;
   const rows = await prisma.dashboardSnapshot.findMany({
     where: {
       scopeType: scope.scopeType,
       scopeKey: scope.scopeKey,
-      bucketAt: { gte: new Date(Date.now() - 370 * 24 * 60 * 60 * 1000) },
+      bucketAt: { gte: new Date(Math.max(historyStart, clearedAt)) },
     },
     orderBy: { bucketAt: "asc" },
     select: {

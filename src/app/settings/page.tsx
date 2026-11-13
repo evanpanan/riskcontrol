@@ -92,7 +92,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps 
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
-import { clearAllBusinessData, getMockData, isLedgerEmpty } from "@/lib/mockData";
+import { clearAllBusinessData, getMockData } from "@/lib/mockData";
 import {
   getStoredRiskTiers,
   saveRiskTiers,
@@ -332,7 +332,7 @@ export default function SettingsPage() {
 
   // 当前业务数据规模，用于清空前核对；已清空时显示为空。
   const ledgerScale = useMemo(() => {
-    if (!hydrated || isLedgerEmpty()) return { batches: 0, clients: 0 };
+    if (!hydrated) return { batches: 0, clients: 0 };
     try {
       const data = getMockData();
       return {
@@ -342,7 +342,7 @@ export default function SettingsPage() {
     } catch {
       return { batches: 0, clients: 0 };
     }
-  }, [hydrated]);
+  }, [hydrated, clearDataOpen]);
   const handleClearAllData = useCallback(async () => {
     setClearingData(true);
     try {
@@ -2294,7 +2294,7 @@ export default function SettingsPage() {
           variant="danger"
           size="sm"
           className="gap-1.5 font-semibold"
-          disabled={ledgerScale.batches === 0 && ledgerScale.clients === 0}
+          disabled={clearingData}
           onClick={() => setClearDataOpen(true)}
         >
           <Trash2 className="h-3.5 w-3.5" />

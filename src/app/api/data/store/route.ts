@@ -201,6 +201,7 @@ export async function PUT(req: Request) {
 
   const kind = typeof body.kind === 'string' ? body.kind : '';
   const key = typeof body.key === 'string' ? body.key : '';
+  if (kind === 'meta' && key === 'empty') return jsonNoStore({ ok: false, error: '请使用清空业务数据入口' }, 403);
   if (!ALLOWED_KINDS.has(kind)) return jsonNoStore({ ok: false, error: '未知的数据类别' }, 400);
   // 机构级配置与全局标记不得由商务经理改写（防止绕过界面直接篡改风控阈值 / 预警收件人）。
   if (kind === 'config' && ['risk_control_telegram_channel', 'risk_control_notification_policy', 'risk_control_backup_policy'].includes(key)) {
@@ -250,6 +251,9 @@ export async function PUT(req: Request) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      if (kind === 'ledger' || kind === 'patches' || kind === 'client_status') {
+        await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(701841323)`;
+      }
       const existing = await tx.workspaceRecord.findUnique({
         where: { kind_key: { kind, key } },
         select: { revision: true, payload: true },
@@ -371,6 +375,9 @@ export async function PUT(req: Request) {
       });
 
       if (!existing) {
+        if (baseRevision !== null && baseRevision > 0) {
+          return { ok: false as const, conflict: conflictOf(null, 0) };
+        }
         try {
           const created = await tx.workspaceRecord.create({
             data: { kind, key, payload, revision: 1, updatedBy: session.id },

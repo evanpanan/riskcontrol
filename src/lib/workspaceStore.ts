@@ -446,6 +446,10 @@ export async function bootstrapWorkspace(
   records: Array<{ kind: WorkspaceKind; key: string; payload: unknown }>
 ): Promise<void> {
   if (!isBrowser() || writeBlocked || records.length === 0) return;
+  if (readWorkspaceRecord<{ empty?: boolean }>('meta', 'empty')?.payload.empty) {
+    records = records.filter((rec) => rec.kind === 'config' || rec.kind === 'meta');
+    if (!records.length) return;
+  }
   // 先本地占位，保证随后的同步读取可立即拿到数据。
   for (const rec of records) {
     const k = slotKey(rec.kind, rec.key);
@@ -485,6 +489,7 @@ export async function clearWorkspace(
   if (kinds) body.kinds = kinds;
   if (options && typeof options.markEmpty === 'boolean') body.markEmpty = options.markEmpty;
   try {
+    await flushWorkspaceWrites();
     const res = await fetch('/api/data/store/clear', {
       method: 'POST',
       credentials: 'include',
@@ -492,7 +497,11 @@ export async function clearWorkspace(
       body: JSON.stringify(body),
     });
     if (!res.ok) return false;
-    slots.clear();
+    const { marker } = await res.json() as { marker: RemoteRecord };
+    for (const kind of kinds ?? ['ledger', 'patches', 'client_status']) deleteWorkspaceRecords(kind);
+    slots.delete(slotKey('meta', 'empty'));
+    applyRemoteRecords([marker], false);
+    hydrated = true;
     workspaceVersion = null;
     await pullWorkspace();
     return true;

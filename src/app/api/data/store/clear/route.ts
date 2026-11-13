@@ -41,6 +41,7 @@ export async function POST(req: Request) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(701841323)`;
       const deleted = await tx.workspaceRecord.deleteMany({ where: { kind: { in: kinds } } });
       const existingMeta = await tx.workspaceRecord.findUnique({
         where: { kind_key: { kind: 'meta', key: 'empty' } },
@@ -57,9 +58,9 @@ export async function POST(req: Request) {
           data: { kind: 'meta', key: 'empty', payload, revision: 1, updatedBy: session.id },
         });
       }
-      return deleted.count;
+      return { deleted: deleted.count, marker: { kind: "meta", key: "empty", payload, revision: (existingMeta?.revision ?? 0) + 1 } };
     });
-    return jsonNoStore({ ok: true, deleted: result });
+    return jsonNoStore({ ok: true, ...result });
   } catch (err) {
     console.error('[data:store] clear failed:', err instanceof Error ? err.message : String(err));
     return jsonNoStore({ ok: false, error: '清空业务数据失败' }, 500);
