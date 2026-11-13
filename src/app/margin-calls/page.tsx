@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { getMockData, commitBatchFinance } from "@/lib/mockData";
+import { getMockData } from "@/lib/mockData";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import {
   History,
@@ -20,16 +20,11 @@ import {
   AlertCircle,
   AlertTriangle,
   Filter,
-  Zap,
-  Sparkles,
 } from "lucide-react";
 import { Suspense, useState, useMemo, useEffect } from "react";
 import { MarginCallStatus } from "@prisma/client";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { RoleGate } from "@/components/auth/RoleGate";
-import { APP_ROLES } from "@/types/auth";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -39,31 +34,8 @@ import {
 import { calcPenalty } from "@/lib/win100Ledger";
 import * as XLSX from "@/lib/excelExport";
 import {
-  summarizeBatchMarginFromClients,
-  executeInstitutionTopup,
-  isTopupBlockedByLegacyLedger,
-  getLockedBatchRequiredMargin,
   type BatchLike,
 } from "@/lib/riskEngine";
-
-type FullfillTarget = {
-  mcId: string;
-  batchId: string;
-  requiredAmount: number;
-  batchTotalRequired: number;
-  adjustedPending: number;
-  perClientFulfilledTotal: number;
-  singleTopupCount: number;
-  progressPct: number;
-  batchNumber: string;
-  symbol: string;
-  stockName: string;
-  currentMarketValue: number;
-  cumulativeMarginCalls: number;
-  initialTotalAmount: number;
-  stockPriceAtStart: number;
-  totalShares: number;
-} | null;
 
 export default function MarginCallsPage() {
   return (
@@ -84,8 +56,6 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
   const batches = useMemo(() => [...mockData.batches], [mockData, tick]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | MarginCallStatus>(initialStatus);
-  const [fulfillOpen, setFulfillOpen] = useState(false);
-  const [fulfillTarget, setFulfillTarget] = useState<FullfillTarget>(null);
   const [docTarget, setDocTarget] = useState<any | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advFrom, setAdvFrom] = useState("");
@@ -133,32 +103,12 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
       });
     });
 
-    const perBatchAgg = new Map<string, ReturnType<typeof summarizeBatchMarginFromClients>>();
-    for (const b of batches) perBatchAgg.set(b.id, summarizeBatchMarginFromClients(b as BatchLike));
-
-    const enriched = list.map((mc) => {
-      const current = perBatchAgg.get(mc.batchId);
-      const agg = current?.roundId === mc.id ? current : undefined;
-      const batchTotalRequired = mc.requiredAmount ?? 0;
-      const adjustedPending = mc.status === MarginCallStatus.PENDING
-        ? Math.max(0, (mc.requiredAmount ?? 0) - (mc.fulfilledAmount ?? 0))
-        : 0;
-      const singleTopupCount = agg?.clientCountWithSingleTopup ?? 0;
-      const totalSingleFulfilled = mc.fulfilledAmount ?? 0;
-      const needed = mc.requiredAmount ?? 0;
-      const progressPct = needed > 0 ? Math.min(100, ((mc.fulfilledAmount ?? 0) + (needed > 0 ? Math.max(0, totalSingleFulfilled - (mc.fulfilledAmount ?? 0)) : 0)) / needed * 100) : 0;
-      const fulfillmentPctVal = mc.status === MarginCallStatus.PENDING
-        ? Math.min(100, ((batchTotalRequired - adjustedPending) / Math.max(batchTotalRequired, 1)) * 100)
-        : progressPct;
-      return {
-        ...mc,
-        batchTotalRequired,
-        adjustedPending,
-        singleTopupCount,
-        totalSingleFulfilled,
-        fulfillmentPct: fulfillmentPctVal,
-      };
-    });
+    const enriched = list.map((call) => ({
+      ...call,
+      fulfillmentPct: call.requiredAmount > 0
+        ? Math.min(100, (call.fulfilledAmount ?? 0) / call.requiredAmount * 100)
+        : 0,
+    }));
 
     let result = enriched;
     if (search.trim()) {
@@ -611,55 +561,6 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                         >
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
-                        {mc.status === "PENDING" && (
-                          <RoleGate
-                            allowed={[APP_ROLES.RISK_MANAGER, APP_ROLES.ADMIN]}
-                            auditResource={`margin_call:fulfill:${mc.id}`}
-                            auditAction="button_hidden"
-                          >
-                            <Button
-                              size="sm"
-                              variant="danger"
-                              className="gap-1 h-8 text-xs"
-                              disabled={mc.adjustedPending <= 0.01}
-                              onClick={() => {
-                                const b: any = batches.find((x: any) => x.id === mc.batchId);
-                                if (b && isTopupBlockedByLegacyLedger(b)) {
-                                  window.location.assign(`/batch/${encodeURIComponent(b.id)}`);
-                                  return;
-                                }
-                                const batchTotalRequired = (mc.batchTotalRequired ?? mc.requiredAmount) as number;
-                                const target: FullfillTarget = {
-                                  mcId: mc.id,
-                                  batchId: mc.batchId,
-                                  requiredAmount: mc.requiredAmount,
-                                  batchTotalRequired,
-                                  adjustedPending: mc.adjustedPending,
-                                  perClientFulfilledTotal: mc.totalSingleFulfilled ?? 0,
-                                  singleTopupCount: mc.singleTopupCount ?? 0,
-                                  progressPct: fulfillmentPct,
-                                  batchNumber: mc.batchNumber,
-                                  symbol: mc.symbol,
-                                  stockName: mc.stockName,
-                                  currentMarketValue: b?.currentMarketValue ?? mc.triggerMarketValue ?? 0,
-                                  cumulativeMarginCalls: b?.cumulativeMarginCalls ?? 0,
-                                  initialTotalAmount: b?.initialTotalAmount ?? 0,
-                                  stockPriceAtStart: b?.stockPriceAtStart ?? 0,
-                                  totalShares: b?.totalShares ?? 0,
-                                };
-                                setFulfillTarget(target);
-                                setFulfillOpen(true);
-                              }}
-                            >
-                              <Zap className="h-3 w-3" />
-                              {mc.adjustedPending <= 0.01
-                                ? "客户已单独补齐"
-                                : mc.singleTopupCount > 0
-                                ? `处理剩余 ${formatCurrency(mc.adjustedPending)}`
-                                : "处理补仓"}
-                            </Button>
-                          </RoleGate>
-                        )}
                       </div>
                     </div>
                   );
@@ -669,119 +570,6 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
           </div>
         </CardContent>
       </Card>
-      <ConfirmDialog
-        open={fulfillOpen && !!fulfillTarget}
-        onOpenChange={(v) => {
-          setFulfillOpen(v);
-          if (!v) setFulfillTarget(null);
-        }}
-        tone="danger"
-        title={
-          fulfillTarget && fulfillTarget.singleTopupCount > 0
-            ? "确认补齐剩余缺口（已扣除客户单独补仓部分）"
-            : "确认处理本次补仓"
-        }
-        description={
-          fulfillTarget && fulfillTarget.singleTopupCount > 0
-            ? `本批次已有 ${fulfillTarget.singleTopupCount} 位客户完成单独补仓，本次仅对剩余缺口进行批次级一键分配（按缺口从大到小依次覆盖）。已单独补仓的客户不会被重复分配。`
-            : "按本轮剩余缺口记录 WIN100 补仓金额、成交价格与份额。补仓本金及收益全部归 WIN100，不增加客户原始本金，也不修改股票价格。"
-        }
-        summary={
-          fulfillTarget
-            ? (() => {
-                const hasSingle = fulfillTarget.singleTopupCount > 0;
-                const topupAmount = Math.max(0, fulfillTarget.adjustedPending);
-                const rows: { label: string; value: string; accent?: "primary" | "success" | "danger" | "warning" | "muted" }[] = [
-                  { label: "补仓单 ID", value: fulfillTarget.mcId.slice(-8).toUpperCase(), accent: "muted" },
-                  { label: "批次号", value: fulfillTarget.batchNumber, accent: "primary" },
-                  { label: "股票", value: `${fulfillTarget.symbol} · ${fulfillTarget.stockName}`, accent: "muted" },
-                  { label: "当前到账进度", value: `${fulfillTarget.progressPct.toFixed(0)}%`, accent: "warning" },
-                ];
-                if (hasSingle) {
-                  rows.push(
-                    { label: "批次原始需补仓", value: formatCurrency(fulfillTarget.batchTotalRequired), accent: "muted" },
-                    {
-                      label: `客户已单独补仓 · ${fulfillTarget.singleTopupCount} 位`,
-                      value: formatCurrency(fulfillTarget.perClientFulfilledTotal),
-                      accent: "success",
-                    },
-                    {
-                      label: "本次一键补仓（剩余缺口）",
-                      value: formatCurrency(topupAmount),
-                      accent: "danger",
-                    }
-                  );
-                } else {
-                  rows.push({
-                    label: "需补仓金额",
-                    value: formatCurrency(topupAmount),
-                    accent: "danger",
-                  });
-                }
-                rows.push(
-                  {
-                    label: "补仓后市值",
-                    value: formatCurrency(fulfillTarget.currentMarketValue + topupAmount),
-                    accent: "success",
-                  },
-                  {
-                    label: "累计补仓(含本次)",
-                    value: formatCurrency(fulfillTarget.cumulativeMarginCalls + topupAmount),
-                    accent: "warning",
-                  },
-                  {
-                    label: "初始股价",
-                    value: `$${fulfillTarget.stockPriceAtStart.toFixed(2)}`,
-                    accent: "primary",
-                  }
-                );
-                return rows;
-              })()
-            : []
-        }
-        confirmText={
-          fulfillTarget && fulfillTarget.singleTopupCount > 0
-            ? `一键补齐剩余 ${formatCurrency(Math.max(0, fulfillTarget.adjustedPending))}`
-            : "确认处理补仓"
-        }
-        cancelText="取消"
-        onConfirm={async () => {
-          if (!fulfillTarget) return;
-          const topupAmount = Math.max(0, fulfillTarget.adjustedPending);
-          if (topupAmount <= 0) {
-            setFulfillOpen(false);
-            setFulfillTarget(null);
-            setTick((t) => t + 1);
-            return;
-          }
-          const b: any = batches.find((x: any) => x.id === fulfillTarget.batchId);
-          if (b) {
-            let applied: number;
-            try {
-              applied = commitBatchFinance(b, (draft) => executeInstitutionTopup(draft, {
-                amount: topupAmount, expectedRoundId: fulfillTarget.mcId,
-              }));
-            } catch (err) {
-              if (err instanceof Error && err.name === "RevisionMismatchError") {
-                toast.error(err.message);
-              } else {
-                toast.error(err instanceof Error ? err.message : "补仓失败");
-              }
-              return;
-            }
-            if (applied <= 0) throw new Error("补仓轮次已更新，请刷新后重新确认。");
-            window.dispatchEvent(
-              new CustomEvent("risk-control:margin-fulfilled", {
-                detail: { batchId: fulfillTarget.batchId, amount: applied },
-              })
-            );
-          }
-          setFulfillOpen(false);
-          setFulfillTarget(null);
-          setTick((t) => t + 1);
-        }}
-      />
-
       <Dialog open={!!docTarget} onOpenChange={(v) => { if (!v) setDocTarget(null); }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>

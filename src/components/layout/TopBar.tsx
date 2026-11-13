@@ -36,13 +36,14 @@ import { APP_ROLES } from "@/types/auth";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { Logo } from "@/components/branding/Logo";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { getNotificationLogs, LAST_NOTIFICATIONS_KEY, type NotificationLogEntry, type NotificationPayload } from "@/lib/notifier";
 import { toast } from "sonner";
 import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo, quoteSourceLabel, getCachedQuote } from "@/lib/liveQuote";
 import type { LiveQuoteSettings, BrowserQuote } from "@/lib/liveQuote";
 import { KLineDialog } from "@/components/quote/KLineDialog";
 import { quoteProviderLabel } from "@/lib/quote/providers";
-import { refreshMockDataPrices } from "@/lib/mockData";
+import { getMockData, refreshMockDataPrices } from "@/lib/mockData";
 
 function getQuoteSettings(): LiveQuoteSettings {
   return getLiveQuoteSettings();
@@ -54,6 +55,8 @@ export function TopBar() {
   const [hydrated, setHydrated] = useState(false);
   const [now, setNow] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const router = useRouter();
+  const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [nextUpdateAt, setNextUpdateAt] = useState<number>(0);
@@ -63,6 +66,19 @@ export function TopBar() {
   const [lastReadNotifAt, setLastReadNotifAt] = useState<number>(0);
   const { user, role, logoutToLogin } = useCurrentUser();
   const [quote, setQuote] = useState<LiveQuoteSettings>(() => ({ ...DEFAULT_LIVE_QUOTE }));
+  const searchTerm = searchQuery.trim().toLowerCase();
+  const searchResults = searchFocused && searchTerm && user
+    ? getMockData().batches.flatMap((batch) => {
+        const matches = (value: string | null) => (value ?? "").toLowerCase().includes(searchTerm);
+        const batchMatches = [batch.batchNumber, batch.stockSymbol, batch.stockName,
+          String(new Date(batch.signDate).getUTCFullYear())].some(matches);
+        const client = batch.clients.find((entry) =>
+          (role !== APP_ROLES.BD_MANAGER || (!!user.bdManagerFullName && entry.bdManager === user.bdManagerFullName)) &&
+          [entry.name, entry.bdManager, entry.clientNo ?? ""].some(matches),
+        );
+        return batchMatches || client ? [{ batch, client }] : [];
+      }).slice(0, 8)
+    : [];
   const quoteSymbol = quote.symbol.trim().toUpperCase();
   const [quoteResult, setQuoteResult] = useState<{ symbol: string; value: BrowserQuote } | null>(null);
   const [quoteFetching, setQuoteFetching] = useState(false);
@@ -253,6 +269,9 @@ export function TopBar() {
 
         <div
           data-topbar-search
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setSearchFocused(false);
+          }}
           className={cn(
             "relative max-w-md flex-1 transition-all duration-300",
             searchFocused && "max-w-xl"
@@ -266,9 +285,41 @@ export function TopBar() {
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
+            aria-label="全局搜索"
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setSearchFocused(true);
+            }}
             onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Escape") setSearchFocused(false);
+              if (event.key === "Enter" && searchResults[0]) {
+                event.preventDefault();
+                setSearchQuery("");
+                setSearchFocused(false);
+                router.push(`/batch/${encodeURIComponent(searchResults[0].batch.id)}`);
+              }
+            }}
           />
+          {searchFocused && searchTerm && (
+            <ul aria-label="搜索结果" className="absolute inset-x-0 top-full z-50 mt-1 max-h-80 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+              {searchResults.map(({ batch, client }) => (
+                <li key={batch.id}>
+                  <Link
+                    href={`/batch/${encodeURIComponent(batch.id)}`}
+                    className="block rounded-md px-3 py-2 text-sm hover:bg-secondary focus-visible:bg-secondary"
+                    onClick={() => { setSearchQuery(""); setSearchFocused(false); }}
+                  >
+                    <span className="font-medium">{batch.batchNumber} · {batch.stockSymbol}</span>
+                    {client && <span className="block text-xs text-muted-foreground">{client.name} · {client.bdManager}</span>}
+                  </Link>
+                </li>
+              ))}
+              {searchResults.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">没有匹配的批次</li>}
+            </ul>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2">

@@ -25,6 +25,19 @@ function getDynamicDSTOffsetMinNow(nowMs: number = Date.now()): number {
   return dstOn ? -4 * 60 : -5 * 60;
 }
 
+// https://www.nyse.com/trade/hours-calendars
+const NYSE_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+  "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+  "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+  "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+  "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+  "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+]);
+const NYSE_EARLY_CLOSES = new Set([
+  "2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24",
+]);
+
 export function getNYSEInfo(nowMs: number = Date.now()): {
   offsetMin: number;
   weekdayEN: string;
@@ -47,10 +60,14 @@ export function getNYSEInfo(nowMs: number = Date.now()): {
   const h = d.getUTCHours();
   const m = d.getUTCMinutes();
   const mins = h * 60 + m;
-  const isTradingDay = wd >= 1 && wd <= 5;
-  const inRegular = isTradingDay && mins >= 9 * 60 + 30 && mins <= 16 * 60;
+  const ymd = d.toISOString().slice(0, 10);
+  const isTradingDay = wd >= 1 && wd <= 5 && !NYSE_HOLIDAYS.has(ymd);
+  const earlyClose = NYSE_EARLY_CLOSES.has(ymd);
+  const regularClose = (earlyClose ? 13 : 16) * 60;
+  const afterHoursClose = (earlyClose ? 17 : 20) * 60;
+  const inRegular = isTradingDay && mins >= 9 * 60 + 30 && mins < regularClose;
   const inPre = isTradingDay && mins >= 4 * 60 && mins < 9 * 60 + 30;
-  const inAfter = isTradingDay && mins > 16 * 60 && mins <= 20 * 60;
+  const inAfter = isTradingDay && mins >= regularClose && mins < afterHoursClose;
   let state: "PRE" | "REGULAR" | "AFTER" | "CLOSED" = "CLOSED";
   if (inRegular) state = "REGULAR";
   else if (inPre) state = "PRE";
@@ -63,7 +80,7 @@ export function getNYSEInfo(nowMs: number = Date.now()): {
     weekdayCN: weekdaysCN[wd],
     hour24: h,
     minute: m,
-    ymd: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`,
+    ymd,
     isTradingDay,
     inRegularSession: inRegular,
     inPreMarket: inPre,

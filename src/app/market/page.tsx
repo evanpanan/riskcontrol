@@ -70,13 +70,6 @@ function monthKeyFromDate(value: Date | string | null | undefined): string | nul
   return `${year}/${month}`;
 }
 
-const MARKET_OPEN_HOURS = { startHour: 21, endHour: 4 }; // HK/US crossover 模拟
-
-function isMarketOpen(now = new Date()) {
-  const h = now.getUTCHours() + 8;
-  return (h >= 9 && h < 12) || (h >= 13 && h < 16) || (h >= 21 && h <= 23);
-}
-
 const DEFAULT_WEB_ALERT_SETTINGS = {
   webAlertEnabled: true,
   webAlertSound: true,
@@ -522,7 +515,8 @@ export default function MarketPage() {
     };
   }, [clientStats, summary, totalInitial]);
 
-  const marketOpenNow = isMarketOpen();
+  const marketState = getNYSEInfo().marketState;
+  const marketOpenNow = marketState !== "CLOSED";
 
   const StackedBar = ({ data, height = 36 }: { data: { key: string; value: number; pct: number; color: string }[]; height?: number }) => (
     <div className="w-full" style={{ height }}>
@@ -611,7 +605,7 @@ export default function MarketPage() {
               className="gap-1.5 px-3 py-1"
             >
               <Clock className="h-3 w-3" />
-              {marketOpenNow ? "美股 / 港股 开盘中" : "全球市场休市"}
+              {marketState === "REGULAR" ? "美股交易中" : marketState === "PRE" ? "美股盘前" : marketState === "AFTER" ? "美股盘后" : "美股休市"}
             </Badge>
             <Badge
               variant={

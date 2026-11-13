@@ -26,6 +26,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 export default function AlertsPage() {
+  const [tab, setTab] = useState("alerts");
+  const [showFilters, setShowFilters] = useState(false);
+  const [alertFilter, setAlertFilter] = useState("all");
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const handler = () => setTick((t) => t + 1);
@@ -81,6 +84,12 @@ export default function AlertsPage() {
     })),
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
+  const visibleNotifications = notifications.filter((entry) => {
+    if (alertFilter === "pending") return entry.status === "pending";
+    if (alertFilter === "warning") return entry.severity === "warning";
+    if (alertFilter === "critical") return entry.severity === "critical";
+    return true;
+  });
   const pendingMarginCalls = notifications.filter((entry) => entry.status === "pending").length;
 
   // 邮件 / Telegram 实际发送记录：仅展示发起过外部通道的条目
@@ -112,7 +121,13 @@ export default function AlertsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5">
+          <Button variant="outline" size="sm" className="gap-1.5" aria-expanded={tab === "alerts" && showFilters}
+            onClick={() => {
+              const nextOpen = tab !== "alerts" || !showFilters;
+              setShowFilters(nextOpen);
+              if (!nextOpen) setAlertFilter("all");
+              setTab("alerts");
+            }}>
             <Filter className="h-3.5 w-3.5" />
             筛选
           </Button>
@@ -157,7 +172,7 @@ export default function AlertsPage() {
 
       </div>
 
-      <Tabs defaultValue="alerts" className="w-full">
+      <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="h-9">
           <TabsTrigger value="alerts" className="text-xs gap-1.5 data-[state=active]:text-danger">
             <AlertCircle className="h-3.5 w-3.5" />
@@ -180,16 +195,28 @@ export default function AlertsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
+              {showFilters && (
+                <label className="mb-4 flex items-center gap-2 text-sm">
+                  警报筛选
+                  <select className="rounded-md border bg-background p-2 text-sm" value={alertFilter}
+                    onChange={(event) => setAlertFilter(event.target.value)}>
+                    <option value="all">全部警报</option>
+                    <option value="pending">待处理补仓</option>
+                    <option value="critical">严重警报</option>
+                    <option value="warning">风险预警</option>
+                  </select>
+                </label>
+              )}
               <div className="space-y-0">
-                {notifications.length === 0 ? (
+                {visibleNotifications.length === 0 ? (
                   <div className="text-center py-16 text-muted-foreground">
                     <CheckCircle className="h-10 w-10 mx-auto mb-3 opacity-40" />
-                    <p>当前无风险警报</p>
+                    <p>{alertFilter === "all" ? "当前无风险警报" : "没有符合筛选条件的警报"}</p>
                   </div>
                 ) : (
                   <div className="relative">
                     <div className="absolute left-5 top-2 bottom-2 w-px bg-border" />
-                    {notifications.map((n) => (
+                    {visibleNotifications.map((n) => (
                       <div key={n.id} className="relative pl-14 pb-5 last:pb-0">
                         <div
                           className={cn(
