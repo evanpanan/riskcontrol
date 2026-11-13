@@ -1,6 +1,5 @@
 "use client";
 
-import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { NotificationDispatchHistory } from "@/components/NotificationDispatchHistory";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +18,6 @@ import {
   Clock,
   Building2,
   Filter,
-  Zap,
   XCircle,
   Send,
 } from "lucide-react";
@@ -28,8 +26,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 export default function AlertsPage() {
-  const { role } = useCurrentUser();
-  const canProcessMargin = role === "ADMIN" || role === "RISK_MANAGER";
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const handler = () => setTick((t) => t + 1);
@@ -62,8 +58,6 @@ export default function AlertsPage() {
         return [{
           id: `crit-${b.id}-${mc.id}`,
           severity: "critical" as const,
-          marginCallId: mc.id,
-          remaining: Math.max(0, mc.requiredAmount - (mc.fulfilledAmount ?? 0)),
           batchId: b.id,
           batchNumber: b.batchNumber,
           symbol: b.stockSymbol,
@@ -122,12 +116,10 @@ export default function AlertsPage() {
             <Filter className="h-3.5 w-3.5" />
             筛选
           </Button>
-          <Button asChild size="sm" variant="danger" className="gap-1.5">
-            <Link href="/margin-calls?status=PENDING">
-              <AlertCircle className="h-3.5 w-3.5" />
-              {pendingMarginCalls} 个待处理补仓
-            </Link>
-          </Button>
+          <Badge variant={pendingMarginCalls > 0 ? "danger" : "secondary"} className="gap-1.5">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {pendingMarginCalls} 个待处理补仓
+          </Badge>
         </div>
       </div>
 
@@ -281,14 +273,6 @@ export default function AlertsPage() {
                               <MessageCircle className="h-3.5 w-3.5" />
                               发送提醒
                             </Button>
-                            {canProcessMargin && n.severity === "critical" && n.status === "pending" && n.remaining > 0.01 && (
-                              <Button asChild size="sm" variant="danger" className="gap-1.5 h-8 text-xs ml-auto">
-                                <Link href={`/margin-calls?status=PENDING#margin-call-${encodeURIComponent(n.marginCallId)}`}>
-                                  <Zap className="h-3.5 w-3.5" />
-                                  处理补仓
-                                </Link>
-                              </Button>
-                            )}
                           </div>
                         </div>
                       </div>
