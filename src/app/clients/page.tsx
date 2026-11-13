@@ -1801,8 +1801,11 @@ export default function ClientsPage() {
             <div className="rounded-lg border border-border/50 bg-card/40 p-3 space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label className="text-[11px]">客户姓名 *</Label>
+                  <div className="flex h-5 items-center">
+                    <Label htmlFor="add-client-name" className="text-[11px]">客户姓名 *</Label>
+                  </div>
                   <Input
+                    id="add-client-name"
                     value={addForm.name}
                     onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
                     placeholder="例：张伟 / Jennifer Zhang"
@@ -1811,8 +1814,8 @@ export default function ClientsPage() {
                   {addErrors.name && <p className="text-[10px] text-danger font-mono">{addErrors.name}</p>}
                 </div>
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <Label className="text-[11px]">投资本金（USD）*</Label>
+                  <div className="flex h-5 items-center justify-between gap-2">
+                    <Label htmlFor="add-client-investment" className="text-[11px]">投资本金（USD）*</Label>
                     {addClientTier && (
                       <Badge variant={addClientTier === "VIP" ? "primary" : "secondary"} className="text-[10px]">
                         {addClientTier}
@@ -1822,6 +1825,7 @@ export default function ClientsPage() {
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground">$</span>
                     <Input
+                      id="add-client-investment"
                       value={addForm.investment}
                       onChange={(e) => {
                         const v = e.target.value.replace(/[^0-9.]/g, "");
