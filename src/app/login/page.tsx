@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Shield,
+  Users,
+  BadgeCheck,
   Mail,
   Lock,
   Eye,
@@ -28,6 +30,13 @@ import { logAudit } from "@/lib/auth/audit";
 import styles from "./login.module.css";
 
 const PASSWORD_MIN_LENGTH = 6;
+
+const loginFeatures = [
+  { title: "角色权限分离", icon: Shield },
+  { title: "客户归属锁定", icon: Users },
+  { title: "补仓自动预警", icon: AlertTriangle },
+  { title: "结算与审计", icon: BadgeCheck },
+];
 
 function validatePassword(v: string): { ok: boolean; hint?: string } {
   if (!v) return { ok: false, hint: "请输入密码" };
@@ -161,16 +170,34 @@ function LoginPageInner() {
       <div data-login-content className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 sm:px-10">
         <Link href="/" className="mt-6 flex w-fit items-center gap-3 rounded-lg sm:mt-9">
           <Logo size={42} />
-          <span className="text-lg font-semibold tracking-tight">RiskControl</span>
+          <span className={cn(styles.brand, "text-lg font-semibold tracking-tight")}>RiskControl</span>
         </Link>
 
         <div className="grid flex-1 items-center gap-10 py-10 lg:grid-cols-[1.15fr_1fr]">
-          <div className={cn(styles.visual, "relative mx-auto hidden lg:grid")} aria-hidden="true">
-            <div className={styles.orbit} />
-            <div className={styles.orbit} />
-            <div className={styles.orbit} />
-            <div className={styles.core}><Shield className="h-12 w-12 text-sky-100" strokeWidth={1.25} /></div>
-          </div>
+          <ul className={styles.features} aria-label="平台功能">
+            {loginFeatures.map(({ title, icon: Icon }) => (
+              <li key={title}>
+                <div
+                  className={styles.feature}
+                  onPointerMove={(event) => {
+                    if (event.pointerType !== "mouse" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+                    const bounds = (event.currentTarget.parentElement ?? event.currentTarget).getBoundingClientRect();
+                    const x = (event.clientX - bounds.left) / bounds.width - 0.5;
+                    const y = (event.clientY - bounds.top) / bounds.height - 0.5;
+                    event.currentTarget.style.setProperty("--tilt-x", `${-y * 14}deg`);
+                    event.currentTarget.style.setProperty("--tilt-y", `${x * 14}deg`);
+                  }}
+                  onPointerLeave={(event) => {
+                    event.currentTarget.style.removeProperty("--tilt-x");
+                    event.currentTarget.style.removeProperty("--tilt-y");
+                  }}
+                >
+                  <span className={styles.featureIcon}><Icon aria-hidden className="h-6 w-6" strokeWidth={1.6} /></span>
+                  <span className="text-sm font-semibold tracking-wide">{title}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
 
           <div className="mx-auto w-full max-w-[440px]">
             <Card className={cn(styles.panel, "overflow-hidden rounded-3xl")}>

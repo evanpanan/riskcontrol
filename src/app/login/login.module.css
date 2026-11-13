@@ -12,53 +12,67 @@
   background-size: 42px 42px;
   mask-image: radial-gradient(ellipse at 32% 53%, black 10%, transparent 73%);
 }
-.visual {
+.brand { color: #ead8ac; }
+.features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  width: min(100%, 490px);
+  margin-inline: auto;
+}
+.features li {
+  min-width: 0;
+  animation: enter .6s ease-out both;
+}
+.features li:nth-child(2) { animation-delay: .09s; }
+.features li:nth-child(3) { animation-delay: .18s; }
+.features li:nth-child(4) { animation-delay: .27s; }
+.feature {
+  position: relative;
   isolation: isolate;
-  aspect-ratio: 1;
-  display: grid;
-  place-items: center;
-  width: min(100%, 520px);
+  overflow: hidden;
+  display: flex;
+  min-height: 144px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid #c9ad703b;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #25334c, #101a2d 72%);
+  box-shadow: inset 0 1px 0 #ead8ac20, 0 16px 35px #0003;
+  transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
 }
-.visual::before {
+.feature::before {
   content: "";
   position: absolute;
-  inset: 14%;
-  border-radius: 50%;
-  background: radial-gradient(circle, #8aabff47, #235cef23 43%, transparent 71%);
-  animation: breathe 7s ease-in-out infinite alternate;
+  z-index: -1;
+  inset: 0;
+  background: radial-gradient(ellipse at 12% 0%, #d8bf863b, transparent 68%);
+  opacity: .34;
+  animation: cardGlow 7s ease-in-out infinite alternate;
 }
-.orbit {
-  position: absolute;
-  inset: 12%;
-  border: 1px solid #9ecbff42;
-  border-radius: 50%;
-  transform: rotate(-32deg) scaleY(.63);
-  background: conic-gradient(from 30deg, transparent 60%, #6ebdff28 93%, transparent);
-}
-.orbit:nth-child(2) { inset: 6%; transform: rotate(34deg) scaleY(.61); }
-.orbit:nth-child(3) { inset: 1%; transform: rotate(83deg) scaleY(.58); }
-.orbit::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border: 2px solid transparent;
-  border-top-color: #83caff;
-  border-radius: 50%;
-  filter: drop-shadow(0 0 6px #66bbff);
-  animation: orbit 13s linear infinite;
-}
-.orbit:nth-child(2)::after { animation-duration: 19s; animation-direction: reverse; }
-.orbit:nth-child(3)::after { animation-duration: 24s; }
-.core {
+.features li:nth-child(2) .feature::before { animation-delay: -1.6s; }
+.features li:nth-child(3) .feature::before { animation-delay: -3.2s; }
+.features li:nth-child(4) .feature::before { animation-delay: -4.8s; }
+.featureIcon {
   display: grid;
   place-items: center;
-  width: 29%;
-  aspect-ratio: 1;
-  border-radius: 28%;
-  border: 1px solid #b3d2ff5e;
-  background: linear-gradient(145deg, #365380, #131d36 65%);
-  box-shadow: inset 0 1px 0 #c6ddff70, 0 0 72px #568eff62;
-  transform: rotate(-10deg);
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: #ead8ac;
+  background: #d8bf861a;
+  border: 1px solid #d8bf8640;
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .feature:hover {
+    transform: perspective(650px) translateY(-5px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+    border-color: #d8bf86aa;
+    box-shadow: inset 0 1px 0 #ead8ac35, 0 16px 36px #0005, 0 0 22px #c9ad7024;
+  }
+  .feature:hover::before { animation: none; opacity: 1; }
 }
 .panel {
   background: linear-gradient(145deg, #17243de8, #0d172beb);
@@ -78,13 +92,12 @@
 .submit { transition: box-shadow .2s, transform .2s; }
 .submit:hover:not(:disabled) { box-shadow: 0 0 25px #6093ff75; transform: translateY(-1px); }
 .submit:active:not(:disabled) { transform: translateY(1px); }
-@keyframes orbit { to { transform: rotate(360deg); } }
-@keyframes breathe { to { opacity: .55; transform: scale(.9); } }
+@keyframes cardGlow { to { opacity: .85; } }
 @keyframes enter { from { opacity: 0; transform: translateY(10px); } }
 @media (prefers-reduced-motion: reduce) {
   .shell *, .shell *::before, .shell *::after { animation: none !important; transition: none !important; }
   .ambient { background: radial-gradient(ellipse at 28% 48%, #287aff25, transparent 65%); }
 }
 @media (max-width: 1023px) {
-  .visual { display: none; }
+  .features { display: none; }
 }
