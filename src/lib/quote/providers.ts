@@ -83,13 +83,13 @@ function _aggCandlesTo4H(raw: HistoryCandle[]): HistoryCandle[] {
   return out;
 }
 
-export async function finnhubHistory(symbol: string, period: HistoryPeriod): Promise<HistoryCandle[]> {
+export async function finnhubHistory(symbol: string, period: HistoryPeriod, bounds?: { from: number; to: number }): Promise<HistoryCandle[]> {
   const key = getFinnhubKey();
   if (!key) throw new Error("Finnhub 行情授权未配置，请联系系统运维");
   const s = symbol.trim().toUpperCase();
   const cfg = HISTORY_PERIOD_CONFIG[period];
-  const toSec = Math.floor(Date.now() / 1000);
-  const fromSec = Math.max(0, toSec - cfg.calendarDays * 24 * 3600);
+  const toSec = Math.floor((bounds?.to ?? Date.now()) / 1000);
+  const fromSec = bounds ? Math.floor(bounds.from / 1000) : Math.max(0, toSec - cfg.calendarDays * 24 * 3600);
   let resolution = cfg.finnhubResolution;
   const is4HAgg = period === "4H";
   if (is4HAgg) resolution = "60";
@@ -295,8 +295,11 @@ export async function yahooFinanceRealtime(symbol: string): Promise<RealtimeQuot
   throw lastErr ?? new Error("Yahoo all hosts failed");
 }
 
-export async function yahooFinanceHistory(symbol: string, period: HistoryPeriod): Promise<HistoryCandle[]> {
-  const { p1, p2, interval } = yahooPeriodSeconds(period);
+export async function yahooFinanceHistory(symbol: string, period: HistoryPeriod, bounds?: { from: number; to: number }): Promise<HistoryCandle[]> {
+  const defaults = yahooPeriodSeconds(period);
+  const { interval } = defaults;
+  const p1 = bounds ? Math.floor(bounds.from / 1000) : defaults.p1;
+  const p2 = bounds ? Math.floor(bounds.to / 1000) : defaults.p2;
   const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${p1}&period2=${p2}&interval=${interval}`;
   let lastErr: any = null;
   for (const host of ["query1", "query2"]) {
@@ -347,13 +350,13 @@ export async function stooqRealtime(symbol: string): Promise<RealtimeQuote> {
   };
 }
 
-export async function stooqHistory(symbol: string, period: HistoryPeriod): Promise<HistoryCandle[]> {
+export async function stooqHistory(symbol: string, period: HistoryPeriod, bounds?: { from: number; to: number }): Promise<HistoryCandle[]> {
   const cfg = HISTORY_PERIOD_CONFIG[period];
   const days = cfg.calendarDays;
-  const d2 = new Date();
-  const d1 = new Date(Date.now() - days * 24 * 3600 * 1000);
+  const d2 = new Date(bounds ? bounds.to - 1 : Date.now());
+  const d1 = new Date(bounds?.from ?? Date.now() - days * 24 * 3600 * 1000);
   const fmt = (d: Date) =>
-    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
   let interval = "d";
   if (cfg.isIntraday) {
     switch (cfg.interval) {
@@ -448,11 +451,12 @@ export async function nasdaqRealtime(symbol: string): Promise<RealtimeQuote> {
   };
 }
 
-export async function nasdaqHistory(symbol: string, period: HistoryPeriod): Promise<HistoryCandle[]> {
+export async function nasdaqHistory(symbol: string, period: HistoryPeriod, bounds?: { from: number; to: number }): Promise<HistoryCandle[]> {
   const cfg = HISTORY_PERIOD_CONFIG[period];
-  const days = cfg.calendarDays;
+  const days = bounds ? Math.ceil((bounds.to - bounds.from) / 86400000) : cfg.calendarDays;
   const limit = Math.max(30, Math.min(10000, Math.floor(days * 1.4) + 10));
-  const fromdateMs = Date.now() - days * 24 * 3600 * 1000;
+  const fromdateMs = bounds?.from ?? Date.now() - days * 24 * 3600 * 1000;
+  const end = bounds ? `&todate=${new Date(bounds.to - 1).toISOString().slice(0, 10)}` : "";
   const url =
     `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${new Date(fromdateMs).toISOString().slice(0, 10)}&limit=${limit}`;
   const res = await timeout(
