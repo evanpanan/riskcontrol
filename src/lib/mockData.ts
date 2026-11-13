@@ -978,7 +978,7 @@ export function isLedgerEmpty(): boolean {
   if (typeof window === "undefined") return false;
   if (isWorkspaceHydrated()) {
     const rec = readWorkspaceRecord<{ empty?: boolean }>("meta", "empty");
-    return rec?.payload?.empty === true;
+    if (rec) return rec.payload?.empty === true;
   }
   try {
     return window.localStorage.getItem(EMPTY_LEDGER_KEY) === "1";

@@ -55,7 +55,7 @@ export default function Win100LedgerPage() {
     };
   }, []);
 
-  const ledger = useMemo(() => buildWin100Ledger(batches), [batches]);
+  const ledger = useMemo(() => buildWin100Ledger(batches), [batches, tick]);
 
   const exportReport = () => {
     const lines: string[] = [];
@@ -114,6 +114,10 @@ export default function Win100LedgerPage() {
   const printReport = () => {
     window.print();
   };
+
+  if (batches.length === 0) {
+    return <p className="rounded-xl border border-border p-6 text-sm text-muted-foreground">暂无 WIN100 台账记录。</p>;
+  }
 
   return (
     <div className="space-y-6 print:space-y-4">

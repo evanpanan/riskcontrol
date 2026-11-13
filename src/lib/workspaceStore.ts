@@ -300,6 +300,9 @@ export async function flushWorkspaceWrites(): Promise<void> {
 }
 
 function applyRemoteRecords(records: RemoteRecord[], replaceAll: boolean): boolean {
+  const reset = records.find((record) => record.kind === 'meta' && record.key === 'empty');
+  const resetChanged = replaceAll && (reset?.payload as { empty?: boolean } | undefined)?.empty === true &&
+    reset?.revision !== slots.get(slotKey('meta', 'empty'))?.serverRevision;
   const seen = new Set<string>();
   let changed = false;
   for (const rec of records) {
@@ -329,7 +332,8 @@ function applyRemoteRecords(records: RemoteRecord[], replaceAll: boolean): boole
   if (replaceAll) {
     for (const [k, slot] of slots.entries()) {
       if (seen.has(k)) continue;
-      if (slot.queue.length > 0 || slot.inflight) continue;
+      const clearedBusinessKind = resetChanged && ['ledger', 'patches', 'client_status'].includes(slot.kind);
+      if (!clearedBusinessKind && (slot.queue.length > 0 || slot.inflight)) continue;
       slots.delete(k);
       changed = true;
     }
@@ -386,8 +390,10 @@ export async function hydrateWorkspace(): Promise<boolean> {
     try {
       const data = await fetchStore(null);
       if (data?.ok && Array.isArray(data.records)) {
-        applyRemoteRecords(data.records, true);
+        const changed = applyRemoteRecords(data.records, true);
         workspaceVersion = data.version ?? null;
+        hydrated = true;
+        announceRemoteChange(changed);
       } else {
         writeBlocked = true;
       }

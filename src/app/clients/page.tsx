@@ -79,14 +79,7 @@ import Link from "next/link";
 import { ClientStatus } from "@prisma/client";
 import { mergeClientStatusesOnClientList } from "@/lib/clientStatusStore";
 
-const BD_OPTIONS_ADD = [
-  "李晓明 (Evan Li)",
-  "王思远 (Sylvia Wang)",
-  "张志强 (Jack Zhang)",
-  "刘佳 (Jennifer Liu)",
-  "陈志远 (Daniel Chen)",
-  "林晓雯 (Sharon Lin)",
-];
+const UNASSIGNED_MANAGER = "__unassigned__";
 
 export default function ClientsPage() {
   const initialMock = getMockData();
@@ -200,6 +193,19 @@ export default function ClientsPage() {
   // Phase 4: 自然人展开状态 — 记录已展开查看子账户列表的自然人 key
   const [expandedPersons, setExpandedPersons] = useState<Set<string>>(new Set());
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
+  const [managerOptions, setManagerOptions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!user?.id) return;
+    const controller = new AbortController();
+    fetch("/api/data/clients/managers", { cache: "no-store", signal: controller.signal })
+      .then((response) => response.ok ? response.json() : { managers: [] })
+      .then(({ managers }) => {
+        if (!controller.signal.aborted) setManagerOptions(managers);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [user?.id]);
+
   const allowCreateBatch = canCreateBatch(role);
 
   useEffect(() => {
@@ -291,7 +297,8 @@ export default function ClientsPage() {
     return () => { cancelled = true; };
   }, [rawAllClients, user]);
 
-  const roleFilteredClients: ClientLike[] = apiFilteredClients ?? fallbackFiltered;
+  const currentClientIds = useMemo(() => new Set(rawAllClients.map((client) => client.id)), [rawAllClients]);
+  const roleFilteredClients: ClientLike[] = apiFilteredClients?.filter((client) => currentClientIds.has(client.id)) ?? fallbackFiltered;
 
   useEffect(() => {
     const currentMap: Record<string, number> = {};
@@ -335,7 +342,7 @@ export default function ClientsPage() {
     if (isBdManager && bdManagerFullName) {
       set.add(bdManagerFullName);
     } else {
-      batches.forEach((b) => b.clients?.forEach((c) => set.add(c.bdManager)));
+      batches.forEach((b) => b.clients?.forEach((c) => c.bdManager && set.add(c.bdManager)));
     }
     return Array.from(set);
   }, [batches, isBdManager, bdManagerFullName]);
@@ -465,8 +472,7 @@ export default function ClientsPage() {
     if (!addForm.name.trim() || addForm.name.trim().length < 2) errs.name = "至少 2 个字符";
     const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, ""));
     if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
-    if (!addForm.batchId) errs.batchId = "请选择所属批次";
-    if (!addForm.bdManager) errs.bdManager = "请选择 商务经理";
+    if (!batches.some((batch) => batch.id === addForm.batchId)) errs.batchId = "请选择有效的所属批次";
     const entryPrice = Number(addForm.entryPrice.replace(/[^0-9.]/g, ""));
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) errs.entryPrice = "请填写有效的客户入场价";
     setAddErrors(errs);
@@ -604,7 +610,7 @@ export default function ClientsPage() {
     const totalInvestMap = new Map<string, number>();
     for (const c of roleFilteredClients as any[]) {
       const key = `${String(c.name ?? "")}\u0001${String(c.bdManager ?? "")}`;
-      if (!c.name || !c.bdManager) continue;
+      if (!c.name) continue;
       const invAmt = Number(c.investmentAmount ?? 0);
       const signDateRaw = c.signDate ? new Date(c.signDate) : null;
       const next = {
@@ -651,26 +657,26 @@ export default function ClientsPage() {
   }, [roleFilteredClients]);
 
   const getPersonBatches = (c: any) => {
-    if (!c?.name || !c?.bdManager) return [];
+    if (!c?.name) return [];
     const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
     return (personBatchIndex.batchMap.get(key) ?? []).map(({ batchId, batchNumber }) => ({ batchId, batchNumber }));
   };
 
   const getPersonFirstSignDate = (c: any): Date | null => {
-    if (!c?.name || !c?.bdManager) return c.signDate ? new Date(c.signDate) : null;
+    if (!c?.name) return c.signDate ? new Date(c.signDate) : null;
     const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
     return personBatchIndex.firstSignDateMap.get(key) ?? (c.signDate ? new Date(c.signDate) : null);
   };
 
   const getPersonLatestInvestment = (c: any): number => {
-    if (!c?.name || !c?.bdManager) return Number(c?.investmentAmount ?? 0);
+    if (!c?.name) return Number(c?.investmentAmount ?? 0);
     const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
     const latest = personBatchIndex.latestBatchMap.get(key);
     return latest ? latest.investmentAmount : Number(c?.investmentAmount ?? 0);
   };
 
   const getPersonTotalInvestment = (c: any): number => {
-    if (!c?.name || !c?.bdManager) return Number(c?.investmentAmount ?? 0);
+    if (!c?.name) return Number(c?.investmentAmount ?? 0);
     const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
     return personBatchIndex.totalInvestMap.get(key) ?? Number(c?.investmentAmount ?? 0);
   };
@@ -691,7 +697,7 @@ export default function ClientsPage() {
       latestClientNo: string | null;
     }>();
     for (const c of allClients as any[]) {
-      if (!c?.name || !c?.bdManager) continue;
+      if (!c?.name) continue;
       const key = `${String(c.name)}\u0001${String(c.bdManager)}`;
       const inv = Number(c.investmentAmount ?? 0);
       const existing = groups.get(key);
@@ -744,7 +750,7 @@ export default function ClientsPage() {
     // Phase 4: 自然人数量 = 去重后的「姓名+商务经理」组合数
     const personKeys = new Set<string>();
     for (const c of allClients as any[]) {
-      if (c?.name && c?.bdManager) personKeys.add(`${String(c.name)}\u0001${String(c.bdManager)}`);
+      if (c?.name) personKeys.add(`${String(c.name)}\u0001${String(c.bdManager)}`);
     }
     return {
       totalClients: personKeys.size,           // 自然人数量（去重）
@@ -883,7 +889,7 @@ export default function ClientsPage() {
                   setAddForm({
                     name: "",
                     investment: "",
-                    bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                    bdManager: bdManagerFullName ?? "",
                     batchId: batches[0]?.id ?? "",
                     signDate: new Date().toISOString().split("T")[0],
                     entryPrice: Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0) > 0
@@ -1174,7 +1180,7 @@ export default function ClientsPage() {
                                     setAddForm({
                                       name: "",
                                       investment: "",
-                                      bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                                      bdManager: bdManagerFullName ?? "",
                                       batchId: batch.id,
                                       signDate: new Date().toISOString().split("T")[0],
                                       entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
@@ -1305,7 +1311,7 @@ export default function ClientsPage() {
                               setAddForm({
                                 name: "",
                                 investment: "",
-                                bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                                bdManager: bdManagerFullName ?? "",
                                 batchId: batch.id,
                                 signDate: new Date().toISOString().split("T")[0],
                                 entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
@@ -1388,7 +1394,7 @@ export default function ClientsPage() {
                       setAddForm({
                         name: "",
                         investment: "",
-                        bdManager: bdManagerFullName ?? BD_OPTIONS_ADD[0],
+                        bdManager: bdManagerFullName ?? "",
                         batchId: selectedFilteredBatch.id,
                         signDate: new Date().toISOString().split("T")[0],
                         entryPrice: Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0) > 0
@@ -1550,9 +1556,9 @@ export default function ClientsPage() {
                           </div>
                         </div>
                         <div className="col-span-2 min-w-0">
-                          <Link href={`/bd/${encodeURIComponent(g.bdManager)}`} className="text-xs hover:text-primary hover:underline inline-flex items-center text-left" onClick={(e) => e.stopPropagation()}>
+                          {g.bdManager ? (<Link href={`/bd/${encodeURIComponent(g.bdManager)}`} className="text-xs hover:text-primary hover:underline inline-flex items-center text-left" onClick={(e) => e.stopPropagation()}>
                             <span className="truncate">{g.bdManager}</span>
-                          </Link>
+                          </Link>) : <span className="text-xs text-muted-foreground">未分配</span>}
                         </div>
                         <div className="col-span-2 min-w-0" onClick={(e) => e.stopPropagation()}>
                           <div className="flex flex-wrap gap-1 items-center">
@@ -1698,7 +1704,7 @@ export default function ClientsPage() {
                                         setEditForm({
                                           name: String(c.name ?? ""),
                                           investment: Number(c.investmentAmount || 0).toFixed(2),
-                                          bdManager: String(c.bdManager ?? bdManagerFullName ?? BD_OPTIONS_ADD[0]),
+                                          bdManager: String(c.bdManager ?? bdManagerFullName ?? ""),
                                           signDate: (c.signDate ? new Date(c.signDate) : new Date()).toISOString().split("T")[0],
                                           status: (c.status as ClientStatus) || ClientStatus.ACTIVE,
                                         });
@@ -1933,17 +1939,18 @@ export default function ClientsPage() {
                   {addErrors.batchId && <p className="text-[10px] text-danger font-mono">{addErrors.batchId}</p>}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px]">商务经理*</Label>
+                  <Label className="text-[11px]">商务经理（选填）</Label>
                   <Select
-                    value={addForm.bdManager || ""}
-                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v })}
+                    value={addForm.bdManager || UNASSIGNED_MANAGER}
+                    onValueChange={(v) => setAddForm({ ...addForm, bdManager: v === UNASSIGNED_MANAGER ? "" : v })}
                     disabled={!!bdManagerFullName}
                   >
                     <SelectTrigger className={cn(addErrors.bdManager && "border-danger ring-danger/20")}>
                       <SelectValue placeholder="选择 商务经理" />
                     </SelectTrigger>
                     <SelectContent>
-                      {BD_OPTIONS_ADD.map((b) => (
+                      <SelectItem value={UNASSIGNED_MANAGER}>未分配</SelectItem>
+                      {managerOptions.map((b) => (
                         <SelectItem key={b} value={b}>{b}</SelectItem>
                       ))}
                     </SelectContent>
@@ -2175,17 +2182,18 @@ export default function ClientsPage() {
                   )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px]">商务经理*</Label>
+                  <Label className="text-[11px]">商务经理（选填）</Label>
                   <Select
-                    value={editForm.bdManager || ""}
-                    onValueChange={(v) => setEditForm({ ...editForm, bdManager: v })}
+                    value={editForm.bdManager || UNASSIGNED_MANAGER}
+                    onValueChange={(v) => setEditForm({ ...editForm, bdManager: v === UNASSIGNED_MANAGER ? "" : v })}
                     disabled={!!bdManagerFullName}
                   >
                     <SelectTrigger className={cn(editErrors.bdManager && "border-danger ring-danger/20")}>
                       <SelectValue placeholder="选择 商务经理" />
                     </SelectTrigger>
                     <SelectContent>
-                      {BD_OPTIONS_ADD.map((b) => (
+                      <SelectItem value={UNASSIGNED_MANAGER}>未分配</SelectItem>
+                      {[...new Set([...managerOptions, editForm.bdManager].filter(Boolean))].map((b) => (
                         <SelectItem key={b} value={b}>{b}</SelectItem>
                       ))}
                     </SelectContent>
@@ -2242,7 +2250,6 @@ export default function ClientsPage() {
                   const numAmt = Number(editForm.investment.replace(/[^0-9.]/g, ""));
                   if (!isBdManager) {
                     if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
-                    if (!editForm.bdManager) errs.bdManager = "请选择 商务经理";
                   }
                   setEditErrors(errs);
                   if (Object.keys(errs).length > 0 || !editClientOpen) return;
@@ -2565,12 +2572,12 @@ export default function ClientsPage() {
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-muted-foreground text-xs">负责客户经理</span>
-                        <Link
+                        {client.bdManager ? (<Link
                           href={`/bd/${encodeURIComponent(client.bdManager)}`}
                           className="font-semibold text-xs hover:text-primary hover:underline truncate max-w-[60%]"
                         >
                           {client.bdManager} <ArrowRight className="inline h-3 w-3 ml-1 -translate-y-px opacity-60" />
-                        </Link>
+                        </Link>) : <span className="text-xs text-muted-foreground">未分配</span>}
                       </div>
                       <div className="pt-2 mt-1 border-t border-border/40 text-[10px] text-muted-foreground">
                         注：分成协议按批次单独约定，具体分成请查阅下方批次详情。

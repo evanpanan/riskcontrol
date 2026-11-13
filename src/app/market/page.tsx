@@ -58,7 +58,6 @@ import { Reveal } from "@/components/ui/Reveal";
 import { RiskLevel } from "@prisma/client";
 import { getWebAlertSettings } from "@/lib/webAlertSettings";
 import { getLiveQuoteSettings, DEFAULT_LIVE_QUOTE, type BrowserQuote, fetchQuoteBrowser, quoteSourceLabel } from "@/lib/liveQuote";
-import { BD_MANAGERS } from "@/lib/mockData";
 import { MonthlyBatchesTrend } from "@/components/dashboard/MonthlyBatchesTrend";
 
 function monthKeyFromDate(value: Date | string | null | undefined): string | null {
@@ -211,7 +210,6 @@ export default function MarketPage() {
     if (!hydrated) return;
     fetchRt();
     const s = settings ?? { realtimeTickEnabled: true, realtimeTickIntervalSec: 8 };
-    if (!s.realtimeTickEnabled) return;
     const sec = Math.max(2, s.realtimeTickIntervalSec);
     const id = window.setInterval(fetchRt, sec * 1000);
     return () => window.clearInterval(id);
@@ -221,12 +219,12 @@ export default function MarketPage() {
     const s = settings ?? { realtimeTickEnabled: true, realtimeTickIntervalSec: 8 };
     if (!s.realtimeTickEnabled) return;
     const sec = Math.max(2, s.realtimeTickIntervalSec);
-    const interval = setInterval(() => {
+    const interval = s.realtimeTickEnabled ? setInterval(() => {
       const nyse = getNYSEInfo();
       if (!nyse.shouldBreathe) return;
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
-    }, sec * 1000);
+    }, sec * 1000) : undefined;
     const handler = () => {
       mockDataRef.current = getMockData();
       setTick((t) => t + 1);
@@ -407,12 +405,12 @@ export default function MarketPage() {
   const bdAUMRanking = useMemo(() => {
     const map: Record<string, { clients: number; amount: number }> = {};
     for (const b of batches) for (const c of b.clients ?? []) {
+      if (!c.bdManager) continue;
       if (!map[c.bdManager]) map[c.bdManager] = { clients: 0, amount: 0 };
       map[c.bdManager].clients += 1;
       map[c.bdManager].amount += c.investmentAmount || 0;
     }
     const arr = Object.entries(map).map(([bd, v]) => ({ bd, ...v }));
-    for (const bd of BD_MANAGERS) if (!map[bd]) arr.push({ bd, clients: 0, amount: 0 });
     arr.sort((a, b) => b.amount - a.amount);
     return arr.map((r, i) => ({ ...r, rank: i + 1, fill: i < 3 ? CROWN_COLORS[i] : "hsl(217 91% 60%)" }));
   }, [batches]);
@@ -576,6 +574,10 @@ export default function MarketPage() {
       </div>
     </div>
   );
+
+  if (batches.length === 0) {
+    return <p className="rounded-xl border border-border p-6 text-sm text-muted-foreground">暂无业务数据。新增批次后可查看分析。</p>;
+  }
 
   return (
     <div className="space-y-5 max-w-[1800px] mx-auto">
