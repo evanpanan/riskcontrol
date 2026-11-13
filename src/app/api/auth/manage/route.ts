@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { RC_SESSION_COOKIE } from "@/lib/auth/session";
@@ -128,7 +129,7 @@ export async function GET(req: NextRequest) {
   try {
     const prisma = await getPrisma();
     const all = await prisma.appUser.findMany({
-      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
+      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, bdManagerFullName: true, enabled: true, isPrimaryAdmin: true, createdAt: true, avatarDataUrl: true },
       orderBy: { id: "desc" },
     });
     return NextResponse.json(
@@ -206,13 +207,18 @@ export async function POST(req: NextRequest) {
         passwordSalt: passwordSalt ?? undefined,
         enabled,
       },
-      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
+      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true, isPrimaryAdmin: true, createdAt: true, avatarDataUrl: true },
     });
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", user: created },
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const fields = Array.isArray(err.meta?.target) ? err.meta.target : [];
+      if (fields.includes("email")) return jsonError("该邮箱已创建账号", 409);
+      if (fields.includes("bdManagerFullName")) return jsonError("该商务经理已绑定账号", 409);
+    }
     try { console.error("[manage:post] db unavailable, write rejected:", err?.message ?? String(err)); } catch {}
     return NextResponse.json(
       {

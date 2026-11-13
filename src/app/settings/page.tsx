@@ -35,7 +35,6 @@ import { AuthGuard } from "@/components/auth/AuthGuard";
 import { RoleGate } from "@/components/auth/RoleGate";
 import { APP_ROLES, ROLE_LABELS as APP_ROLE_LABELS } from "@/types/auth";
 import { INSTITUTION_ROLES, useAuthContext } from "@/lib/auth";
-import { hashCustomUserPassword } from "@/lib/auth/password";
 import { logAudit, fetchAuditLogs, type AuditLogEntry, type AuditAction } from "@/lib/auth/audit";
 import {
   AUDIT_ACTION_FILTER_OPTIONS,
@@ -193,11 +192,10 @@ interface SystemAppUser {
   avatarDataUrl?: string;
   enabled: boolean;
   createdAt: string;
-  passwordHash?: string;
-  salt?: string;
+  isPrimaryAdmin?: boolean;
 }
 
-type UserFormState = Omit<SystemAppUser, "id" | "createdAt" | "avatarInitials" | "passwordHash" | "salt"> & {
+type UserFormState = Omit<SystemAppUser, "id" | "createdAt" | "avatarInitials" | "isPrimaryAdmin"> & {
   id?: string;
   password?: string;
   confirmPassword?: string;
@@ -505,92 +503,53 @@ export default function SettingsPage() {
   useEffect(() => { setUsersPage(n => Math.min(n, Math.max(0, Math.ceil(users.length / 8) - 1))); }, [users.length]);
   const [usersLoadError, setUsersLoadError] = useState<string>("");
   const loadRemoteUsers = useCallback(async () => {
+    let cached: SystemAppUser[] = [];
     try {
-      const res = await fetch('/api/auth/manage', { method: 'GET', credentials: 'include', cache: 'no-store', headers: { 'Cache-Control': 'no-store', 'Pragma': 'no-cache' } });
-      if (!res.ok) {
-        if (res.status === 401 || res.status === 403) throw new Error(res.status === 401 ? '未登录' : '仅管理员可查看');
-        throw new Error('暂时无法读取系统账号，请稍后重试');
+      const raw = JSON.parse(localStorage.getItem(USERS_LS_KEY) || "[]");
+      if (Array.isArray(raw)) cached = raw.filter((user) => typeof user?.email === "string");
+    } catch {}
+    try {
+      const response = await fetch("/api/auth/manage", { cache: "no-store" });
+      if (response.status === 401 || response.status === 403) {
+        setUsers([]);
+        setUsersLoadError(response.status === 401 ? "未登录" : "仅管理员可查看");
+        return;
       }
-      const data: any = await res.json();
-      const remote: Array<any> = Array.isArray(data?.users) ? data.users : [];
-      // 把 remote（Prisma AppUser 列）补 shadow 到 localStorage 同步，保持离线降级可读
-      const merged: SystemAppUser[] = remote.map((u: any): SystemAppUser => {
-        const displayName = String(u.displayName ?? '未知用户');
-        const email = String(u.email ?? '');
-        const ai = typeof u.avatarInitials === 'string' && u.avatarInitials.length > 0
-          ? u.avatarInitials
-          : computeInitials(displayName, email);
-        return {
-          id: String(u.id),
-          displayName,
-          email,
-          role: String(u.role) as any,
-          bdManagerFullName: u.bdManagerFullName || undefined,
-          avatarInitials: ai,
-          avatarDataUrl: u.avatarDataUrl || undefined,
-          enabled: u.enabled !== false,
-          createdAt: u.createdAt ?? new Date().toISOString(),
-        };
-      });
-      // 合并已有 localStorage 自定义 shadow（有 passwordHash 或 whatsapp 非空就用 shadow 版本，保持习惯）
-      try {
-        const raw = localStorage.getItem(USERS_LS_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            const byId = new Map<string, SystemAppUser>();
-            for (const r of merged) byId.set(r.id, r);
-            for (const s of parsed) {
-              if (!s || typeof s !== 'object') continue;
-              const sid = String((s as any).id ?? '');
-              if (!sid) continue;
-              const existing = byId.get(sid);
-              if (existing) {
-                const next: SystemAppUser = { ...existing, whatsapp: (s as any).whatsapp ?? existing.whatsapp, passwordHash: (s as any).passwordHash, salt: (s as any).salt };
-                byId.set(sid, next);
-              } else {
-                byId.set(sid, s as SystemAppUser);
-              }
-            }
-            const list = Array.from(byId.values());
-            setUsers(list);
-            try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(list)); } catch {}
-            setUsersLoadError("");
-            return;
-          }
-        }
-      } catch {}
-      setUsers(merged);
+      const data = await response.json();
+      if (!response.ok || data.stored !== "db" || !Array.isArray(data.users))
+        throw new Error("暂时无法读取系统账号，请稍后重试");
+      const localById = new Map(cached.map((user) => [user.id, user]));
+      const list = data.users.map((user: SystemAppUser) => ({
+        ...user,
+        whatsapp: localById.get(user.id)?.whatsapp,
+      }));
+      setUsers(list);
       setUsersLoadError("");
-      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(merged)); } catch {}
-    } catch (err: any) {
-      // 服务端失败：降级读 localStorage 历史
-      setUsersLoadError(err?.message ?? "暂时无法读取系统账号");
-      try {
-        const raw = localStorage.getItem(USERS_LS_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) setUsers(parsed);
-        }
-      } catch {}
+      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(list)); } catch {}
+    } catch {
+      setUsersLoadError("暂时无法读取系统账号，请稍后重试");
+      // Old optimistic entries were appended before the database assigned an ID.
+      const byEmail = new Map<string, SystemAppUser>();
+      for (const user of cached) {
+        const email = user.email.trim().toLowerCase();
+        if (!byEmail.has(email)) byEmail.set(email, user);
+      }
+      setUsers([...byEmail.values()]);
     }
   }, []);
   useEffect(() => {
     void loadRemoteUsers();
   }, [loadRemoteUsers]);
-  useEffect(() => {
-    if (users.length === 0) return;
-    try {
-      localStorage.setItem(USERS_LS_KEY, JSON.stringify(users));
-    } catch (e) {}
-  }, [users]);
   const [usersSaving, setUsersSaving] = useState(false);
+  const userSaveInFlight = useRef(false);
   const [userDlgOpen, setUserDlgOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [uForm, setUForm] = useState<UserFormState>(emptyUserForm());
   const [uErrors, setUErrors] = useState<Record<string, string>>({});
   const [uWA, setUWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
   const uAvatarFileRef = useRef<HTMLInputElement | null>(null);
+
+  const editingPrimaryAdmin = users.some((user) => user.id === editingUserId && user.isPrimaryAdmin);
 
   const openAddUser = () => {
     setEditingUserId(null);
@@ -642,134 +601,72 @@ export default function SettingsPage() {
       toast.error("仅系统管理员可新增或编辑系统账号。");
       return;
     }
-    if (!validateUser()) return;
+    if (usersSaving || userSaveInFlight.current || !validateUser()) return;
+    userSaveInFlight.current = true;
     setUsersSaving(true);
-    const waFinal = buildWhatsApp(uWA.code, uWA.local, uWA.customRaw);
-    const nameTrim = uForm.displayName.trim();
-    const initials = computeInitials(nameTrim, uForm.email);
-    const avatarDataUrl = uForm.avatarDataUrl || undefined;
-    const pwd = (uForm.password ?? "").trim();
-    const payloadLocal: Partial<SystemAppUser> = {
-      displayName: nameTrim,
+    const whatsapp = buildWhatsApp(uWA.code, uWA.local, uWA.customRaw) || undefined;
+    const displayName = uForm.displayName.trim();
+    const payload = {
+      displayName,
       email: uForm.email.trim(),
       role: uForm.role,
-      whatsapp: waFinal || undefined,
       bdManagerFullName: uForm.bdManagerFullName?.trim() || undefined,
-      avatarInitials: initials,
-      avatarDataUrl,
-      enabled: !!uForm.enabled,
+      avatarInitials: computeInitials(displayName, uForm.email),
+      avatarDataUrl: uForm.avatarDataUrl || undefined,
+      enabled: uForm.enabled,
+      password: uForm.password?.trim() || undefined,
     };
-    if (pwd) {
-      const hashed = await hashCustomUserPassword(pwd);
-      payloadLocal.passwordHash = hashed.passwordHash;
-      payloadLocal.salt = hashed.salt;
-    }
-    const usersBefore = users.slice();
-    let optimisticId = editingUserId ?? "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    let nextList: SystemAppUser[];
-    if (editingUserId) {
-      nextList = users.map((u) =>
-        u.id === editingUserId
-          ? ({
-              ...u,
-              ...payloadLocal,
-              id: editingUserId,
-              avatarInitials: initials || u.avatarInitials,
-              avatarDataUrl,
-              whatsapp: waFinal || undefined,
-              password: undefined,
-              confirmPassword: undefined,
-            } as SystemAppUser)
-          : u
-      );
-    } else {
-      const newU: SystemAppUser = {
-        id: optimisticId,
-        displayName: nameTrim,
-        email: uForm.email.trim(),
-        role: uForm.role,
-        whatsapp: waFinal || undefined,
-        bdManagerFullName: uForm.bdManagerFullName?.trim() || undefined,
-        avatarInitials: initials,
-        avatarDataUrl,
-        enabled: !!uForm.enabled,
-        createdAt: new Date().toISOString(),
-        passwordHash: payloadLocal.passwordHash,
-        salt: payloadLocal.salt,
-      };
-      nextList = [...users, newU];
-    }
-    // 先乐观更新 UI（让用户看到提交反馈）
-    setUsers(nextList);
-    try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(nextList)); } catch {}
-
-    let apiOk = false;
-    let storedHint: "db" | "pending" | "failed" | null = null;
-    let apiError: string | null = null;
+    let savedUser: SystemAppUser | undefined;
+    let apiError: string | undefined;
     try {
-      const apiPayload: any = { ...payloadLocal };
-      if (pwd) apiPayload.password = pwd;
-      let url = "/api/auth/manage";
-      let method: "POST" | "PATCH" = "POST";
-      if (editingUserId) {
-        url = `/api/auth/manage/${encodeURIComponent(editingUserId)}`;
-        method = "PATCH";
-      }
-      const resp = await fetch(url, {
-        method,
+      const url = editingUserId
+        ? `/api/auth/manage/${encodeURIComponent(editingUserId)}`
+        : "/api/auth/manage";
+      const response = await fetch(url, {
+        method: editingUserId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        body: JSON.stringify(apiPayload),
+        body: JSON.stringify(payload),
       });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.status === 200 || resp.status === 202) {
-        apiOk = true;
-        storedHint = data?.stored === "db" ? "db" : (data?.stored === "pending" || data?.stored === "degraded") ? "pending" : null;
-        if (!editingUserId && data?.user?.id) {
-          optimisticId = String(data.user.id);
-        }
-      } else {
-        apiError = data?.error ?? "系统暂时无法处理，请稍后重试";
-        storedHint = data?.stored === "failed" ? "failed" : null;
-      }
-    } catch (err: any) {
-      apiError = err?.message ?? "网络错误";
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.user?.id)
+        throw new Error(data.error ?? "系统暂时无法处理，请稍后重试");
+      savedUser = { ...data.user, whatsapp };
+    } catch (error) {
+      apiError = error instanceof Error ? error.message : "网络错误";
     }
-
+    const targetUserId = savedUser?.id ?? editingUserId;
     logAudit({
       action: editingUserId ? "account_update" : "account_create",
       actorId: currentUser?.id,
       actorEmail: currentUser?.email,
       role: currentRole,
-      resource: `settings:account:${optimisticId}`,
+      resource: `settings:account:${targetUserId ?? payload.email}`,
       detail: {
-        targetUserId: optimisticId,
-        targetEmail: uForm.email,
-        targetRole: uForm.role,
-        stored: storedHint,
+        targetUserId,
+        targetEmail: payload.email,
+        targetRole: payload.role,
+        stored: savedUser ? "db" : "failed",
         apiError,
       },
     });
 
-    if (apiOk) {
-      const msg = editingUserId ? "账号已更新" : "账号创建成功";
-      if (storedHint === "pending") toast.success(msg + "（已受理，正在同步）");
-      else toast.success(msg);
+    if (savedUser) {
+      const confirmed = savedUser;
+      const remaining = users.filter((user) =>
+        user.id !== confirmed.id && user.email.trim().toLowerCase() !== confirmed.email,
+      );
+      const next = [confirmed, ...remaining];
+      setUsers(next);
+      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(next)); } catch {}
+      toast.success(editingUserId ? "账号已更新" : "账号创建成功");
       setSaved("user");
       setUserDlgOpen(false);
-      setTimeout(async () => {
-        try { await loadRemoteUsers(); } catch {}
-        try { await refreshMe(); } catch {}
-      }, 280);
+      await loadRemoteUsers();
+      void refreshMe().catch(() => {});
     } else {
-      // 失败：回滚乐观更新 + 清 localStorage 回写备份
-      setUsers(usersBefore);
-      try { localStorage.setItem(USERS_LS_KEY, JSON.stringify(usersBefore)); } catch {}
-      toast.error(
-        (editingUserId ? "更新失败：" : "创建失败：") +
-        (apiError ?? "系统暂不可用") +
-        "（账号未保存，请稍后重试）"
-      );
+      toast.error((editingUserId ? "更新失败：" : "创建失败：") + apiError);
     }
+    userSaveInFlight.current = false;
     setUsersSaving(false);
   };
   const removeUser = (id: string) => {
@@ -2173,7 +2070,7 @@ export default function SettingsPage() {
             <Users className="h-4 w-4 text-primary" />
             系统账号管理
           </CardTitle>
-          <Button size="sm" className="gap-1.5 h-8" onClick={openAddUser}>
+          <Button size="sm" className="gap-1.5 h-8" disabled={usersSaving} onClick={openAddUser}>
             <Plus className="h-3.5 w-3.5" />
             新增账号
           </Button>
@@ -2181,7 +2078,13 @@ export default function SettingsPage() {
         {saved === "user" && <Badge variant="success" className="mt-2 gap-1 text-[10px] w-fit"><CheckCircle2 className="h-2.5 w-2.5" />账号已保存</Badge>}
       </CardHeader>
       <CardContent className="pt-0">
-        {users.length === 0 ? (
+        {usersLoadError && (
+          <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground" role="status">
+            {usersLoadError}
+            <Button size="sm" variant="outline" onClick={() => void loadRemoteUsers()}>重试</Button>
+          </div>
+        )}
+        {users.length === 0 && !usersLoadError ? (
           <div className="text-center py-8 text-[11px] text-muted-foreground">
             <UserPlus className="h-6 w-6 mx-auto mb-2 opacity-50" />
             暂无自定义账号，点击右上角「新增账号」创建
@@ -2215,6 +2118,7 @@ export default function SettingsPage() {
                       >
                         {SYSTEM_ROLE_LABELS[u.role]}
                       </Badge>
+                      {u.isPrimaryAdmin && <Badge variant="outline" className="text-[9px]">首位管理员</Badge>}
                       {!u.enabled && (
                         <Badge variant="secondary" className="text-[9px] h-4 px-1.5 rounded">
                           已停用
@@ -2234,6 +2138,7 @@ export default function SettingsPage() {
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7"
+                        disabled={usersSaving || !!usersLoadError || u.isPrimaryAdmin || u.id === currentUser?.id}
                         onClick={() => toggleUserEnabled(u.id, !u.enabled)}
                       >
                         {u.enabled ? (
@@ -2251,6 +2156,7 @@ export default function SettingsPage() {
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7"
+                    disabled={usersSaving || !!usersLoadError || (u.isPrimaryAdmin && u.id !== currentUser?.id)}
                     onClick={() => openEditUser(u)}
                   >
                     <Edit3 className="h-3.5 w-3.5" />
@@ -2259,6 +2165,7 @@ export default function SettingsPage() {
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-muted-foreground hover:text-danger"
+                    disabled={usersSaving || !!usersLoadError || u.isPrimaryAdmin || u.id === currentUser?.id}
                     onClick={() => removeUser(u.id)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -2416,7 +2323,7 @@ export default function SettingsPage() {
   </Tabs>
 
 {/* ========== 新增/编辑账号 Dialog ========== */}
-<Dialog open={userDlgOpen} onOpenChange={setUserDlgOpen}>
+<Dialog open={userDlgOpen} onOpenChange={(open) => { if (!usersSaving) setUserDlgOpen(open); }}>
   <DialogContent className="sm:max-w-[560px]">
     <DialogHeader>
       <DialogTitle className="flex items-center gap-2">
@@ -2473,6 +2380,7 @@ export default function SettingsPage() {
         <div className="space-y-1.5">
           <Label className="text-xs">角色</Label>
           <Select
+            disabled={editingPrimaryAdmin || usersSaving}
             value={uForm.role}
             onValueChange={(v) => setUForm({ ...uForm, role: v as any })}
           >
@@ -2493,6 +2401,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 h-9 px-3 w-full rounded-md border border-input bg-background">
             <input
               type="checkbox"
+              disabled={editingPrimaryAdmin || editingUserId === currentUser?.id || usersSaving}
               checked={uForm.enabled}
               onChange={(e) => setUForm({ ...uForm, enabled: e.target.checked })}
               className="h-4 w-4 accent-primary"
@@ -2546,12 +2455,12 @@ export default function SettingsPage() {
       )}
     </div>
     <DialogFooter className="gap-2 sm:gap-2">
-      <Button variant="outline" onClick={() => setUserDlgOpen(false)}>
+      <Button variant="outline" disabled={usersSaving} onClick={() => setUserDlgOpen(false)}>
         取消
       </Button>
-      <Button onClick={() => void saveUser()} className="gap-1.5">
+      <Button disabled={usersSaving} onClick={() => void saveUser()} className="gap-1.5">
         <CheckCircle2 className="h-4 w-4" />
-        {editingUserId ? "保存修改" : "创建账号"}
+        {usersSaving ? "正在保存…" : editingUserId ? "保存修改" : "创建账号"}
       </Button>
     </DialogFooter>
   </DialogContent>

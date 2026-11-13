@@ -53,6 +53,7 @@ model AppUser {
   avatarDataUrl      String?
   bdManagerFullName  String?  @unique
   enabled            Boolean  @default(true)
+  isPrimaryAdmin     Boolean  @default(false)
   lastLoginAt        DateTime?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

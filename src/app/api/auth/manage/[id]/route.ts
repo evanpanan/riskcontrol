@@ -196,10 +196,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (Object.keys(patch).length === 0) return jsonError("没有要更新的字段", 400);
   try {
     const prisma = await getPrisma();
-    const updated = await prisma.appUser.update({
+    const target = await prisma.appUser.findUnique({
       where: { id },
+      select: { isPrimaryAdmin: true },
+    });
+    if (!target) return jsonError("账号不存在", 404);
+    if (target.isPrimaryAdmin) {
+      if (id !== guard.actor?.id) return jsonError("首位超级管理员只能由本人修改", 403);
+      if (patch.role && patch.role !== APP_ROLES.ADMIN)
+        return jsonError("首位超级管理员必须保留超级管理员角色", 403);
+      delete patch.role;
+    }
+    const updated = await prisma.appUser.update({
+      where: { id, ...(id !== guard.actor?.id ? { isPrimaryAdmin: false } : {}) },
       data: patch,
-      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true },
+      select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true, isPrimaryAdmin: true, createdAt: true, avatarDataUrl: true },
     });
     // 停用 / 降权 / 改密后，该账号已签发的旧会话必须立即失效，
     // 否则旧凭证在有效期内仍可继续访问（改密尤其需要）。
@@ -235,7 +246,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   if (guard.actor && id === guard.actor.id) return jsonError("不能删除当前登录账号", 400);
   try {
     const prisma = await getPrisma();
-    const removed = await prisma.appUser.delete({ where: { id }, select: { id: true, email: true, displayName: true } });
+    const target = await prisma.appUser.findUnique({ where: { id }, select: { isPrimaryAdmin: true } });
+    if (!target) return jsonError("账号不存在", 404);
+    if (target.isPrimaryAdmin) return jsonError("不能删除首位超级管理员", 403);
+    const removed = await prisma.appUser.delete({ where: { id, isPrimaryAdmin: false }, select: { id: true, email: true, displayName: true } });
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", removed },
       { status: 200, headers: { "Cache-Control": "no-store" } },
