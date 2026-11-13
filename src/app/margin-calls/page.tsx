@@ -189,6 +189,21 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
     );
   }, [batches, search, statusFilter, advBatch, advFrom, advTo]);
 
+  useEffect(() => {
+    const focusCall = () => {
+      const hash = window.location.hash;
+      if (!hash.startsWith("#margin-call-")) return;
+      try {
+        document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: "center" });
+      } catch {
+        // Ignore malformed hashes.
+      }
+    };
+    focusCall();
+    window.addEventListener("hashchange", focusCall);
+    return () => window.removeEventListener("hashchange", focusCall);
+  }, [allCalls.length]);
+
   const stats = useMemo(() => {
     let pending = 0,
       fulfilled = 0,
@@ -506,8 +521,9 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                   return (
                     <div
                       key={mc.id}
+                      id={`margin-call-${mc.id}`}
                       className={cn(
-                        "grid grid-cols-12 items-center px-5 py-4 hover:bg-secondary/30 transition-colors",
+                        "grid grid-cols-12 items-center px-5 py-4 hover:bg-secondary/30 transition-colors target:ring-2 target:ring-inset target:ring-primary",
                         mc.status === "PENDING" && "bg-danger/5 hover:bg-danger/10"
                       )}
                     >

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { NotificationDispatchHistory } from "@/components/NotificationDispatchHistory";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 export default function AlertsPage() {
+  const { role } = useCurrentUser();
+  const canProcessMargin = role === "ADMIN" || role === "RISK_MANAGER";
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const handler = () => setTick((t) => t + 1);
@@ -49,25 +52,27 @@ export default function AlertsPage() {
   void tick;
   const { batches } = getMockData();
   const criticalBatches = batches.filter((b) => b.riskLevel === RiskLevel.CRITICAL);
-  const pendingMarginCalls = batches.reduce(
-    (count, batch) => count + (batch.marginCalls?.filter((call) => call.status === MarginCallStatus.PENDING).length ?? 0),
-    0,
-  );
   const warningBatches = batches.filter((b) => b.riskLevel === RiskLevel.WARNING);
 
   const notifications = [
-    ...criticalBatches.flatMap((b) =>
-      b.marginCalls?.map((mc) => ({
-        id: `crit-${b.id}-${mc.id}`,
-        severity: "critical" as const,
-        batchId: b.id,
-        batchNumber: b.batchNumber,
-        symbol: b.stockSymbol,
-        title: `补仓警报触发 #${b.marginCalls?.indexOf(mc)! + 1}`,
-        message: `批次 ${b.batchNumber} (${b.stockSymbol}) 跌幅 ${(mc.dropPercent * 100).toFixed(1)}%，需补仓 ${formatCurrency(mc.requiredAmount)}`,
-        time: mc.createdAt,
-        status: mc.status === "FULLFILLED" ? "resolved" : "pending",
-      })) || []
+    ...batches.flatMap((b) =>
+      b.marginCalls?.flatMap((mc, index) => {
+        const pending = mc.status === MarginCallStatus.PENDING;
+        if (!pending && b.riskLevel !== RiskLevel.CRITICAL) return [];
+        return [{
+          id: `crit-${b.id}-${mc.id}`,
+          severity: "critical" as const,
+          marginCallId: mc.id,
+          remaining: Math.max(0, mc.requiredAmount - (mc.fulfilledAmount ?? 0)),
+          batchId: b.id,
+          batchNumber: b.batchNumber,
+          symbol: b.stockSymbol,
+          title: `补仓警报触发 #${index + 1}`,
+          message: `批次 ${b.batchNumber} (${b.stockSymbol}) 跌幅 ${(mc.dropPercent * 100).toFixed(1)}%，需补仓 ${formatCurrency(mc.requiredAmount)}`,
+          time: mc.createdAt,
+          status: pending ? "pending" : mc.status === MarginCallStatus.FULLFILLED ? "resolved" : mc.status,
+        }];
+      }) || []
     ),
     ...warningBatches.map((b) => ({
       id: `warn-${b.id}`,
@@ -81,6 +86,8 @@ export default function AlertsPage() {
       status: "active" as const,
     })),
   ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+
+  const pendingMarginCalls = notifications.filter((entry) => entry.status === "pending").length;
 
   // 邮件 / Telegram 实际发送记录：仅展示发起过外部通道的条目
   const sendLogs = getNotificationLogs().filter((entry) =>
@@ -236,6 +243,9 @@ export default function AlertsPage() {
                                     已解决
                                   </Badge>
                                 )}
+                                {n.status === "CANCELLED" && <Badge variant="secondary">已取消</Badge>}
+                                {n.status === "EXPIRED" && <Badge variant="secondary">已过期</Badge>}
+                                {n.status === "OVERDUE" && <Badge variant="warning">已逾期</Badge>}
                                 {n.status === "pending" && (
                                   <Badge variant="danger" className="gap-1 text-[10px] animate-breath-danger">
                                     <Clock className="h-2.5 w-2.5" />
@@ -271,25 +281,12 @@ export default function AlertsPage() {
                               <MessageCircle className="h-3.5 w-3.5" />
                               发送提醒
                             </Button>
-                            {n.status === "pending" && n.severity === "critical" && (
-                              <Button
-                                size="sm"
-                                variant="danger"
-                                className="gap-1.5 h-8 text-xs ml-auto"
-                                onClick={() => {
-                                  const mock = getMockData();
-                                  const b = mock.batches.find((x) => x.id === n.batchId);
-                                  const mc = b?.marginCalls?.find((x) => `crit-${b.id}-${x.id}` === n.id);
-                                  if (mc) {
-                                    mc.status = MarginCallStatus.FULLFILLED;
-                                    mc.fulfilledAmount = mc.requiredAmount;
-                                    mc.fulfilledDate = new Date();
-                                  }
-                                  window.location.reload();
-                                }}
-                              >
-                                <Zap className="h-3.5 w-3.5" />
-                                确认补仓
+                            {canProcessMargin && n.severity === "critical" && n.status === "pending" && n.remaining > 0.01 && (
+                              <Button asChild size="sm" variant="danger" className="gap-1.5 h-8 text-xs ml-auto">
+                                <Link href={`/margin-calls?status=PENDING#margin-call-${encodeURIComponent(n.marginCallId)}`}>
+                                  <Zap className="h-3.5 w-3.5" />
+                                  处理补仓
+                                </Link>
                               </Button>
                             )}
                           </div>
