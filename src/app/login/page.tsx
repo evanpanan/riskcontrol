@@ -32,10 +32,10 @@ import styles from "./login.module.css";
 const PASSWORD_MIN_LENGTH = 6;
 
 const loginFeatures = [
-  { title: "角色权限分离", icon: Shield },
-  { title: "客户归属锁定", icon: Users },
-  { title: "补仓自动预警", icon: AlertTriangle },
-  { title: "结算与审计", icon: BadgeCheck },
+  { title: "角色权限分离", description: "按角色分配查看和操作权限。", icon: Shield },
+  { title: "客户归属锁定", description: "商务经理只查看自己负责的客户。", icon: Users },
+  { title: "补仓自动预警", description: "触发风控阈值时自动发送提醒。", icon: AlertTriangle },
+  { title: "结算与审计", description: "每笔补仓和退出操作均可追溯。", icon: BadgeCheck },
 ];
 
 function validatePassword(v: string): { ok: boolean; hint?: string } {
@@ -175,25 +175,32 @@ function LoginPageInner() {
 
         <div className="grid flex-1 items-center gap-10 py-10 lg:grid-cols-[1.15fr_1fr]">
           <ul className={styles.features} aria-label="平台功能">
-            {loginFeatures.map(({ title, icon: Icon }) => (
+            {loginFeatures.map(({ title, description, icon: Icon }) => (
               <li key={title}>
                 <div
                   className={styles.feature}
                   onPointerMove={(event) => {
                     if (event.pointerType !== "mouse" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
                     const bounds = (event.currentTarget.parentElement ?? event.currentTarget).getBoundingClientRect();
-                    const x = (event.clientX - bounds.left) / bounds.width - 0.5;
-                    const y = (event.clientY - bounds.top) / bounds.height - 0.5;
-                    event.currentTarget.style.setProperty("--tilt-x", `${-y * 14}deg`);
-                    event.currentTarget.style.setProperty("--tilt-y", `${x * 14}deg`);
+                    const x = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+                    const y = Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height));
+                    event.currentTarget.style.setProperty("--tilt-x", `${(0.5 - y) * 20}deg`);
+                    event.currentTarget.style.setProperty("--tilt-y", `${(x - 0.5) * 20}deg`);
+                    event.currentTarget.style.setProperty("--glow-x", `${x * 100}%`);
+                    event.currentTarget.style.setProperty("--glow-y", `${y * 100}%`);
                   }}
                   onPointerLeave={(event) => {
                     event.currentTarget.style.removeProperty("--tilt-x");
                     event.currentTarget.style.removeProperty("--tilt-y");
+                    event.currentTarget.style.removeProperty("--glow-x");
+                    event.currentTarget.style.removeProperty("--glow-y");
                   }}
                 >
                   <span className={styles.featureIcon}><Icon aria-hidden className="h-6 w-6" strokeWidth={1.6} /></span>
-                  <span className="text-sm font-semibold tracking-wide">{title}</span>
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-semibold tracking-wide">{title}</p>
+                    <p className="text-xs leading-relaxed text-slate-300">{description}</p>
+                  </div>
                 </div>
               </li>
             ))}
