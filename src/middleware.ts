@@ -16,8 +16,6 @@ export const config = {
     '/market/:path*',
     '/market',
     '/bd/:path*',
-    '/stress-test/:path*',
-    '/stress-test',
     '/win100-ledger/:path*',
     '/win100-ledger',
   ],

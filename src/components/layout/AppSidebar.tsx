@@ -17,7 +17,6 @@ import {
   Settings,
   Building2,
   Shield,
-  FlaskConical,
   Landmark,
   ChevronsLeft,
   ChevronsRight,
@@ -80,13 +79,6 @@ const NAV_ITEMS: NavItem[] = [
     icon: LineChart,
     href: "/market",
     description: "机构 & 风控多维图表",
-    scope: "institution",
-  },
-  {
-    title: "压力测试",
-    icon: FlaskConical,
-    href: "/stress-test",
-    description: "情景模拟 & 补仓测算",
     scope: "institution",
   },
   {
