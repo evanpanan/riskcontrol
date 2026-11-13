@@ -423,6 +423,16 @@ export default function ClientsPage() {
     [addForm.investment]
   );
 
+  const addClientSplit = Number.isFinite(addClientAmount) && addClientAmount > 100
+    ? calculateProfitSplitRatio(addClientAmount)
+    : null;
+  const addClientTier = addClientSplit
+    ? addClientAmount >= addClientSplit.vipThreshold ? "VIP" : "普通"
+    : null;
+  const addClientSplitLabel = addClientSplit
+    ? `客户 ${Number((addClientSplit.client * 100).toFixed(2))}% / WIN100 ${Number((addClientSplit.institution * 100).toFixed(2))}%`
+    : "—";
+
   const addClientInstitutionAmount = useMemo(
     () => (addClientAmount > 0 ? (addClientAmount / PRIORITY_RATIO) * SUBORDINATE_RATIO : 0),
     [addClientAmount]
@@ -438,10 +448,11 @@ export default function ClientsPage() {
       { label: "所属批次", value: selectedAddBatch?.batchNumber ?? "—", accent: "primary" as const },
       { label: "客户入金", value: addClientAmount > 0 ? formatCurrency(addClientAmount) : "—" },
       { label: "机构应入金", value: addClientInstitutionAmount > 0 ? formatCurrency(addClientInstitutionAmount) : "—", accent: "primary" as const },
+      { label: "档位与分成", value: addClientTier ? `${addClientTier} · ${addClientSplitLabel}` : "—" },
       { label: "客户入场价", value: addForm.entryPrice || "—" },
       { label: "签约日期", value: addForm.signDate || "—" },
     ],
-    [addClientAmount, addClientInstitutionAmount, addForm.entryPrice, addForm.name, addForm.signDate, selectedAddBatch?.batchNumber]
+    [addClientAmount, addClientInstitutionAmount, addClientTier, addClientSplitLabel, addForm.entryPrice, addForm.name, addForm.signDate, selectedAddBatch?.batchNumber]
   );
 
   const editingBatch = useMemo(
@@ -1875,7 +1886,14 @@ export default function ClientsPage() {
                   {addErrors.name && <p className="text-[10px] text-danger font-mono">{addErrors.name}</p>}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px]">投资本金（USD）*</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="text-[11px]">投资本金（USD）*</Label>
+                    {addClientTier && (
+                      <Badge variant={addClientTier === "VIP" ? "primary" : "secondary"} className="text-[10px]">
+                        {addClientTier}
+                      </Badge>
+                    )}
+                  </div>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-mono text-muted-foreground">$</span>
                     <Input
@@ -1888,7 +1906,7 @@ export default function ClientsPage() {
                       }}
                       onBlur={() => {
                         const n = Number(addForm.investment.replace(/[^0-9.]/g, ""));
-                        if (Number.isFinite(n)) {
+                        if (addForm.investment && Number.isFinite(n)) {
                           setAddForm({ ...addForm, investment: n.toFixed(2) });
                         }
                       }}
@@ -1896,6 +1914,9 @@ export default function ClientsPage() {
                       className="pl-7 font-mono tabular-nums"
                     />
                   </div>
+                  <p className="text-[11px] text-muted-foreground" aria-live="polite">
+                    分成比例 <span className="font-medium text-foreground">{addClientSplitLabel}</span>
+                  </p>
                   {addErrors.investment && <p className="text-[10px] text-danger font-mono">{addErrors.investment}</p>}
                 </div>
                 <div className="space-y-1.5">
@@ -2045,12 +2066,6 @@ export default function ClientsPage() {
                 <div>
                   <p className="text-muted-foreground mb-0.5">批次优先池上限</p>
                   <p className="font-mono font-semibold">{selectedAddBatch ? formatCurrency(selectedAddBatch.priorityAmount ?? 0) : "-"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground mb-0.5">分成比例（客户/WIN100）</p>
-                  <p className="font-mono font-semibold">
-                    {addClientAmount > 0 ? `客户${Number((calculateProfitSplitRatio(addClientAmount).client * 100).toFixed(2))}% / WIN100${Number((calculateProfitSplitRatio(addClientAmount).institution * 100).toFixed(2))}%` : "-"}
-                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground mb-0.5">签约日期</p>

@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { FINANCE_STORE_KEY, getMockData, reloadMockData } from "@/lib/mockData";
 import { calculatePortfolioSummary } from "@/lib/riskEngine";
-import { formatCurrency } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -15,7 +14,6 @@ import {
   Users,
   LineChart,
   Settings,
-  Building2,
   Shield,
   Landmark,
   ChevronsLeft,
@@ -343,26 +341,7 @@ export function AppSidebar() {
         })}
       </nav>
 
-      {collapsed ? null : !isBD ? (
-        <div className="p-4 border-t border-border/60">
-          <div className="rounded-xl p-4 gradient-card border border-border/60">
-            <div className="flex items-center gap-2 mb-3">
-              <Building2 className="h-4 w-4 text-primary" />
-              <span className="text-xs font-semibold">WIN100 担保资金池</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">WIN100 累计补仓</span>
-                <span className="text-xs font-bold text-warning tabular-nums">{summary ? formatCurrency(summary.totalMarginCalls) : "--"}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">在管资产总额</span>
-                <span className="text-xs font-bold text-success tabular-nums">{summary ? formatCurrency(summary.totalAUM) : "--"}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
+      {!collapsed && isBD && (
         <div className="p-4 border-t border-border/60">
           <div className="rounded-xl p-4 border border-border/50 bg-background/40">
             <div className="flex items-center gap-2 mb-2">
