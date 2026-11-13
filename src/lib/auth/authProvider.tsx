@@ -307,13 +307,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!res.ok) {
         cache.clear();
         setUser((prev) => (prev ? null : prev));
-        return null;
+        if (res.status === 401) return null;
+        if (res.status === 429) {
+          const seconds = Number(res.headers.get('Retry-After'));
+          throw new Error(seconds > 0
+            ? `登录尝试过于频繁，请在 ${seconds} 秒后重试。`
+            : '登录尝试过于频繁，请稍后重试。');
+        }
+        throw new Error('登录服务暂时不可用，请稍后重试。');
       }
       const data = await res.json() as { ok?: boolean; user?: AppSessionUser };
       if (!data?.ok || !data?.user) {
         cache.clear();
         setUser((prev) => (prev ? null : prev));
-        return null;
+        throw new Error('登录服务暂时不可用，请稍后重试。');
       }
       const fetched: AppSessionUser = {
         id: data.user.id,
@@ -327,10 +334,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cache.set(fetched);
       setSession(fetched);
       return fetched;
-    } catch {
+    } catch (error) {
       cache.clear();
       setUser((prev) => (prev ? null : prev));
-      return null;
+      throw error instanceof TypeError || error instanceof SyntaxError
+        ? new Error('无法连接登录服务，请检查网络后重试。')
+        : error;
     }
   }, [setSession]);
 

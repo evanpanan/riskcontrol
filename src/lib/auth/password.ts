@@ -182,64 +182,57 @@ export async function resolvePrismaAccountByIdentifier(
 ): Promise<ResolvedPrismaAccount | null> {
   if (prismaOpts?.skip) return null;
   if (typeof globalThis === 'undefined') return null;
-  let prisma: any;
-  try {
-    const mod = await import('@/lib/prisma');
-    prisma = mod?.prisma;
-  } catch {
-    return null;
-  }
-  if (!prisma || typeof prisma?.appUser?.findFirst !== 'function') return null;
-  if (!identifier) return null;
+  if (!identifier.trim()) return null;
+  const { prisma } = await import('@/lib/prisma');
   const trimmed = identifier.trim();
-  if (!trimmed) return null;
-  try {
-    const where = (() => {
-      if (trimmed.includes('@')) {
-        return { email: trimmed.toLowerCase() };
-      }
-      return { OR: [{ id: trimmed }, { email: trimmed }] };
-    })();
-    const row = await prisma.appUser.findFirst({
-      where,
-      select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true, passwordSalt: true, enabled: true },
-    });
-    if (!row) return null;
-    if (!isAllowedRole(row.role)) return null;
-    // 被停用的账号一律禁止登录
-    if (row.enabled === false) return null;
-    // 口令必须由账号自身携带的 hash + 随机 salt 校验。
-    // 未设置口令的账号一律禁止登录（不再派生任何默认口令）。
-    if (typeof row.passwordHash !== 'string' || row.passwordHash.length === 0) {
-      return null;
+  const where = (() => {
+    if (trimmed.includes('@')) {
+      return { email: trimmed.toLowerCase() };
     }
-    const salt: string =
-      typeof row.passwordSalt === 'string' && row.passwordSalt.length > 0
-        ? row.passwordSalt
-        : `prisma-${row.email}-${row.id}-s4lt-v1`;
-    return {
-      kind: 'prisma',
-      id: String(row.id),
-      email: String(row.email),
-      role: row.role as AppRole,
-      displayName: String(row.displayName),
-      avatarInitials: typeof row.avatarInitials === 'string' && row.avatarInitials.length > 0
-        ? row.avatarInitials
-        : (String(row.displayName || '??').slice(0, Math.min(2, String(row.displayName || '??').length)).toUpperCase()),
-      avatarDataUrl: row.avatarDataUrl ?? undefined,
-      bdManagerFullName: row.bdManagerFullName ?? undefined,
-      passwordHash: row.passwordHash,
-      salt,
-    };
-  } catch {
+    return { OR: [{ id: trimmed }, { email: trimmed }] };
+  })();
+  const row = await prisma.appUser.findFirst({
+    where,
+    select: { id: true, email: true, role: true, displayName: true, avatarInitials: true, avatarDataUrl: true, bdManagerFullName: true, passwordHash: true, passwordSalt: true, enabled: true },
+  });
+  if (!row) return null;
+  if (!isAllowedRole(row.role)) return null;
+  // 被停用的账号一律禁止登录
+  if (row.enabled === false) return null;
+  // 口令必须由账号自身携带的 hash + 随机 salt 校验。
+  // 未设置口令的账号一律禁止登录（不再派生任何默认口令）。
+  if (typeof row.passwordHash !== 'string' || row.passwordHash.length === 0) {
     return null;
   }
+  const salt: string =
+    typeof row.passwordSalt === 'string' && row.passwordSalt.length > 0
+      ? row.passwordSalt
+      : `prisma-${row.email}-${row.id}-s4lt-v1`;
+  return {
+    kind: 'prisma',
+    id: String(row.id),
+    email: String(row.email),
+    role: row.role as AppRole,
+    displayName: String(row.displayName),
+    avatarInitials: typeof row.avatarInitials === 'string' && row.avatarInitials.length > 0
+      ? row.avatarInitials
+      : (String(row.displayName || '??').slice(0, Math.min(2, String(row.displayName || '??').length)).toUpperCase()),
+    avatarDataUrl: row.avatarDataUrl ?? undefined,
+    bdManagerFullName: row.bdManagerFullName ?? undefined,
+    passwordHash: row.passwordHash,
+    salt,
+  };
 }
 
 export async function resolveAnyAccountByIdentifier(identifier: string): Promise<ResolvedAnyAccount | null> {
-  const prisma = await resolvePrismaAccountByIdentifier(identifier);
-  if (prisma) return prisma;
-  return resolveMockAccountByIdentifier(identifier);
+  try {
+    const account = await resolvePrismaAccountByIdentifier(identifier);
+    return account ?? await resolveMockAccountByIdentifier(identifier);
+  } catch (error) {
+    const demo = await resolveMockAccountByIdentifier(identifier);
+    if (demo) return demo;
+    throw error;
+  }
 }
 
 export async function resolveMockAccountByIdentifier(

@@ -86,13 +86,15 @@ function LoginPageInner() {
     }
   }, [user, router, nextPath, isSubmitting, welcomeState]);
 
-  const handleLoginForm = (e: React.FormEvent) => {
+  const handleLoginForm = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isSubmitting || welcomeState) return;
     const nextErrors: { email?: string; password?: string; form?: string } = {};
-    const identifier = email.trim();
+    const fields = new FormData(e.currentTarget);
+    const identifier = String(fields.get("identifier") ?? "").trim();
+    const submittedPassword = String(fields.get("password") ?? "");
     if (!identifier) nextErrors.email = "请输入企业邮箱或账号";
-    const pwd = validatePassword(password);
+    const pwd = validatePassword(submittedPassword);
     if (!pwd.ok) nextErrors.password = pwd.hint;
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -106,7 +108,7 @@ function LoginPageInner() {
     (async () => {
       const finishLogin = async () => {
         // Only announce success after the server has issued and verified a session.
-        const session = await serverLoginCredentials(identifier, password);
+        const session = await serverLoginCredentials(identifier, submittedPassword);
         if (!session) {
           setErrors({ form: "账号或密码校验失败，请重试。" });
           return false;
@@ -136,9 +138,9 @@ function LoginPageInner() {
         return true;
       };
 
-      void finishLogin().catch(() => {
+      void finishLogin().catch((error) => {
         setWelcomeState(null);
-        setErrors({ form: "登录连接失败，请稍后重试。" });
+        setErrors({ form: error instanceof Error ? error.message : "登录连接失败，请稍后重试。" });
       }).finally(() => setIsSubmitting(false));
     })();
   };
@@ -222,6 +224,7 @@ function LoginPageInner() {
                       <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
                         id="login-email"
+                        name="identifier"
                         type="email"
                         placeholder="name@institution.com"
                         className={cn(
@@ -260,6 +263,7 @@ function LoginPageInner() {
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
                         id="login-password"
+                        name="password"
                         type={showPwd ? "text" : "password"}
                         placeholder="••••••••"
                         className={cn(

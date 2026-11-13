@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   signSessionJwt,
   buildSetCookieHeader,
-  buildClearCookieHeader,
   RC_SESSION_MAX_AGE_SEC,
 } from '@/lib/auth/session';
 import { isAllowedRole, type AppSessionUser } from '@/types/auth';
@@ -213,10 +212,9 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // 仅记录到服务器日志，绝不回传客户端，避免暴露内部细节。
     try { console.error('[auth:login] unexpected error:', err instanceof Error ? err.message : String(err)); } catch {}
-    const clear = buildClearCookieHeader();
     return NextResponse.json(
-      { ok: false, error: GENERIC_DENY_MESSAGE },
-      { status: 401, headers: { 'Set-Cookie': clear } }
+      { ok: false, error: 'login_unavailable' },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } }
     );
   }
 }
