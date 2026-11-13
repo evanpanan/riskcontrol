@@ -22,6 +22,8 @@ async function main(){
  assert.deepEqual(result.sentTo,['-10012345678']);
  assert.equal(calls.length,1);assert.equal(calls[0].body.chat_id,'-10012345678');assert.equal(calls[0].body.parse_mode,undefined);
  assert.ok(calls[0].body.text.includes('<script>'));
+ const formatted = calls[0].body;
+ assert.equal(formatted.text.slice(formatted.entities[0].offset, formatted.entities[0].offset + formatted.entities[0].length), payload.title);
  calls=[];await sendTelegramChannel('😀'.repeat(4200),env);assert.equal(calls.length,2);assert.equal(Array.from(calls[0].body.text).length,4000);
  const respond=(posting:boolean,type='channel')=>(url:string)=>url.endsWith('/getChat')?ok({id:-10012345678,type,title:'Risk',username:'risk_channel'}):url.endsWith('/getMe')?ok({id:123}):ok({status:'administrator',can_post_messages:posting});
  mock(respond(true));assert.equal((await verifyTelegramChannel('@risk_channel',undefined,env)).chatId,'-10012345678');

@@ -1,5 +1,5 @@
 import { NotificationTransportError, unknownNotificationOutcome } from "./notificationErrors";
-import { sendTelegramChannel } from "./telegram";
+import { formatTelegramAlert, sendTelegramChannel } from "./telegram";
 
 type Channel = "email" | "telegram";
 type Env = Record<string, string | undefined>;
@@ -82,7 +82,8 @@ export async function deliverNotification(body: any, env: Env = process.env, att
     const status = notificationReadiness(env).telegram;
     if (!status.ready) throw new Error(status.issues.join('；'));
     if (body.webhookOverride) throw new Error('Telegram 频道不使用自定义转发地址');
-    const sentTo = await sendTelegramChannel(`${payload.title}\n\n${payload.message}`, env);
+    const alert = formatTelegramAlert(payload.title, payload.message, payload.severity);
+    const sentTo = await sendTelegramChannel(alert.text, env, alert.entities);
     return { success: true, sentTo, status: 'accepted', error: undefined };
   }
 

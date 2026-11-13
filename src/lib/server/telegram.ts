@@ -51,14 +51,46 @@ export async function verifyTelegramChannel(chatId: string, joinUrl?: string, en
   return { chatId: String(chat.id), title: String(chat.title || chatId), username: chat.username,
     joinUrl: chat.username ? `https://t.me/${chat.username}` : validateJoinUrl(joinUrl) };
 }
-export async function sendTelegramChannel(text: string, env: Env = process.env): Promise<string[]> {
+type BoldEntity = { type: 'bold'; offset: number; length: number };
+
+export function formatTelegramAlert(title: string, message: string, severity: string) {
+  const icon = severity === 'CRITICAL' ? '🚨' : severity === 'HIGH' || severity === 'MEDIUM' ? '⚠️' : 'ℹ️';
+  const prefix = `${icon} `;
+  const heading = `${prefix}${title}\n\n`;
+  const entities: BoldEntity[] = [{ type: 'bold', offset: prefix.length, length: title.length }];
+  const highlights = /【(?:手动发送|系统自动提醒)】|^发起人：[^\n]+|批次 [^\s（，。]+(?:（[^）\n]+）)?|(?:需补仓金额|待补仓金额)[:：][^。\n]+|(?:实际跌幅|当前跌幅) [\d.]+%/gm;
+  for (const match of message.matchAll(highlights)) {
+    entities.push({ type: 'bold', offset: heading.length + match.index!, length: match[0].length });
+  }
+  return { text: heading + message, entities };
+}
+
+export async function sendTelegramChannel(text: string, env: Env = process.env, entities: BoldEntity[] = []): Promise<string[]> {
   const channel = await loadTelegramChannel(env);
   if (!channel) throw new Error('尚未配置 Telegram 风控频道，请在系统设置中配置频道');
-  // Avoid parse_mode: risk text is sent verbatim, without markup injection.
+  // Chunk by code point and use UTF-16 offsets for Telegram formatting.
   const chars = Array.from(text);
+  let offset = 0;
   for (let start = 0; start < chars.length; start += 4000) {
-    try { await telegramApi('sendMessage', { chat_id: channel.chatId, text: chars.slice(start, start + 4000).join(''), link_preview_options: { is_disabled: true } }, env); }
-    catch(error) { if(start>0) throw new NotificationTransportError('Telegram 长消息已有部分受理，请人工核查后处理','unknown'); throw error; }
+    const chunk = chars.slice(start, start + 4000).join('');
+    const end = offset + chunk.length;
+    const chunkEntities = entities.flatMap(entity => {
+      const from = Math.max(offset, entity.offset);
+      const to = Math.min(end, entity.offset + entity.length);
+      return from < to ? [{ ...entity, offset: from - offset, length: to - from }] : [];
+    });
+    try {
+      await telegramApi('sendMessage', {
+        chat_id: channel.chatId,
+        text: chunk,
+        ...(chunkEntities.length ? { entities: chunkEntities } : {}),
+        link_preview_options: { is_disabled: true },
+      }, env);
+    } catch (error) {
+      if (start > 0) throw new NotificationTransportError('Telegram 长消息已有部分受理，请人工核查后处理', 'unknown');
+      throw error;
+    }
+    offset = end;
   }
   return [channel.chatId];
 }
