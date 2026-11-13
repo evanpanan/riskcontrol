@@ -49,6 +49,10 @@ export default function AlertsPage() {
   void tick;
   const { batches } = getMockData();
   const criticalBatches = batches.filter((b) => b.riskLevel === RiskLevel.CRITICAL);
+  const pendingMarginCalls = batches.reduce(
+    (count, batch) => count + (batch.marginCalls?.filter((call) => call.status === MarginCallStatus.PENDING).length ?? 0),
+    0,
+  );
   const warningBatches = batches.filter((b) => b.riskLevel === RiskLevel.WARNING);
 
   const notifications = [
@@ -111,9 +115,11 @@ export default function AlertsPage() {
             <Filter className="h-3.5 w-3.5" />
             筛选
           </Button>
-          <Button size="sm" variant="danger" className="gap-1.5">
-            <AlertCircle className="h-3.5 w-3.5" />
-            {criticalBatches.length} 个待处理补仓
+          <Button asChild size="sm" variant="danger" className="gap-1.5">
+            <Link href="/margin-calls?status=PENDING">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {pendingMarginCalls} 个待处理补仓
+            </Link>
           </Button>
         </div>
       </div>

@@ -23,9 +23,10 @@ import {
   Zap,
   Sparkles,
 } from "lucide-react";
-import { useState, useMemo, useEffect } from "react";
+import { Suspense, useState, useMemo, useEffect } from "react";
 import { MarginCallStatus } from "@prisma/client";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { RoleGate } from "@/components/auth/RoleGate";
 import { APP_ROLES } from "@/types/auth";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -65,11 +66,24 @@ type FullfillTarget = {
 } | null;
 
 export default function MarginCallsPage() {
+  return (
+    <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">正在加载补仓历史…</p>}>
+      <MarginCallsContent />
+    </Suspense>
+  );
+}
+
+function MarginCallsContent() {
+  const requestedStatus = useSearchParams().get("status");
+  return <MarginCallsList key={requestedStatus} initialStatus={requestedStatus === "PENDING" ? "PENDING" : "ALL"} />;
+}
+
+function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallStatus }) {
   const mockData = getMockData();
   const [tick, setTick] = useState(0);
   const batches = useMemo(() => [...mockData.batches], [mockData, tick]);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | MarginCallStatus>("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | MarginCallStatus>(initialStatus);
   const [fulfillOpen, setFulfillOpen] = useState(false);
   const [fulfillTarget, setFulfillTarget] = useState<FullfillTarget>(null);
   const [docTarget, setDocTarget] = useState<any | null>(null);
