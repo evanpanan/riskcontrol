@@ -14,9 +14,22 @@ const fontSans = FontSans({
   display: "swap",
 });
 
+const title = "RiskControl · 机构级股票风控平台";
+const description = "面向 Win100 的股票组合风控工作台，集中管理批次、风险预警、补仓、客户结算与操作留痕。";
+
 export const metadata: Metadata = {
-  title: "优先劣后股票产品全景风控预警系统 | Risk Control",
-  description: "Priority-Subordinate Stock Product Full-Spectrum Risk Control & Early Warning System",
+  title,
+  description,
+  applicationName: "RiskControl",
+  openGraph: {
+    title,
+    description,
+    siteName: "RiskControl",
+    type: "website",
+    locale: "zh_CN",
+  },
+  twitter: { card: "summary_large_image", title, description },
+  icons: { apple: "/win100.png" },
 };
 
 const RAW_KEYS = [
