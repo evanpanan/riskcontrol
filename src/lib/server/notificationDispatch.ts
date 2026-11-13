@@ -5,6 +5,9 @@ import {
   DEFAULT_NOTIFICATION_POLICY,
   NOTIFICATION_POLICY_KEY,
   parseNotificationPolicy,
+  parseNotificationRecipients,
+  notificationEmailPattern,
+  type NotificationRecipientSettings,
   initialDispatchState,
   criticalNotification,
   dispatchStatus,
@@ -34,11 +37,46 @@ type Payload = {
 const asJson = (value: unknown) =>
   JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 const COOLDOWN_MS = 30 * 60_000;
+export const notificationPolicyWhere = {
+  kind_key: { kind: "config", key: NOTIFICATION_POLICY_KEY },
+};
+
+export function resolveNotificationEmails(
+  recipients: NotificationRecipientSettings,
+  accounts: { id: string; email: string; enabled: boolean }[],
+) {
+  const accountEmails = new Set(accounts.map(({ email }) => email.trim().toLowerCase()));
+  const selected = new Set(recipients.accountIds);
+  return [
+    ...new Set([
+      ...accounts
+        .filter(({ id, enabled }) => enabled && selected.has(id))
+        .map(({ email }) => email.trim().toLowerCase()),
+      ...recipients.externalRecipients
+        .filter(({ email }) => !accountEmails.has(email))
+        .map(({ email }) => email),
+    ].filter((email) => notificationEmailPattern.test(email))),
+  ];
+}
+
 export async function loadNotificationPolicy(): Promise<NotificationPolicy> {
   const record = await prisma.workspaceRecord.findUnique({
-    where: { kind_key: { kind: "config", key: NOTIFICATION_POLICY_KEY } },
+    where: notificationPolicyWhere,
   });
-  if (record) return parseNotificationPolicy(record.payload);
+  if (record) {
+    const payload = record.payload as Record<string, unknown>;
+    if (payload && "accountIds" in payload) {
+      const recipients = parseNotificationRecipients(payload);
+      const accounts = await prisma.appUser.findMany({
+        select: { id: true, email: true, enabled: true },
+      });
+      return parseNotificationPolicy({
+        ...payload,
+        coreEmails: resolveNotificationEmails(recipients, accounts),
+      }, false);
+    }
+    return parseNotificationPolicy(payload, false);
+  }
   const records = await prisma.workspaceRecord.findMany({
     where: {
       kind: "config",

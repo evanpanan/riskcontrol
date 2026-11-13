@@ -11,7 +11,7 @@ export const DEFAULT_NOTIFICATION_POLICY: NotificationPolicy = {
   fallbackEmailEnabled: true,
   coreEmails: [],
 };
-export function parseNotificationPolicy(raw: unknown): NotificationPolicy {
+export function parseNotificationPolicy(raw: unknown, requireRecipients = true): NotificationPolicy {
   if (!raw || typeof raw !== "object") throw new Error("通知策略格式无效");
   const value = raw as Record<string, unknown>;
   for (const key of [
@@ -25,7 +25,7 @@ export function parseNotificationPolicy(raw: unknown): NotificationPolicy {
     value.coreEmails.some(
       (email) =>
         typeof email !== "string" ||
-        !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.trim()),
+        !notificationEmailPattern.test(email.trim()),
     )
   )
     throw new Error("核心负责人邮箱格式无效");
@@ -36,6 +36,7 @@ export function parseNotificationPolicy(raw: unknown): NotificationPolicy {
   ];
   if (emails.length > 10) throw new Error("核心负责人邮箱最多10个");
   if (
+    requireRecipients &&
     (value.criticalEmailEnabled || value.fallbackEmailEnabled) &&
     !emails.length
   )
@@ -47,6 +48,39 @@ export function parseNotificationPolicy(raw: unknown): NotificationPolicy {
     coreEmails: emails,
   };
 }
+export interface ExternalRecipient {
+  email: string;
+  note: string;
+}
+
+export interface NotificationRecipientSettings {
+  accountIds: string[];
+  externalRecipients: ExternalRecipient[];
+}
+
+export const notificationEmailPattern = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+
+export function parseNotificationRecipients(raw: unknown): NotificationRecipientSettings {
+  if (!raw || typeof raw !== "object") throw new Error("收件人设置无效");
+  const { accountIds, externalRecipients } = raw as Record<string, unknown>;
+  if (!Array.isArray(accountIds) || accountIds.some((id) => typeof id !== "string" || !id || id.length > 100))
+    throw new Error("所选账号无效");
+  if (!Array.isArray(externalRecipients)) throw new Error("外部邮箱列表无效");
+  const emails = new Set<string>();
+  const recipients = externalRecipients.map((recipient) => {
+    const email = typeof recipient?.email === "string" ? recipient.email.trim().toLowerCase() : "";
+    if (!notificationEmailPattern.test(email) || email.length > 254)
+      throw new Error("外部邮箱格式无效");
+    if (emails.has(email)) throw new Error("外部邮箱重复");
+    emails.add(email);
+    if (typeof recipient.note !== "string" || recipient.note.length > 100)
+      throw new Error("邮箱备注最多 100 个字符");
+    return { email, note: recipient.note.trim() };
+  });
+  if (new Set(accountIds).size + recipients.length > 10) throw new Error("风控邮件收件人最多 10 位");
+  return { accountIds: [...new Set<string>(accountIds)], externalRecipients: recipients };
+}
+
 export type AttemptStatus =
   | "pending"
   | "accepted"

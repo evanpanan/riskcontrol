@@ -4,8 +4,9 @@ import {
   processNotificationDispatch,
   retryPendingNotifications,
   enqueueNotification,
+  resolveNotificationEmails,
 } from "../src/lib/server/notificationDispatch";
-import { parseNotificationPolicy } from "../src/lib/notificationPolicy";
+import { parseNotificationPolicy, parseNotificationRecipients } from "../src/lib/notificationPolicy";
 import { notificationHarness, testEnv } from "./helpers/notificationHarness";
 import { prisma } from "../src/lib/prisma";
 const payload = (batchId: string, type = "WARNING", severity = "HIGH") => ({
@@ -17,6 +18,22 @@ const payload = (batchId: string, type = "WARNING", severity = "HIGH") => ({
   recipients: { emails: ["not-core@recipient.test"] },
 });
 async function main() {
+  const recipients = parseNotificationRecipients({
+    accountIds: ["selected", "disabled", "deleted"],
+    externalRecipients: [
+      { email: " External@recipient.test ", note: " 外部顾问 " },
+      { email: "unchecked@recipient.test", note: "" },
+    ],
+  });
+  assert.deepEqual(recipients.externalRecipients[0], {
+    email: "external@recipient.test",
+    note: "外部顾问",
+  });
+  assert.deepEqual(resolveNotificationEmails(recipients, [
+    { id: "selected", email: "updated@recipient.test", enabled: true },
+    { id: "disabled", email: "disabled@recipient.test", enabled: false },
+    { id: "unchecked", email: "unchecked@recipient.test", enabled: true },
+  ]), ["updated@recipient.test", "external@recipient.test"]);
   const h = notificationHarness();
   const t = h.test;
   try {

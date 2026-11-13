@@ -92,12 +92,6 @@ import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from "react";
 import { Logo, getStoredLogo, setStoredLogo } from "@/components/branding/Logo";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
-import {
-  DEFAULT_RISK_RECIPIENTS,
-  RiskRecipient,
-  getRiskRecipients,
-  setRiskRecipients,
-} from "@/lib/riskRecipients";
 import { sendTestNotification, setNotificationSendToken, hasNotificationSendToken } from "@/lib/notifier";
 import { clearAllBusinessData, getMockData, isLedgerEmpty } from "@/lib/mockData";
 import {
@@ -132,7 +126,6 @@ import { QUOTE_PROVIDERS, quoteProviderLabel } from "@/lib/quote/providers";
 import { readSharedSetting, writeSharedSetting } from "@/lib/settingsStore";
 
 const LS_KEY = "risk_control_settings";
-const RECIPIENTS_LS_KEY = "risk_control_recipients";
 const USERS_LS_KEY = "risk_control_users_v1";
 
 type CountryCode = {
@@ -237,36 +230,6 @@ function computeInitials(name: string, email?: string): string {
   return src.slice(0, 2).toUpperCase();
 }
 
-const ROLE_LABELS: Record<RiskRecipient["role"], string> = {
-  RISK_MANAGER: "风控经理",
-  RISK_ANALYST: "风控分析师",
-  RISK_DIRECTOR: "风控总监",
-  BD_MANAGER: "商务经理",
-  OPERATIONS: "运营",
-  DIRECTOR: "总监",
-  CUSTOM: "自定义",
-};
-
-const ROLE_ORDER: RiskRecipient["role"][] = [
-  "RISK_MANAGER",
-  "RISK_ANALYST",
-  "RISK_DIRECTOR",
-  "BD_MANAGER",
-  "OPERATIONS",
-  "DIRECTOR",
-  "CUSTOM",
-];
-
-type RecipientFormState = Omit<RiskRecipient, "id"> & { id?: string };
-
-const emptyForm = (): RecipientFormState => ({
-  name: "",
-  role: "RISK_MANAGER",
-  email: "",
-  whatsapp: "",
-  enabled: true,
-});
-
 interface SettingsFormState {
   warningThreshold: number;
   marginThreshold: number;
@@ -274,7 +237,7 @@ interface SettingsFormState {
   subordinateRatio: number;
   emailWebhook: string;
   telegramWebhook: string;
-  defaultRiskEmail: string;
+  testEmailRecipient: string;
   emergencyPhone: string;
   dataSource: string;
   apiKey: string;
@@ -297,7 +260,7 @@ type SettingsFieldName =
   | "subordinateRatio"
   | "emailWebhook"
   | "telegramWebhook"
-  | "defaultRiskEmail"
+  | "testEmailRecipient"
   | "emergencyPhone"
   | "apiKey"
   | "realtimeTickIntervalSec";
@@ -309,7 +272,7 @@ const DEFAULT_FORM: SettingsFormState = {
   subordinateRatio: 30,
   emailWebhook: "",
   telegramWebhook: "",
-  defaultRiskEmail: "",
+  testEmailRecipient: "",
   emergencyPhone: "",
   dataSource: "Yahoo Finance (免费)",
   apiKey: "",
@@ -429,10 +392,10 @@ export default function SettingsPage() {
     try {
       const raw = readSharedSetting(LS_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<SettingsFormState>;
+        const parsed = JSON.parse(raw) as Partial<SettingsFormState> & { defaultRiskEmail?: string };
         setForm((prev) => ({ ...prev, ...parsed,
           emailWebhook: /example\.com/.test(parsed.emailWebhook ?? "") ? "" : parsed.emailWebhook ?? "",
-          defaultRiskEmail: parsed.defaultRiskEmail === "risk-control@institution.com" ? "" : parsed.defaultRiskEmail ?? "",
+          testEmailRecipient: parsed.testEmailRecipient ?? (parsed.defaultRiskEmail === "risk-control@institution.com" ? "" : parsed.defaultRiskEmail ?? ""),
           emergencyPhone: parsed.emergencyPhone === "+852-9123-4567" ? "" : parsed.emergencyPhone ?? "",
         }));
       }
@@ -453,25 +416,12 @@ export default function SettingsPage() {
       const rates = getProfitSettings();
       const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       writeSharedSetting(LS_KEY, JSON.stringify({
-        ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
+        ...stored, ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         emailWebhook: stored.emailWebhook ?? "", telegramWebhook: stored.telegramWebhook ?? "",
-        defaultRiskEmail: stored.defaultRiskEmail ?? "", emergencyPhone: stored.emergencyPhone ?? "",
+        testEmailRecipient: stored.testEmailRecipient ?? "", emergencyPhone: stored.emergencyPhone ?? "",
       }));
     } catch (e) {}
   }, [form, hydrated]);
-
-  // 收件人：持久化 + 联动 riskRecipients global
-  const [recipients, setRecipients] = useState<RiskRecipient[]>(() => getRiskRecipients());
-  useEffect(() => {
-    try {
-      setRecipients(getRiskRecipients());
-    } catch (e) {}
-  }, []);
-  useEffect(() => {
-    if (!hydrated) return;
-    try { setRiskRecipients(recipients); }
-    catch { toast.error("收件人保存失败，请稍后重试。"); }
-  }, [recipients, hydrated]);
 
   // 品牌 Logo 管理（localStorage 持久化）
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
@@ -518,13 +468,6 @@ export default function SettingsPage() {
     toast.success("已恢复默认 Logo");
   };
 
-  // 新增/编辑收件人 Dialog
-  const [dlgOpen, setDlgOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [rForm, setRForm] = useState<RecipientFormState>(emptyForm());
-  const [rErrors, setRErrors] = useState<Record<string, string>>({});
-  const [rWA, setRWA] = useState<{ code: string; local: string; customRaw: string }>({ code: "+852", local: "", customRaw: "" });
-
   // 通知渠道帮助 Dialog（需求4：? 按钮 → 弹窗显示详细配置方法）
   type HelpTopic = "email-webhook" | "telegram-channel" | null;
   const [helpOpen, setHelpOpen] = useState<HelpTopic>(null);
@@ -536,7 +479,7 @@ export default function SettingsPage() {
         { h: "① 完成发件域名验证", p: "由系统管理员在邮件服务商处完成发件域名与发件邮箱验证，确保风控通知能够正常投递。" },
         { h: "② 启用系统邮件通道", p: "管理员完成邮件通道配置后，本页「检查服务配置」将显示为就绪状态。" },
         { h: "③ 配置转发地址（可选）", p: "如需将通知同步到内部系统（如钉钉群、工单系统），可填写一个 HTTPS 转发地址；留空则使用系统默认通道。" },
-        { h: "④ 添加收件人并发送测试", p: "填写「默认风控收件人」，并在「风控收件人管理」中逐个维护；点击「发送测试邮件」，确认 3 分钟内可收到。" },
+        { h: "④ 添加收件人并发送测试", p: "填写「测试邮件收件人」并发送测试。正式收件人在「提醒规则与收件人」中设置。" },
       ],
       tips: [
         "长时间未收到邮件，通常是发件域名验证尚未生效",
@@ -993,7 +936,7 @@ export default function SettingsPage() {
         toast.error("仅系统管理员或风控总监可修改通知配置。");
         return;
       }
-      if (form.defaultRiskEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.defaultRiskEmail)) {
+      if (form.testEmailRecipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.testEmailRecipient)) {
         toast.error("请填写有效收件邮箱。"); return;
       }
       if (form.emergencyPhone && !/^\+[1-9]\d{7,14}$/.test(form.emergencyPhone.replace(/[\s()-]/g, ""))) {
@@ -1010,7 +953,7 @@ export default function SettingsPage() {
     try {
       const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       const notificationFields = Object.fromEntries(
-        (["emailWebhook", "telegramWebhook", "defaultRiskEmail", "emergencyPhone"] as const)
+        (["emailWebhook", "telegramWebhook", "testEmailRecipient", "emergencyPhone"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
       );
       const beforeWarn = Number(stored?.warningThreshold);
@@ -1018,7 +961,7 @@ export default function SettingsPage() {
       const afterWarn = Number(form.warningThreshold);
       const afterMargin = Number(form.marginThreshold);
       writeSharedSetting(LS_KEY, JSON.stringify({
-        ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
+        ...stored, ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         ...notificationFields,
       }));
       if (label === "risk") {
@@ -1137,65 +1080,6 @@ export default function SettingsPage() {
     toast.success("已重置为默认闪跌阈值");
   };
 
-  const openAdd = () => {
-    setEditingId(null);
-    setRForm(emptyForm());
-    setRWA({ code: "+852", local: "", customRaw: "" });
-    setRErrors({});
-    setDlgOpen(true);
-  };
-  const openEdit = (r: RiskRecipient) => {
-    setEditingId(r.id);
-    setRForm({ ...r });
-    const p = parseWhatsApp(r.whatsapp ?? "");
-    setRWA({ code: p.code, local: p.local, customRaw: p.customRaw ?? "" });
-    setRErrors({});
-    setDlgOpen(true);
-  };
-  const validateRecipient = (): boolean => {
-    const errs: Record<string, string> = {};
-    if (!rForm.name.trim()) errs.name = "请填写收件人姓名";
-    if (!rForm.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rForm.email || "")) errs.email = "请填写有效邮箱";
-    setRErrors(errs);
-    return Object.keys(errs).length === 0;
-  };
-  const saveRecipient = () => {
-    if (!validateRecipient()) return;
-    const waFinal = buildWhatsApp(rWA.code, rWA.local, rWA.customRaw);
-    let nextList: RiskRecipient[];
-    if (editingId) {
-      nextList = recipients.map(r =>
-        r.id === editingId ? ({ ...r, ...rForm, id: editingId, whatsapp: waFinal || undefined } as RiskRecipient) : r
-      );
-      setRecipients(nextList);
-    } else {
-      const newR: RiskRecipient = {
-        id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        name: rForm.name.trim(),
-        role: rForm.role,
-        email: rForm.email.trim(),
-        whatsapp: waFinal || undefined,
-        enabled: !!rForm.enabled,
-      };
-      nextList = [...recipients, newR];
-      setRecipients(nextList);
-    }
-    try {
-      writeSharedSetting(RECIPIENTS_LS_KEY, JSON.stringify(nextList));
-    } catch (e) {}
-    setSaved("recipient");
-    setDlgOpen(false);
-  };
-  const removeRecipient = (id: string) => {
-    setConfirmation({ title: "确认删除该收件人？", run: () => setRecipients((list) => list.filter(r => r.id !== id)) });
-  };
-  const toggleEnabled = (id: string, enabled: boolean) => {
-    setRecipients((list) => list.map(r => r.id === id ? { ...r, enabled } : r));
-  };
-  const resetRecipients = () => {
-    setConfirmation({ title: "确认清空收件人？通知将暂停发送给名单中的人员。", run: () => setRecipients([]) });
-  };
-
   const handleSettingsFieldChange = useCallback((name: SettingsFieldName, value: string) => {
     setForm((prev) => {
       switch (name) {
@@ -1213,8 +1097,8 @@ export default function SettingsPage() {
           return { ...prev, emailWebhook: value };
         case "telegramWebhook":
           return { ...prev, telegramWebhook: value };
-        case "defaultRiskEmail":
-          return { ...prev, defaultRiskEmail: value };
+        case "testEmailRecipient":
+          return { ...prev, testEmailRecipient: value };
         case "emergencyPhone":
           return { ...prev, emergencyPhone: value };
         case "apiKey":
@@ -1223,7 +1107,6 @@ export default function SettingsPage() {
     });
   }, []);
 
-  const enabledCount = recipients.filter(r => r.enabled).length;
 
   const [testStatus, setTestStatus] = useState<{ email?: string; telegram?: string }>({});
   const [channelStatus, setChannelStatus] = useState<ReturnType<typeof notificationReadiness> | null>(null);
@@ -1243,9 +1126,9 @@ export default function SettingsPage() {
     setSendingTest(channel);
     setTestStatus((s) => ({ ...s, [channel]: undefined }));
     try {
-      const targets = channel === "email" ? [form.defaultRiskEmail] : [];
+      const targets = channel === "email" ? [form.testEmailRecipient] : [];
       if (channel === "email" && !targets[0]) {
-        throw new Error(channel === "email" ? "请先填写默认风控收件人" : "请先填写紧急联系人电话");
+        throw new Error("请先填写测试邮件收件人");
       }
       const overrideWebhook = channel === "email" ? form.emailWebhook : undefined;
       const r = await sendTestNotification(channel, targets, overrideWebhook || undefined);
@@ -1867,7 +1750,7 @@ export default function SettingsPage() {
 </SettingsSection>
     </SettingsSections></TabsContent>
 
-    <TabsContent value="notify" className="mt-4"><SettingsSections sections={[{ id: "policy", label: "提醒规则与收件人" }, { id: "telegram", label: "Telegram 频道" }, { id: "email", label: "邮件服务与测试" }, { id: "contacts", label: "其他联系人" }]} readOnly={currentRole === "OPERATIONS"}>
+    <TabsContent value="notify" className="mt-4"><SettingsSections sections={[{ id: "policy", label: "提醒规则与收件人" }, { id: "telegram", label: "Telegram 频道" }, { id: "email", label: "邮件服务与测试" }]} readOnly={currentRole === "OPERATIONS"}>
 <SettingsSection id="policy">
 <NotificationPolicyPanel />
 </SettingsSection>
@@ -1940,10 +1823,10 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
-            <Label className="text-xs">默认风控收件人</Label>
+            <Label className="text-xs">测试邮件收件人</Label>
             <SettingsField
-              name="defaultRiskEmail"
-              value={form.defaultRiskEmail}
+              name="testEmailRecipient"
+              value={form.testEmailRecipient}
               onValueChange={handleSettingsFieldChange}
               className="text-xs font-mono"
             />
@@ -1986,124 +1869,6 @@ export default function SettingsPage() {
               )}
             </div>
           )}
-        </div>
-      </CardContent>
-    </Card>
-
-
-</SettingsSection>
-<SettingsSection id="contacts">
-<p className="text-xs text-muted-foreground">自动风控邮件以「重要提醒收件人」为准，以下联系人资料不用于自动群发。</p>    {/* ========= 需求1新增：风控收件人管理 ========= */}
-    <Card className="border-border/50">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Users className="h-4 w-4 text-primary" />
-              风控收件人管理
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-1">
-              当前 {recipients.length} 位收件人 · 启用 {enabledCount} 位 · 可自由增删改（修改后立即生效）
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={resetRecipients}>
-              清空收件人
-            </Button>
-            <Button size="sm" className="gap-1.5 h-8" onClick={openAdd}>
-              <Plus className="h-3.5 w-3.5" />
-              新增收件人
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-3">
-        {recipients.length === 0 && (
-          <div className="text-center py-10 text-muted-foreground border rounded-xl border-dashed border-border/60">
-            <UserPlus className="h-8 w-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">暂无收件人</p>
-            <p className="text-[11px] mt-0.5">点击右上角「新增收件人」添加</p>
-          </div>
-        )}
-        {recipients.map((r) => (
-          <div
-            key={r.id}
-            className={cn(
-              "rounded-xl border p-4 transition-all",
-              r.enabled
-                ? "bg-card/70 border-border/60 hover:border-primary/30"
-                : "bg-secondary/20 border-border/40 opacity-60"
-            )}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-sm">{r.name}</span>
-                  <Badge variant="outline" className="text-[10px]">
-                    {ROLE_LABELS[r.role]}
-                  </Badge>
-                  {r.enabled ? (
-                    <Badge variant="success" className="text-[10px] gap-1">
-                      <CheckCircle2 className="h-2.5 w-2.5" />启用</Badge>
-                  ) : (
-                    <Badge variant="secondary" className="text-[10px]">已停用</Badge>
-                  )}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1">
-                    <Mail className="h-3 w-3" />{r.email}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 pt-3 border-t border-border/40 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[11px]">
-                <input
-                  type="checkbox"
-                  checked={r.enabled}
-                  onChange={(e) => toggleEnabled(r.id, e.target.checked)}
-                  className="h-4 w-4 accent-primary"
-                />
-                <span className="text-muted-foreground">
-                  {r.enabled ? "接收通知" : "已暂停接收"}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
-                  onClick={() => openEdit(r)}
-                >
-                  <Edit3 className="h-3.5 w-3.5" />
-                  编辑
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 gap-1 px-2 text-muted-foreground hover:text-danger hover:bg-danger/10"
-                  onClick={() => removeRecipient(r.id)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  删除
-                </Button>
-              </div>
-            </div>
-          </div>
-        ))}
-        <div className="pt-2 flex items-center gap-3 flex-wrap">
-          <Button className="gap-1.5" onClick={() => {
-            try {
-              setRiskRecipients(recipients);
-              save("recipient");
-            } catch {
-              toast.error("收件人保存失败，请稍后重试。");
-            }
-          }}>
-            <Save className="h-4 w-4" />
-            保存收件人配置
-          </Button>
-          {saved === "recipient" && <Badge variant="success" className="gap-1 text-[10px]"><CheckCircle2 className="h-2.5 w-2.5" />已保存并生效</Badge>}
         </div>
       </CardContent>
     </Card>
@@ -2649,85 +2414,6 @@ export default function SettingsPage() {
 </SettingsSection>
     </SettingsSections></TabsContent>
   </Tabs>
-
-{/* ========== 新增/编辑收件人 Dialog ========== */}
-<Dialog open={dlgOpen} onOpenChange={setDlgOpen}>
-  <DialogContent className="sm:max-w-[520px]">
-    <DialogHeader>
-      <DialogTitle className="flex items-center gap-2">
-        <UserPlus className="h-4 w-4 text-primary" />
-        {editingId ? "编辑收件人" : "新增风控收件人"}
-      </DialogTitle>
-    </DialogHeader>
-    <div className="space-y-4 py-1">
-      <div className="space-y-1.5">
-        <Label className="text-xs flex items-center gap-1">
-          <Users className="h-3 w-3" /> 姓名 / 称呼
-        </Label>
-        <Input
-          placeholder="如：风控总监 - Evan Pan"
-          value={rForm.name}
-          onChange={(e) => setRForm({ ...rForm, name: e.target.value })}
-          className={cn(rErrors.name && "ring-2 ring-danger/60 border-danger")}
-        />
-        {rErrors.name && <p className="text-[11px] text-danger">{rErrors.name}</p>}
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label className="text-xs">角色</Label>
-          <Select
-            value={rForm.role}
-            onValueChange={(v) => setRForm({ ...rForm, role: v as any })}
-          >
-            <SelectTrigger className="h-9 text-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ROLE_ORDER.map((r) => (
-                <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5 flex items-end">
-          <div className="flex items-center gap-2 h-9 px-3 w-full rounded-md border border-input bg-background">
-            <input
-              type="checkbox"
-              checked={rForm.enabled}
-              onChange={(e) => setRForm({ ...rForm, enabled: e.target.checked })}
-              className="h-4 w-4 accent-primary"
-            />
-            <span className="text-xs text-muted-foreground ml-2">
-              {rForm.enabled ? "启用通知" : "停用"}
-            </span>
-          </div>
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs flex items-center gap-1">
-          <Mail className="h-3 w-3" /> 邮箱
-        </Label>
-        <Input
-          type="email"
-          placeholder="evan@institution.com"
-          value={rForm.email}
-          onChange={(e) => setRForm({ ...rForm, email: e.target.value })}
-          className={cn("font-mono text-xs", rErrors.email && "ring-2 ring-danger/60 border-danger")}
-        />
-        {rErrors.email && <p className="text-[11px] text-danger">{rErrors.email}</p>}
-      </div>
-    </div>
-    <DialogFooter className="gap-2 sm:gap-2">
-      <Button variant="outline" onClick={() => setDlgOpen(false)}>
-        取消
-      </Button>
-      <Button onClick={saveRecipient} className="gap-1.5">
-        <CheckCircle2 className="h-4 w-4" />
-        {editingId ? "保存修改" : "确认新增"}
-      </Button>
-    </DialogFooter>
-  </DialogContent>
-</Dialog>
 
 {/* ========== 新增/编辑账号 Dialog ========== */}
 <Dialog open={userDlgOpen} onOpenChange={setUserDlgOpen}>
