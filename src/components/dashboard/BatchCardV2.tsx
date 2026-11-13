@@ -179,23 +179,24 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
     : "text-success";
 
   const statusBadge = isAllSettled ? (
-    <Badge variant="secondary" className="gap-1 h-6 text-[10px] rounded-md border-border/60">
+    <Badge data-batch-status aria-label="已归档" title="已归档" variant="secondary" className="gap-1 h-6 text-[10px] rounded-md border-border/60">
       <Archive className="h-3 w-3" />
-      已归档 · {settledCount}/{clients.length}
+      <span>已归档 · {settledCount}/{clients.length}</span>
     </Badge>
   ) : isLocked ? (
-    <Badge variant="secondary" className="gap-1 h-6 text-[10px] rounded-md border-border/60">
+    <Badge data-batch-status aria-label="锁仓期" title="锁仓期" variant="secondary" className="gap-1 h-6 text-[10px] rounded-md border-border/60">
       <Lock className="h-3 w-3" />
-      锁仓期
+      <span>锁仓期</span>
     </Badge>
   ) : windowOpen ? (
-    <Badge variant="success" className="gap-1 h-6 text-[10px] rounded-md">
+    <Badge data-batch-status variant="success" aria-label="交易窗口" title="交易窗口" className="gap-1 h-6 text-[10px] rounded-md">
       <Unlock className="h-3 w-3" />
-      交易窗口
+      <span>交易窗口</span>
     </Badge>
   ) : (
-    <Badge variant="outline" className="gap-1 h-6 text-[10px] rounded-md">
-      开放期
+    <Badge data-batch-status variant="outline" aria-label="开放期" title="开放期" className="gap-1 h-6 text-[10px] rounded-md">
+      <Unlock className="h-3 w-3" />
+      <span>开放期</span>
     </Badge>
   );
 
@@ -309,7 +310,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
               {batch.clients?.length ?? 0} 位
             </p>
             {settledCount > 0 && (
-              <p className="text-[9.5px] font-mono tabular-nums text-muted-foreground/85 leading-tight mt-0.5">
+              <p data-settled-count className="text-[9.5px] font-mono tabular-nums text-muted-foreground/85 leading-tight mt-0.5">
                 已退出 {settledCount} 位
               </p>
             )}
@@ -454,7 +455,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
                 <Sparkles className="h-2.5 w-2.5" />
                 已单独补 {marginAgg.clientCountWithSingleTopup} 位
               </div>
-            ) : undefined
+            ) : compact ? <div className="h-4" aria-hidden="true" /> : undefined
           }
         />
         <StatTile

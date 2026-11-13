@@ -390,16 +390,17 @@
 .batch-card-compact [data-section="holdings"] > div:nth-child(2) > div:last-child { margin-left: 0; }
 .batch-card-compact [data-section="holdings"] > div:nth-child(2) > div:last-child > span:first-child { display: none; }
 .batch-card-compact [data-section="holdings"] > div:last-child > div:last-child { align-items: flex-start; }
-.batch-card-compact [data-section="holdings"] > div:last-child > div:last-child > p:last-child { display: none; }
-.batch-card-compact [data-section="stats"] > div > div:nth-child(2) { margin-top: 3px; }
+.batch-card-compact [data-section="holdings"] [data-settled-count] { display: none; }
+.batch-card-compact [data-section="stats"] > div > div:nth-child(2) { margin-top: 3px; flex: none; min-height: 18px; }
 .batch-card-compact [data-section="pnl"] { padding: 0; border: 0; background: transparent; }
 .batch-card-compact > div:last-of-type { padding-top: 6px; padding-bottom: 6px; }
 .batch-card-compact > div:last-of-type > div { gap: 5px; }
 .batch-card-compact [data-section="holdings"] { padding: 6px; gap: 4px 8px; }
 .batch-card-compact [data-section="holdings"] > div { margin: 0 !important; }
 .batch-card-compact > div:nth-child(2) { padding-top: 8px; padding-bottom: 4px; }
-.batch-card-compact > div:nth-child(2) > div .inline-flex { font-size: 0; gap: 0; padding: 2px 4px; height: 20px; }
-.batch-card-compact > div:nth-child(2) > div .inline-flex svg { width: 12px; height: 12px; }
+.batch-card-compact [data-batch-status] { justify-content: center; width: 20px; height: 20px; padding: 0; }
+.batch-card-compact [data-batch-status] > span { display: none; }
+.batch-card-compact [data-batch-status] svg { width: 12px; height: 12px; flex-shrink: 0; }
 .batch-card-compact > div:last-of-type > div > span:first-child { display: none; }
 .batch-card-compact > div:last-of-type > div { justify-content: flex-end; }
 .batch-card-compact > div:nth-child(2) p { font-size: 11px; }

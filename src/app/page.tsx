@@ -576,7 +576,7 @@ export default function DashboardPage() {
           })}</tbody></table>
         </div>}
         {/* 批次网格 */}
-        <div className={cn("grid gap-3 items-start", density === "compact" ? "grid-cols-[repeat(auto-fit,minmax(min(100%,270px),1fr))]" : "grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]", view === "table" && "hidden")}>
+        <div className={cn("grid gap-3", density === "compact" ? "items-stretch grid-cols-[repeat(auto-fit,minmax(min(100%,270px),1fr))]" : "items-start grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]", view === "table" && "hidden")}>
           {(() => {
             const seen: Record<string, boolean> = { profit: false, normal: false, warning: false, critical: false };
             return visibleBatches.map((b) => {
