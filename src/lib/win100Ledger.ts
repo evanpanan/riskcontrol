@@ -300,7 +300,7 @@ export function buildRevenueLedger(batches: BatchLike[]): RevenueLedgerSummary {
 
 /* ------------------------------ 履约台账 ------------------------------ */
 
-function calcPenalty(round: MarginRound): { isOverdue: boolean; overdueDays: number; penalty: number } {
+export function calcPenalty(round: MarginRound): { isOverdue: boolean; overdueDays: number; penalty: number } {
   const now = new Date();
   const due = round.dueDate ? new Date(round.dueDate) : null;
   if (!due) return { isOverdue: false, overdueDays: 0, penalty: 0 };

@@ -69,8 +69,6 @@ import {
   ScrollText,
   BarChart3,
   Activity,
-  Trophy,
-  Crown,
   Info,
   RefreshCw,
   ChevronDown,
@@ -108,7 +106,7 @@ export default function ClientsPage() {
   const [batchPickerOpen, setBatchPickerOpen] = useState(false);
   const [batchPickerQuery, setBatchPickerQuery] = useState("");
   const [createBatchOpen, setCreateBatchOpen] = useState(false);
-  const [managementTab, setManagementTab] = useState<"batches" | "clients">("batches");
+  const [managementTab, setManagementTab] = useState<"batches" | "clients">("clients");
   const [batchSort, setBatchSort] = useState<"created_desc" | "created_asc" | "amount_desc" | "amount_asc">("created_desc");
   const [editBatchOpen, setEditBatchOpen] = useState<string | null>(null);
   const [editClientOpen, setEditClientOpen] = useState<null | { id: string; batchId: string; clientNo?: string | null }>(null);
@@ -199,7 +197,6 @@ export default function ClientsPage() {
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
   const [lastAddedSummary, setLastAddedSummary] = useState<{ clientNo?: string; name: string; amount: number; batchNumber: string }[]>([]);
   const [moreFilterOpen, setMoreFilterOpen] = useState(false);
-  const [bdRankingOpen, setBdRankingOpen] = useState(false);
   // Phase 4: 自然人展开状态 — 记录已展开查看子账户列表的自然人 key
   const [expandedPersons, setExpandedPersons] = useState<Set<string>>(new Set());
   const { user, role, isBdManager, bdManagerFullName } = useCurrentUser();
@@ -741,12 +738,8 @@ export default function ClientsPage() {
 
   const stats = useMemo(() => {
     let totalInvestment = 0;
-    const bdStats: Record<string, { count: number; amount: number }> = {};
     allClients.forEach((c) => {
       totalInvestment += c.investmentAmount || 0;
-      if (!bdStats[c.bdManager]) bdStats[c.bdManager] = { count: 0, amount: 0 };
-      bdStats[c.bdManager].count++;
-      bdStats[c.bdManager].amount += c.investmentAmount || 0;
     });
     // Phase 4: 自然人数量 = 去重后的「姓名+商务经理」组合数
     const personKeys = new Set<string>();
@@ -757,10 +750,8 @@ export default function ClientsPage() {
       totalClients: personKeys.size,           // 自然人数量（去重）
       totalSubAccounts: allClients.length,     // 子账户数量（= Client 记录数）
       totalInvestment,
-      bdCount: bdManagers.length,
-      bdStats,
     };
-  }, [allClients, bdManagers]);
+  }, [allClients]);
 
   const canEdit = (c: any): boolean => {
     if (role === APP_ROLES.ADMIN || role === APP_ROLES.RISK_MANAGER) return true;
@@ -1022,11 +1013,6 @@ export default function ClientsPage() {
               客户管理
             </TabsTrigger>
           </TabsList>
-          {managementTab === "clients" && (
-            <p className="hidden sm:block text-[11px] text-muted-foreground">
-              直接切到客户管理，不用再从批次区往下翻。
-            </p>
-          )}
         </div>
 
         <TabsContent value="batches" className="space-y-6">
@@ -1421,81 +1407,6 @@ export default function ClientsPage() {
               </CardContent>
             </Card>
           )}
-          <Card className="border-border/50">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm font-bold flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-warning" />
-                  商务经理业绩排行榜
-                </CardTitle>
-                <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1 text-white hover:text-white" onClick={() => setBdRankingOpen(true)}>
-                  <Users className="h-3 w-3" />
-                  查看全部
-                </Button>
-              </div>
-              <p className="text-[10.5px] text-muted-foreground mt-1">
-                前三名头像右上角自动佩戴 🥇金 / 🥈银 / 🥉铜 皇冠徽章，点击「查看全部」浏览完整榜单及占比进度条。
-              </p>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                {(() => {
-                  const ranking = Object.entries(stats.bdStats).sort((a, b) => b[1].amount - a[1].amount);
-                  const medalColors = ["text-amber-500", "text-slate-300", "text-orange-600"];
-                  const medalBg = [
-                    "bg-amber-500/15 border-amber-500/40 shadow-[inset_0_0_0_1px_hsl(var(--color-amber-500,.969)#f59e0b)/0.15]",
-                    "bg-slate-300/10 border-slate-300/40",
-                    "bg-orange-500/12 border-orange-500/40",
-                  ];
-                  const cardChroma = [
-                    "from-amber-500/20 via-transparent to-transparent",
-                    "from-slate-200/15 via-transparent to-transparent",
-                    "from-orange-500/20 via-transparent to-transparent",
-                  ];
-                  return ranking.map(([bd, s], idx) => {
-                    const top3 = idx < 3;
-                    return (
-                      <div
-                        key={bd}
-                        className={cn(
-                          "rounded-xl border p-4 hover:bg-secondary/50 transition-colors relative overflow-hidden",
-                          top3 ? `${medalBg[idx]} hover:brightness-105` : "border-border/50 bg-secondary/30"
-                        )}
-                      >
-                        {top3 && <div className={cn("pointer-events-none absolute inset-0 bg-gradient-to-br opacity-40", cardChroma[idx])} />}
-                        <div className="relative flex items-center gap-3 mb-3">
-                          <div className="relative shrink-0">
-                            <ClientAvatar name={bd} size="md" />
-                            {top3 && (
-                              <span
-                                className="absolute -top-2 -right-2 h-6 w-6 rounded-full border-2 border-background bg-background flex items-center justify-center shadow-md"
-                                title={`排名第 ${idx + 1}`}
-                              >
-                                <Crown className={cn("h-3.5 w-3.5", medalColors[idx])} strokeWidth={2.25} />
-                              </span>
-                            )}
-                            {!top3 && (
-                              <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full border border-border/60 bg-background text-[9px] font-mono text-muted-foreground flex items-center justify-center shadow-sm">
-                                {idx + 1}
-                              </span>
-                            )}
-                          </div>
-                          <div className="relative min-w-0 flex-1">
-                            <Link href={`/bd/${encodeURIComponent(bd)}`} className="text-xs font-semibold hover:text-primary hover:underline block truncate">{bd}</Link>
-                            <p className="text-[10px] text-muted-foreground">{s.count} 位客户</p>
-                          </div>
-                        </div>
-                        <p className="relative font-mono font-bold text-sm text-gradient-primary">
-                          {formatCurrency(s.amount)}
-                        </p>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            </CardContent>
-          </Card>
-
           {/* Clients List */}
           <Card className="border-border/50" id="clients-table">
         <CardHeader className="pb-3">
@@ -1526,6 +1437,11 @@ export default function ClientsPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {!isBdManager && (
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/market#bd-ranking">商务经理排行</Link>
+                </Button>
+              )}
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
@@ -2879,108 +2795,6 @@ export default function ClientsPage() {
               </DialogClose>
             </div>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ===== 商务经理业绩排行榜 · 全量 Dialog ===== */}
-      <Dialog open={bdRankingOpen} onOpenChange={setBdRankingOpen}>
-        <DialogContent className="sm:max-w-[760px] max-h-[88vh] flex flex-col p-0 gap-0 overflow-hidden">
-          <DialogHeader className="p-4 pb-3 border-b border-border/50 shrink-0">
-            <DialogTitle className="text-base flex items-center gap-2">
-              <Trophy className="h-4 w-4 text-warning" />
-              商务经理业绩排行榜（全量）
-            </DialogTitle>
-            <DialogDescription className="text-[11px] text-muted-foreground mt-1">
-              按管辖客户的累计投资总额排序，含所有批次合计。前三名分别对应 🥇 🥈 🥉 徽章。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="overflow-y-auto scrollbar-thin p-4 space-y-3">
-            {(() => {
-              const ranking = Object.entries(stats.bdStats).sort((a, b) => b[1].amount - a[1].amount);
-              const totalAmt = ranking.reduce((s, [, v]) => s + (v.amount || 0), 0);
-              return ranking.map(([bd, v], idx) => {
-                const medalColors = [
-                  "text-amber-500",    // 金
-                  "text-slate-300",    // 银
-                  "text-orange-600",   // 铜
-                ];
-                const medalBg = [
-                  "bg-amber-500/10 border-amber-500/30",
-                  "bg-slate-300/10 border-slate-300/30",
-                  "bg-orange-500/10 border-orange-500/30",
-                ];
-                const medalLabel = ["🥇 第 1 名", "🥈 第 2 名", "🥉 第 3 名"];
-                const pct = totalAmt > 0 ? (v.amount / totalAmt) * 100 : 0;
-                return (
-                  <div
-                    key={bd}
-                    className={cn(
-                      "rounded-xl border p-3.5 flex items-center gap-3 transition-colors",
-                      idx < 3
-                        ? `${medalBg[idx]} hover:brightness-105`
-                        : "border-border/50 bg-secondary/20 hover:bg-secondary/35"
-                    )}
-                  >
-                    <div className="relative shrink-0">
-                      <ClientAvatar name={bd} size="md" />
-                      {idx < 3 && (
-                        <span
-                          className={cn(
-                            "absolute -top-2 -right-2 h-6 w-6 rounded-full border flex items-center justify-center shadow-md",
-                            medalBg[idx],
-                            "bg-background"
-                          )}
-                          title={medalLabel[idx]}
-                        >
-                          <Crown className={cn("h-3.5 w-3.5", medalColors[idx])} fill={
-                            idx===0 ? "hsl(var(--color-amber-500) or #f59e0b)" : undefined
-                          } strokeWidth={2} />
-                        </span>
-                      )}
-                      {idx >= 3 && (
-                        <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full border border-border/60 bg-background text-[9px] font-mono text-muted-foreground flex items-center justify-center shadow">
-                          {idx + 1}
-                        </span>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 flex items-center gap-2">
-                          <Link href={`/bd/${encodeURIComponent(bd)}`} className="text-sm font-semibold hover:text-primary hover:underline truncate">
-                            {bd}
-                          </Link>
-                          {idx < 3 && (
-                            <Badge variant="outline" className={cn("text-[9px] h-4 px-1.5 border", medalBg[idx], medalColors[idx])}>
-                              {medalLabel[idx]}
-                            </Badge>
-                          )}
-                        </div>
-                        <span className="font-mono font-bold text-sm text-gradient-primary shrink-0">
-                          {formatCurrency(v.amount)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-4 text-[10.5px] text-muted-foreground">
-                        <span>管理客户 <span className="text-foreground font-mono font-semibold">{v.count}</span> 位</span>
-                        <span>占全公司投资总额 <span className="font-mono text-foreground font-semibold">{Number(pct.toFixed(2))}%</span></span>
-                      </div>
-                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className={cn(
-                            "h-full rounded-full",
-                            idx === 0 ? "bg-gradient-to-r from-amber-400 to-amber-500"
-                            : idx === 1 ? "bg-gradient-to-r from-slate-300 to-slate-400"
-                            : idx === 2 ? "bg-gradient-to-r from-orange-400 to-orange-500"
-                            : "bg-primary/70"
-                          )}
-                          style={{ width: `${Math.min(100, pct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
         </DialogContent>
       </Dialog>
 

@@ -16,7 +16,6 @@ export interface RuntimeNotificationConfig {
   channels?: Array<"email" | "telegram">;
   emailWebhook?: string;
   defaultRiskEmail?: string;
-  emergencyPhone?: string;
 }
 
 export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
@@ -29,7 +28,6 @@ export function getRuntimeNotificationConfig(): RuntimeNotificationConfig {
     return {
       emailWebhook: typeof parsed?.emailWebhook === "string" && !/example\.com/.test(parsed.emailWebhook) ? parsed.emailWebhook : undefined,
       defaultRiskEmail: typeof parsed.defaultRiskEmail === "string" && parsed.defaultRiskEmail !== "risk-control@institution.com" ? parsed.defaultRiskEmail : undefined,
-      emergencyPhone: typeof parsed.emergencyPhone === "string" && parsed.emergencyPhone !== "+852-9123-4567" ? parsed.emergencyPhone : undefined,
     };
   } catch {
     return empty;

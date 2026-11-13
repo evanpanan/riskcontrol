@@ -35,6 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { calcPenalty } from "@/lib/win100Ledger";
 import * as XLSX from "@/lib/excelExport";
 import {
   summarizeBatchMarginFromClients,
@@ -101,9 +102,15 @@ export default function MarginCallsPage() {
   const allCalls = useMemo(() => {
     const list: any[] = [];
     batches.forEach((b: any) => {
-      b.marginCalls?.forEach((mc: any) => {
+      const rounds = new Map<string, NonNullable<BatchLike["finance"]>["rounds"][number]>(
+        ((b as BatchLike).finance?.rounds ?? []).map((round) => [round.id, round]),
+      );
+      b.marginCalls?.forEach((mc: any, index: number) => {
+        const round = rounds.get(mc.id);
         list.push({
           ...mc,
+          roundNumber: round?.number ?? index + 1,
+          ...calcPenalty(round ?? mc),
           batchNumber: b.batchNumber,
           batchId: b.id,
           symbol: b.stockSymbol,
@@ -229,6 +236,7 @@ export default function MarginCallsPage() {
   const buildDocRows = (mc: any): [string, string][] => [
     ["单据编号", String(mc.id ?? "").slice(-8).toUpperCase()],
     ["批次号", mc.batchNumber ?? ""],
+    ["轮次", String(mc.roundNumber)],
     ["股票", `${mc.symbol ?? ""}${mc.stockName ? ` · ${mc.stockName}` : ""}`],
     ["触发时间", mc.triggerDate ? formatDate(mc.triggerDate) : ""],
     ["到期时间（T+2）", mc.dueDate ? formatDate(mc.dueDate) : "—"],
@@ -239,6 +247,8 @@ export default function MarginCallsPage() {
     ["完成进度", `${Number(mc.fulfillmentPct ?? 0).toFixed(1)}%`],
     ["补仓形式", mc.collateralType ? (mc.collateralType === "cash" ? "现金" : "股票") : "—"],
     ["当前状态", getStatusConfig(mc.status).label],
+    ["逾期天数", String(mc.overdueDays)],
+    ["罚息", formatCurrency(mc.penalty)],
     ["到账日期", mc.fulfilledDate ? formatDate(mc.fulfilledDate) : "—"],
     ["备注", mc.note || "—"],
   ];
@@ -263,6 +273,9 @@ export default function MarginCallsPage() {
         "状态": getStatusConfig(mc.status).label,
         "补仓形式": mc.collateralType ? (mc.collateralType === "cash" ? "现金" : "股票") : "",
         "到账日期": mc.fulfilledDate ? formatDate(mc.fulfilledDate) : "",
+        "轮次": mc.roundNumber,
+        "逾期天数": mc.overdueDays,
+        "罚息（USD）": Number(mc.penalty.toFixed(2)),
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
       ws["!cols"] = [
@@ -486,7 +499,7 @@ export default function MarginCallsPage() {
                     >
                       <div className="col-span-2 min-w-0">
                         <p className="font-mono text-xs text-muted-foreground">
-                          {mc.batchNumber}
+                          {mc.batchNumber} · 第 {mc.roundNumber} 轮
                         </p>
                         <p className="font-bold text-sm truncate">
                           {mc.symbol}
@@ -546,6 +559,11 @@ export default function MarginCallsPage() {
                           <SIcon className="h-2.5 w-2.5" />
                           {sc.label}
                         </Badge>
+                        {mc.isOverdue && (
+                          <p className="mt-1 text-[10px] text-danger">
+                            逾期 {mc.overdueDays} 天{mc.penalty > 0 && ` · 罚息 ${formatCurrency(mc.penalty)}`}
+                          </p>
+                        )}
                         {mc.fulfilledDate && (
                           <p className="text-[9px] text-muted-foreground font-mono mt-1">
                             {formatDate(mc.fulfilledDate)}

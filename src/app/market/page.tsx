@@ -16,6 +16,7 @@ import {
 } from "@/lib/utils";
 import {
   getBatchMetrics,
+  isVipClient,
   calculateBatchPnLSplit,
   calculatePortfolioSummary,
   type BatchLike,
@@ -44,14 +45,12 @@ import {
   Users,
   Coins,
   Recycle,
-  Crown,
   CalendarClock,
   LayoutGrid,
   Gauge,
   ShieldAlert,
   UserCheck,
   TrendingUp,
-  PieChart as PieIcon,
   AlertTriangle,
 } from "lucide-react";
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
@@ -123,13 +122,27 @@ export default function MarketPage() {
     return { tick: `${yyyy}年 Q${m[2]}`, tooltip: `${yyyy}年 第${m[2]}季度` };
   };
 
+  const [businessOpen, setBusinessOpen] = useState(false);
+  useEffect(() => {
+    const openRanking = () => {
+      if (window.location.hash !== "#bd-ranking") return;
+      setBusinessOpen(true);
+    };
+    openRanking();
+    window.addEventListener("hashchange", openRanking);
+    return () => window.removeEventListener("hashchange", openRanking);
+  }, []);
+  useEffect(() => {
+    if (businessOpen && window.location.hash === "#bd-ranking")
+      document.getElementById("bd-ranking")?.scrollIntoView();
+  }, [businessOpen]);
   const [tick, setTick] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [liveSymbol, setLiveSymbol] = useState<string>(DEFAULT_LIVE_QUOTE.symbol);
   const [realtime, setRealtime] = useState<BrowserQuote | null>(null);
   const [animActive, setAnimActive] = useState(true);
-  const batches = useMemo(() => [...mockDataRef.current.batches], []);
+  const batches = useMemo(() => [...mockDataRef.current.batches], [tick]);
 
   const riskMonthly = useMemo(() => {
     if (batches.length === 0) return [];
@@ -397,9 +410,6 @@ export default function MarketPage() {
     ];
   }, [batches]);
 
-  // ====== 新增 4：批次风险甜甜圈 ======
-  const riskDonut = useMemo(() => riskLayerDist.map(x => ({ name: x.key, value: Math.max(0, x.value), color: x.color })), [riskLayerDist]);
-
   // ====== 新增 5：BD 经理在管 AUM 横向 Bar ======
   const bdAUMRanking = useMemo(() => {
     const map: Record<string, { clients: number; amount: number }> = {};
@@ -416,7 +426,7 @@ export default function MarketPage() {
 
   // ====== 新增 6：客户投资金额分桶直方图 ======
   const investBucketHist = useMemo(() => {
-    const buckets = INVEST_BUCKETS.map(b => ({ ...b, clientCount: 0, amount: 0 }));
+    const buckets = INVEST_BUCKETS.map(b => ({ ...b, vipCount: 0, normalCount: 0, amount: 0 }));
     const seen = new Set<string>();
     for (const b of batches) for (const c of b.clients ?? []) {
       const fp = `${c.name}|${c.bdManager}`;
@@ -425,7 +435,8 @@ export default function MarketPage() {
       const amt = c.investmentAmount || 0;
       for (const bucket of buckets) {
         if (amt >= bucket.min && amt < bucket.max) {
-          bucket.clientCount += 1;
+          if (isVipClient(c)) bucket.vipCount += 1;
+          else bucket.normalCount += 1;
           bucket.amount += amt;
           break;
         }
@@ -433,7 +444,8 @@ export default function MarketPage() {
     }
     return buckets.map(b => ({
       range: b.key,
-      客户数: b.clientCount,
+      VIP客户: b.vipCount,
+      普通客户: b.normalCount,
       投资金额: b.amount,
       fill: b.color,
     }));
@@ -639,11 +651,6 @@ export default function MarketPage() {
         </div>
       </Reveal>
 
-      {/* ===== Section 0: 近 6 月月度新增批次趋势（整页第一数据卡） ===== */}
-      <Reveal offsetY={16} delayMs={80}>
-        <MonthlyBatchesTrend batches={batches} isAnimationActive={animActive} />
-      </Reveal>
-
       {/* ===== Section 1: 资金与风险全景 3 堆叠条 ===== */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
         <Reveal offsetY={16} delayMs={120}>
@@ -698,174 +705,6 @@ export default function MarketPage() {
               <LegendRow data={riskLayerDist.map(x => ({ ...x, key: x.key.split(" ")[0] }))} />
             </CardContent>
           </Card>
-        </Reveal>
-      </div>
-
-      {/* ===== Section 2: 风险甜甜圈 + BD排行 + 投资分桶 ===== */}
-      <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
-        <Reveal offsetY={16} delayMs={160}>
-          <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <PieIcon className="h-4 w-4 text-info" />
-              风险分层分布 · 环形饼
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              批次数量占比 · 红=需风控介入
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="h-[220px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    isAnimationActive={animActive}
-                    animationDuration={1100}
-                    data={riskDonut}
-                    innerRadius={58}
-                    outerRadius={90}
-                    paddingAngle={3}
-                    dataKey="value"
-                    strokeWidth={0}
-                  >
-                    {riskDonut.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <ReTooltip
-                    contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                    formatter={(v: any, _n, p: any) => [`${Number(v)} 批 · ${formatPercent((Number(v) / batches.length) * 100, 0)}`, p.payload.name]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <LegendRow data={riskDonut.map(x => ({ key: x.name, value: x.value, color: x.color }))} textSize="text-[11px]" />
-          </CardContent>
-        </Card>
-        </Reveal>
-
-        <Reveal offsetY={16} delayMs={240}>
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <UserCheck className="h-4 w-4 text-warning" />
-              BD 经理 · 在管资金排行
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              前 3 名 金 / 银 / 铜 色冠
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="h-[220px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={bdAUMRanking}
-                  layout="vertical"
-                  margin={{ top: 6, right: 12, left: 0, bottom: 6 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`} />
-                  <YAxis
-                    dataKey="bd"
-                    type="category"
-                    width={130}
-                    tick={{ fontSize: 10.5 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v: string) => v.split(" ")[0]}
-                  />
-                  <ReTooltip
-                    contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                    formatter={(v: any, n) => [n === "amount" ? formatCompactNumber(Number(v)) : `${Number(v)} 位`, n === "amount" ? "在管资金" : "服务客户"]}
-                  />
-                  <Bar
-                    isAnimationActive={animActive}
-                    animationDuration={1100}
-                    dataKey="amount"
-                    radius={[0, 4, 4, 0]}
-                    barSize={22}
-                  >
-                    {bdAUMRanking.map((entry, i) => (
-                      <Cell key={i} fill={entry.fill} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <LegendRow
-              data={[
-                { key: "🥇 冠军", color: CROWN_COLORS[0] },
-                { key: "🥈 亚军", color: CROWN_COLORS[1] },
-                { key: "🥉 季军", color: CROWN_COLORS[2] },
-                { key: "其他", color: "hsl(217 91% 60%)" },
-              ]}
-            />
-          </CardContent>
-        </Card>
-        </Reveal>
-
-        <Reveal offsetY={16} delayMs={320}>
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-primary" />
-              客户投资金额分桶
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              自然人按单笔投资额分组 · {clientStats.totalClients} 位去重口径
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="h-[220px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={investBucketHist}
-                  margin={{ top: 6, right: 10, left: 0, bottom: 6 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="range" tick={{ fontSize: 10.5 }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    yAxisId="left"
-                    tick={{ fontSize: 10 }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={40}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tick={{ fontSize: 10 }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={60}
-                    tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`}
-                  />
-                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar
-                    isAnimationActive={animActive}
-                    animationDuration={1100}
-                    yAxisId="left"
-                    dataKey="客户数"
-                    fill="hsl(217 91% 60%)"
-                    radius={[4, 4, 0, 0]}
-                  />
-                  <Bar
-                    isAnimationActive={animActive}
-                    animationDuration={1100}
-                    yAxisId="right"
-                    dataKey="投资金额"
-                    radius={[4, 4, 0, 0]}
-                  >
-                    {investBucketHist.map((e, i) => (
-                      <Cell key={i} fill={e.fill} fillOpacity={0.85} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
         </Reveal>
       </div>
 
@@ -1094,8 +933,8 @@ export default function MarketPage() {
         </Reveal>
       </div>
 
-      {/* ===== Section 4: 到期节奏 + 签约节奏 + 剩余寿命 ===== */}
-      <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+      {/* ===== Section 4: 到期节奏与剩余寿命 ===== */}
+      <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
         <Reveal offsetY={16} delayMs={140}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
@@ -1133,48 +972,7 @@ export default function MarketPage() {
         </Card>
         </Reveal>
 
-        <Reveal offsetY={16} delayMs={220}>
-        <Card className="border-border/50">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-success" />
-              客户签约节奏（季度）
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              BD 获客趋势 · {clientStats.totalClients} 位自然人去重
-            </p>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="h-[240px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={signQuarterly} margin={{ top: 6, right: 10, left: 0, bottom: 6 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                  <XAxis dataKey="季度" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
-                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 位客户`, "签约"]} labelFormatter={(_label, payload) => {
-                    const first = (payload as unknown as Array<{ payload?: any }>)?.[0]?.payload;
-                    return first?.季度Label ?? _label;
-                  }} />
-                  <Bar
-                    isAnimationActive={animActive}
-                    animationDuration={1100}
-                    dataKey="签约客户数"
-                    radius={[4, 4, 0, 0]}
-                    barSize={36}
-                  >
-                    <defs>
-                      <linearGradient id="signGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="hsl(142 76% 55%)" />
-                        <stop offset="100%" stopColor="hsl(142 76% 38%)" />
-                      </linearGradient>
-                    </defs>
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-        </Reveal>
+
 
         <Reveal offsetY={16} delayMs={300}>
         <Card className="border-border/50">
@@ -1238,80 +1036,191 @@ export default function MarketPage() {
         </Reveal>
       </div>
 
-      {/* ===== Section 5: 客户结构 4 图形（VIP饼 + 退出横条 + 批次生命周期饼 + 签约质量双环） ===== */}
-      <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
-        <Reveal offsetY={16} delayMs={160}>
-        <Card className="border-border/50">
+      <details className="space-y-4 rounded-xl border border-border/60 p-4" open={businessOpen}
+        onToggle={(event) => setBusinessOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer text-sm font-semibold">经营分析</summary>
+      {/* ===== Section 0: 近 6 月月度新增批次趋势（整页第一数据卡） ===== */}
+      <Reveal offsetY={16} delayMs={80}>
+        <MonthlyBatchesTrend batches={batches} isAnimationActive={animActive} />
+      </Reveal>
+
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <Reveal offsetY={16} delayMs={240}>
+        <Card id="bd-ranking" className="scroll-mt-20 border-border/50">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
-              <Crown className="h-4 w-4 text-warning" />
-              客户投资结构 · VIP 分层
+              <UserCheck className="h-4 w-4 text-warning" />
+              BD 经理 · 在管资金排行
             </CardTitle>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              VIP 阈值：单客 ≥ ${formatCompactNumber(VIP_THRESHOLD)} · 按签约投资金额
+              前 3 名 金 / 银 / 铜 色冠
             </p>
           </CardHeader>
           <CardContent className="pt-0">
-            <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 items-center">
-              <div className="h-[200px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      isAnimationActive={animActive}
-                      animationDuration={1100}
-                      data={[
-                        { name: "VIP客户", value: Math.max(1, clientStats.vipAmount) },
-                        { name: "普通客户", value: Math.max(1, clientStats.normalAmount) },
-                      ]}
-                      innerRadius={58}
-                      outerRadius={88}
-                      paddingAngle={2}
-                      dataKey="value"
-                      strokeWidth={0}
-                    >
-                      <Cell fill="hsl(45 93% 47%)" />
-                      <Cell fill="hsl(217 91% 60%)" />
-                    </Pie>
-                    <ReTooltip
-                      contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                      formatter={(v: any) => [formatCompactNumber(Number(v)), "投资金额"]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="space-y-2 text-[12px]">
-                <div className="rounded-lg border border-warning/30 bg-warning/5 p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-warning">
-                      <Crown className="h-3.5 w-3.5" /> VIP
-                    </span>
-                    <span className="font-mono font-bold tabular-nums">
-                      {clientStats.vipCount} 位 · {formatCompactNumber(clientStats.vipAmount)}
-                    </span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-secondary/60 overflow-hidden mt-1">
-                    <div className="h-full rounded-full" style={{ width: `${clientStats.vipAmountPct}%`, backgroundColor: "hsl(45 93% 47%)" }} />
-                  </div>
-                </div>
-                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-primary">
-                      <Users className="h-3.5 w-3.5" /> 普通
-                    </span>
-                    <span className="font-mono font-bold tabular-nums">
-                      {clientStats.normalCount} 位 · {formatCompactNumber(clientStats.normalAmount)}
-                    </span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-secondary/60 overflow-hidden mt-1">
-                    <div className="h-full rounded-full bg-primary" style={{ width: `${100 - clientStats.vipAmountPct}%` }} />
-                  </div>
-                </div>
-              </div>
+            <div style={{ height: Math.max(220, bdAUMRanking.length * 28) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={bdAUMRanking}
+                  layout="vertical"
+                  margin={{ top: 6, right: 12, left: 0, bottom: 6 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`} />
+                  <YAxis
+                    dataKey="bd"
+                    type="category"
+                    width={130}
+                    tick={{ fontSize: 10.5 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v: string) => v.split(" ")[0]}
+                  />
+                  <ReTooltip
+                    contentStyle={{ fontSize: 11, borderRadius: 8 }}
+                    formatter={(v: any, n) => [n === "amount" ? formatCompactNumber(Number(v)) : `${Number(v)} 位`, n === "amount" ? "在管资金" : "服务客户"]}
+                  />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="amount"
+                    radius={[0, 4, 4, 0]}
+                    barSize={22}
+                  >
+                    {bdAUMRanking.map((entry, i) => (
+                      <Cell key={i} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
+            <LegendRow
+              data={[
+                { key: "🥇 冠军", color: CROWN_COLORS[0] },
+                { key: "🥈 亚军", color: CROWN_COLORS[1] },
+                { key: "🥉 季军", color: CROWN_COLORS[2] },
+                { key: "其他", color: "hsl(217 91% 60%)" },
+              ]}
+            />
           </CardContent>
         </Card>
         </Reveal>
 
+        <Reveal offsetY={16} delayMs={320}>
+        <Card className="border-border/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-bold flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-primary" />
+              客户投资结构
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              按投资金额区间统计客户及签约档位
+            </p>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="h-[220px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={investBucketHist}
+                  margin={{ top: 6, right: 10, left: 0, bottom: 6 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                  <XAxis dataKey="range" tick={{ fontSize: 10.5 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={40}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={60}
+                    tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`}
+                  />
+                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    yAxisId="left"
+                    stackId="clients"
+                    dataKey="普通客户"
+                    fill="hsl(217 91% 60%)"
+                  />
+                  <Bar
+                    isAnimationActive={animActive}
+                    yAxisId="left"
+                    stackId="clients"
+                    dataKey="VIP客户"
+                    fill="hsl(45 93% 47%)"
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    yAxisId="right"
+                    dataKey="投资金额"
+                    radius={[4, 4, 0, 0]}
+                  >
+                    {investBucketHist.map((e, i) => (
+                      <Cell key={i} fill={e.fill} fillOpacity={0.85} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+        </Reveal>
+      </div>
+
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <Reveal offsetY={16} delayMs={220}>
+        <Card className="border-border/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-bold flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-success" />
+              客户签约节奏（季度）
+            </CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              BD 获客趋势 · {clientStats.totalClients} 位自然人去重
+            </p>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="h-[240px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={signQuarterly} margin={{ top: 6, right: 10, left: 0, bottom: 6 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                  <XAxis dataKey="季度" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={38} allowDecimals={false} />
+                  <ReTooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} formatter={(v) => [`${v} 位客户`, "签约"]} labelFormatter={(_label, payload) => {
+                    const first = (payload as unknown as Array<{ payload?: any }>)?.[0]?.payload;
+                    return first?.季度Label ?? _label;
+                  }} />
+                  <Bar
+                    isAnimationActive={animActive}
+                    animationDuration={1100}
+                    dataKey="签约客户数"
+                    radius={[4, 4, 0, 0]}
+                    barSize={36}
+                  >
+                    <defs>
+                      <linearGradient id="signGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(142 76% 55%)" />
+                        <stop offset="100%" stopColor="hsl(142 76% 38%)" />
+                      </linearGradient>
+                    </defs>
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+        </Reveal>
         <Reveal offsetY={16} delayMs={260}>
         <Card className="border-border/50">
           <CardHeader className="pb-2">
@@ -1518,7 +1427,8 @@ export default function MarketPage() {
           </CardContent>
         </Card>
         </Reveal>
-      </div>
+        </div>
+      </details>
     </div>
   );
 }

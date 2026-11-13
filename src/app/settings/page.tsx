@@ -238,7 +238,6 @@ interface SettingsFormState {
   emailWebhook: string;
   telegramWebhook: string;
   testEmailRecipient: string;
-  emergencyPhone: string;
   dataSource: string;
   apiKey: string;
   vipThreshold: number;
@@ -261,7 +260,6 @@ type SettingsFieldName =
   | "emailWebhook"
   | "telegramWebhook"
   | "testEmailRecipient"
-  | "emergencyPhone"
   | "apiKey"
   | "realtimeTickIntervalSec";
 
@@ -273,7 +271,6 @@ const DEFAULT_FORM: SettingsFormState = {
   emailWebhook: "",
   telegramWebhook: "",
   testEmailRecipient: "",
-  emergencyPhone: "",
   dataSource: "Yahoo Finance (免费)",
   apiKey: "",
   vipThreshold: 100000,
@@ -396,7 +393,6 @@ export default function SettingsPage() {
         setForm((prev) => ({ ...prev, ...parsed,
           emailWebhook: /example\.com/.test(parsed.emailWebhook ?? "") ? "" : parsed.emailWebhook ?? "",
           testEmailRecipient: parsed.testEmailRecipient ?? (parsed.defaultRiskEmail === "risk-control@institution.com" ? "" : parsed.defaultRiskEmail ?? ""),
-          emergencyPhone: parsed.emergencyPhone === "+852-9123-4567" ? "" : parsed.emergencyPhone ?? "",
         }));
       }
     } catch (e) {}
@@ -418,7 +414,7 @@ export default function SettingsPage() {
       writeSharedSetting(LS_KEY, JSON.stringify({
         ...stored, ...form, ...rates, vipInstitution: 100 - rates.vipClient, normalInstitution: 100 - rates.normalClient,
         emailWebhook: stored.emailWebhook ?? "", telegramWebhook: stored.telegramWebhook ?? "",
-        testEmailRecipient: stored.testEmailRecipient ?? "", emergencyPhone: stored.emergencyPhone ?? "",
+        testEmailRecipient: stored.testEmailRecipient ?? "",
       }));
     } catch (e) {}
   }, [form, hydrated]);
@@ -839,9 +835,6 @@ export default function SettingsPage() {
       if (form.testEmailRecipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.testEmailRecipient)) {
         toast.error("请填写有效收件邮箱。"); return;
       }
-      if (form.emergencyPhone && !/^\+[1-9]\d{7,14}$/.test(form.emergencyPhone.replace(/[\s()-]/g, ""))) {
-        toast.error("WhatsApp 号码须包含国家区号，例如 +85291234567。"); return;
-      }
     }
     const rates = label === "分成配置" ? {
       vipThreshold: Number(form.vipThreshold), vipClient: Number(form.vipClient), normalClient: Number(form.normalClient),
@@ -853,7 +846,7 @@ export default function SettingsPage() {
     try {
       const stored = JSON.parse(readSharedSetting(LS_KEY) || "{}");
       const notificationFields = Object.fromEntries(
-        (["emailWebhook", "telegramWebhook", "testEmailRecipient", "emergencyPhone"] as const)
+        (["emailWebhook", "telegramWebhook", "testEmailRecipient"] as const)
           .map((key) => [key, label === "notify" ? form[key].trim() : stored[key] ?? ""])
       );
       const beforeWarn = Number(stored?.warningThreshold);
@@ -999,10 +992,8 @@ export default function SettingsPage() {
           return { ...prev, telegramWebhook: value };
         case "testEmailRecipient":
           return { ...prev, testEmailRecipient: value };
-        case "emergencyPhone":
-          return { ...prev, emergencyPhone: value };
-        case "apiKey":
-          return { ...prev, apiKey: value };
+        default:
+          return prev;
       }
     });
   }, []);
@@ -1727,15 +1718,6 @@ export default function SettingsPage() {
             <SettingsField
               name="testEmailRecipient"
               value={form.testEmailRecipient}
-              onValueChange={handleSettingsFieldChange}
-              className="text-xs font-mono"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">紧急联系人电话</Label>
-            <SettingsField
-              name="emergencyPhone"
-              value={form.emergencyPhone}
               onValueChange={handleSettingsFieldChange}
               className="text-xs font-mono"
             />

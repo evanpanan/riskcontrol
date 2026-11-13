@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 import { Batch, RiskLevel } from "@prisma/client";
 import {
   AlertTriangle,
-  CheckCircle2,
   Flame,
   Gauge,
   Layers,
@@ -15,8 +14,6 @@ import {
   PlayCircle,
   PlusCircle,
   Calendar,
-  TrendingUp as TrendingUpIcon,
-  MousePointerClick,
   LineChart,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -62,22 +59,12 @@ interface RiskLadderBarProps {
     totalClients: number;
     totalAUM: number;
   };
-  onJump?: (target: LadderAnchorTarget) => void;
+  selectedRisk: string;
+  onJump: (target: LadderAnchorTarget | "all") => void;
+  onFocusBatch: () => void;
 }
 
-function jumpTo(target: LadderAnchorTarget) {
-  if (typeof document === "undefined") return;
-  const map: Record<LadderAnchorTarget, string> = {
-    profit: "anchor-profit",
-    normal: "anchor-normal",
-    warning: "anchor-warning",
-    critical: "anchor-critical",
-  };
-  const id = map[target];
-  jumpToId(id);
-}
-
-export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) {
+export function RiskLadderBar({ batches, summary, selectedRisk, onJump, onFocusBatch }: RiskLadderBarProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -89,35 +76,13 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
     }
   }, [searchParams]);
 
-  const total = Math.max(1, summary.totalBatches);
-  const profitCount = Math.max(0, summary.profitableCount);
-  const normalCount = Math.max(0, summary.normalCount - profitCount);
-  const warnCount = summary.warningCount;
-  const critCount = summary.criticalCount;
-  const MIN_SEG = 5;
-  const rawProfit = profitCount / total * 100;
-  const rawNormal = normalCount / total * 100;
-  const rawWarn = warnCount / total * 100;
-  const rawCrit = critCount / total * 100;
-  const needMinProfit = rawProfit < MIN_SEG;
-  const needMinNormal = rawNormal < MIN_SEG;
-  const needMinWarn = rawWarn < MIN_SEG;
-  const needMinCrit = rawCrit < MIN_SEG;
-  const minAllocated =
-    (needMinProfit ? MIN_SEG : 0) +
-    (needMinNormal ? MIN_SEG : 0) +
-    (needMinWarn ? MIN_SEG : 0) +
-    (needMinCrit ? MIN_SEG : 0);
-  const remaining = 100 - minAllocated;
-  const rawBigSum =
-    (needMinProfit ? 0 : rawProfit) +
-    (needMinNormal ? 0 : rawNormal) +
-    (needMinWarn ? 0 : rawWarn) +
-    (needMinCrit ? 0 : rawCrit) || 1;
-  const profitW = needMinProfit ? MIN_SEG : (rawProfit / rawBigSum) * remaining;
-  const normalW = needMinNormal ? MIN_SEG : (rawNormal / rawBigSum) * remaining;
-  const warnW = needMinWarn ? MIN_SEG : (rawWarn / rawBigSum) * remaining;
-  const critW = needMinCrit ? MIN_SEG : (rawCrit / rawBigSum) * remaining;
+  const segments = [
+    { id: "all", label: "全部", count: summary.totalBatches, color: "bg-muted-foreground" },
+    { id: "critical", label: "击穿", count: summary.criticalCount, color: "bg-danger" },
+    { id: "warning", label: "预警", count: summary.warningCount, color: "bg-warning" },
+    { id: "normal", label: "正常", count: Math.max(0, summary.normalCount - summary.profitableCount), color: "bg-primary" },
+    { id: "profit", label: "盈利", count: summary.profitableCount, color: "bg-success" },
+  ] as const;
 
   const critBatches = batches
     .filter((b) => b.riskLevel === RiskLevel.CRITICAL)
@@ -166,11 +131,6 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
   const lastMonthCount = monthlySeries[monthlySeries.length - 2]?.count ?? 0;
   const sixMonthCreatedTotal = monthlySeries.reduce((s, m) => s + m.count, 0);
 
-  const handleSeg = (t: LadderAnchorTarget) => {
-    jumpTo(t);
-    if (onJump) onJump(t);
-  };
-
   return (
     <Card className="card-chrome overflow-hidden">
       <CardContent className="p-5 lg:p-6">
@@ -214,75 +174,33 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
           />
         </div>
 
-        {/* ===== Ladder segments bar ===== */}
         <div className="mb-5">
-          <div className="flex items-center justify-between mb-2.5">
-            <div className="flex items-center gap-2">
-              <Gauge className="h-4 w-4 text-foreground/90" />
-              <p className="text-xs font-semibold tracking-wide text-foreground">
-                风险阶梯分布
-              </p>
-              <span className="inline-flex items-center gap-1 text-[10px] text-foreground/90 font-mono">
-                <MousePointerClick className="h-3 w-3 opacity-80" />
-                点击分段直达批次
-              </span>
-            </div>
-            <p className="text-[11px] text-foreground/95 font-mono">
-              击穿{">"}20% · 预警15-20% · 正常{"<"}15% · 盈利≥0%
-            </p>
+          <p className="mb-2 flex items-center gap-2 text-xs font-semibold">
+            <Gauge className="h-4 w-4" />
+            风险阶梯分布
+          </p>
+          <div className="mb-2 flex h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
+            {segments.slice(1).filter(({ count }) => count > 0).map(({ id, count, color }) => (
+              <span key={id} className={color} style={{ flexGrow: count }} />
+            ))}
           </div>
-
-          <div className="relative h-14 w-full rounded-xl overflow-hidden border border-border/70 bg-secondary/40">
-            <div className="absolute inset-y-0 left-0 flex items-stretch w-full">
+          <div className="grid grid-cols-5 gap-1" role="group" aria-label="筛选监控批次">
+            {segments.map(({ id, label, count, color }) => (
               <button
+                key={id}
                 type="button"
-                onClick={() => handleSeg("critical")}
-                className="group relative flex items-center justify-center px-1.5 text-danger-foreground bg-danger hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
-                style={{ width: `${critW}%` }}
-                aria-label={`击穿批次 ${critCount}，点击直达`}
+                aria-pressed={selectedRisk === id}
+                onClick={() => onJump(id)}
+                className={cn(
+                  "flex min-w-0 flex-wrap items-center justify-center gap-1 rounded-lg border px-1 py-2 text-xs hover:bg-secondary/70",
+                  selectedRisk === id ? "border-primary bg-secondary font-semibold" : "border-border/60",
+                )}
               >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
-                  <Flame className="h-3 w-3 shrink-0" />
-                  击穿 {critCount}
-                </div>
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", color)} />
+                <span>{label}</span>
+                <span className="font-mono">{count}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => handleSeg("warning")}
-                className="group relative flex items-center justify-center px-1.5 text-warning-foreground bg-warning hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
-                style={{ width: `${warnW}%` }}
-                aria-label={`预警批次 ${warnCount}，点击直达`}
-              >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
-                  预警 {warnCount}
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSeg("normal")}
-                className="group relative flex items-center justify-center px-1.5 text-primary-foreground bg-primary hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
-                style={{ width: `${normalW}%` }}
-                aria-label={`正常批次 ${normalCount}，点击直达`}
-              >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
-                  <CheckCircle2 className="h-3 w-3 shrink-0" />
-                  正常 {normalCount}
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSeg("profit")}
-                className="group relative flex items-center justify-center px-1.5 text-success-foreground bg-success hover:brightness-110 hover:scale-[1.01] transition-all cursor-pointer"
-                style={{ width: `${profitW}%` }}
-                aria-label={`盈利批次 ${profitCount}，点击直达`}
-              >
-                <div className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap">
-                  盈利 {profitCount}
-                  <TrendingUpIcon className="h-3 w-3 shrink-0" />
-                </div>
-              </button>
-            </div>
+            ))}
           </div>
         </div>
 
@@ -297,6 +215,7 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
             router={router}
             pathname={pathname}
             searchParams={searchParams}
+            onFocusBatch={onFocusBatch}
           />
           <FocusPanel
             title="接近预警线"
@@ -307,6 +226,7 @@ export function RiskLadderBar({ batches, summary, onJump }: RiskLadderBarProps) 
             router={router}
             pathname={pathname}
             searchParams={searchParams}
+            onFocusBatch={onFocusBatch}
           />
         </div>
       </CardContent>
@@ -381,6 +301,7 @@ function FocusPanel(props: {
   router: ReturnType<typeof useRouter>;
   pathname: string;
   searchParams: ReturnType<typeof useSearchParams>;
+  onFocusBatch: () => void;
 }) {
   const Icon = props.icon;
   const router = props.router;
@@ -420,6 +341,7 @@ function FocusPanel(props: {
                   type="button"
                   onClick={(e) => {
                     e.preventDefault();
+                    props.onFocusBatch();
                     const next = new URLSearchParams(searchParams?.toString() ?? "");
                     next.set("focus_batch", b.id);
                     router.replace(`${pathname}?${next.toString()}#batch-${b.id}`, { scroll: false });

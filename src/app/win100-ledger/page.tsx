@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,6 @@ import {
   buildWin100Ledger,
   type CollateralLedgerEntry,
   type RevenueLedgerEntry,
-  type PerformanceLedgerEntry,
 } from "@/lib/win100Ledger";
 import { formatCurrency, cn } from "@/lib/utils";
 import {
@@ -39,7 +39,7 @@ const fmtDateFull = (d?: string) => {
 export default function Win100LedgerPage() {
   const [tick, setTick] = useState(0);
   const { batches } = useMemo(() => getMockData(), [tick]);
-  const [tab, setTab] = useState<"collateral" | "revenue" | "performance">("collateral");
+  const [tab, setTab] = useState<"collateral" | "revenue">("collateral");
 
   useEffect(() => {
     const handler = () => setTick((t) => t + 1);
@@ -125,7 +125,7 @@ export default function Win100LedgerPage() {
             WIN100 履约台账
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            担保品 · 收益 · 履约三类台账汇总视图
+            担保品、已结算收益与补仓履约汇总
           </p>
         </div>
         <div className="flex gap-2 print:hidden">
@@ -184,6 +184,9 @@ export default function Win100LedgerPage() {
             <div className="text-xs text-muted-foreground mt-1">
               待处理 {ledger.performance.pendingCount} · 逾期 {ledger.performance.overdueCount} · 罚息 {formatCurrency(ledger.performance.totalPenalty)}
             </div>
+            <Link href="/margin-calls" className="mt-2 inline-block text-xs font-medium text-primary hover:underline">
+              查看补仓历史
+            </Link>
           </CardContent>
         </Card>
       </div>
@@ -193,7 +196,6 @@ export default function Win100LedgerPage() {
         {([
           { key: "collateral", label: "担保品台账", icon: ShieldCheck },
           { key: "revenue", label: "收益台账", icon: TrendingUp },
-          { key: "performance", label: "履约台账", icon: Clock },
         ] as const).map((t) => (
           <button
             key={t.key}
@@ -340,69 +342,6 @@ export default function Win100LedgerPage() {
         </Card>
       )}
 
-      {/* 履约台账 */}
-      {tab === "performance" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>履约台账</CardTitle>
-            <CardDescription>
-              每笔补仓指令的 T+2 到账情况、违约记录、罚息（逾期按日万分之五计罚息）
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
-                  <th className="py-2 px-2">批次</th>
-                  <th className="py-2 px-2 text-center">轮次</th>
-                  <th className="py-2 px-2">触发日</th>
-                  <th className="py-2 px-2">到期日 (T+2)</th>
-                  <th className="py-2 px-2 text-right">应缴</th>
-                  <th className="py-2 px-2 text-right">已缴</th>
-                  <th className="py-2 px-2 text-right">缺口</th>
-                  <th className="py-2 px-2">类型</th>
-                  <th className="py-2 px-2 text-center">状态</th>
-                  <th className="py-2 px-2 text-right">逾期天数</th>
-                  <th className="py-2 px-2 text-right">罚息</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ledger.performance.entries.length === 0 && (
-                  <tr>
-                    <td colSpan={11} className="text-center py-8 text-muted-foreground">暂无补仓记录</td>
-                  </tr>
-                )}
-                {ledger.performance.entries.map((e: PerformanceLedgerEntry) => {
-                  const gap = Math.max(0, e.requiredAmount - e.fulfilledAmount);
-                  return (
-                    <tr key={e.id} className={cn("border-b hover:bg-muted/30", e.isOverdue && "bg-red-500/5")}>
-                      <td className="py-2 px-2 font-medium">{e.batchNumber}</td>
-                      <td className="py-2 px-2 text-center">第 {e.roundNumber} 轮</td>
-                      <td className="py-2 px-2 whitespace-nowrap">{fmtDate(e.triggerDate)}</td>
-                      <td className="py-2 px-2 whitespace-nowrap">{fmtDate(e.dueDate)}</td>
-                      <td className="py-2 px-2 text-right">{formatCurrency(e.requiredAmount)}</td>
-                      <td className="py-2 px-2 text-right">{formatCurrency(e.fulfilledAmount)}</td>
-                      <td className="py-2 px-2 text-right text-red-500">{gap > 0.01 ? formatCurrency(gap) : "-"}</td>
-                      <td className="py-2 px-2">{e.collateralType === "cash" ? "现金" : e.collateralType === "stock" ? "股票" : "-"}</td>
-                      <td className="py-2 px-2 text-center">
-                        <Badge variant={e.status === "FULLFILLED" ? "default" : e.isOverdue ? "destructive" : "secondary"}>
-                          {e.status === "FULLFILLED" ? "已履约" : e.status === "OVERDUE" ? "逾期" : e.status === "PENDING" ? "待缴" : e.status}
-                        </Badge>
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {e.isOverdue ? <span className="text-red-500 font-medium">{e.overdueDays} 天</span> : "-"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {e.penaltyAmount > 0 ? <span className="text-red-500">{formatCurrency(e.penaltyAmount)}</span> : "-"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
