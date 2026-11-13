@@ -2062,7 +2062,7 @@ export default function ClientsPage() {
                 </div>
               </div>
 
-              <div className="rounded-md border border-dashed border-border/70 bg-secondary/30 p-3 grid gap-2 md:grid-cols-3 text-[11px]">
+              <div className="rounded-md border border-dashed border-border/70 bg-secondary/30 p-3 grid grid-cols-3 gap-2 text-[11px]">
                 <div>
                   <p className="text-muted-foreground mb-0.5">批次优先池上限</p>
                   <p className="font-mono font-semibold">{selectedAddBatch ? formatCurrency(selectedAddBatch.priorityAmount ?? 0) : "-"}</p>
@@ -2074,10 +2074,6 @@ export default function ClientsPage() {
                 <div>
                   <p className="text-muted-foreground mb-0.5">客户入金</p>
                   <p className="font-mono font-semibold">{addClientAmount > 0 ? formatCurrency(addClientAmount) : "-"}</p>
-                  <p className="mt-1 flex flex-wrap gap-x-1.5 leading-4" aria-live="polite">
-                    <span className="text-muted-foreground">分成比例</span>
-                    <span className="font-semibold text-foreground">{addClientSplitLabel}</span>
-                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground mb-0.5">机构应入金</p>
@@ -2086,6 +2082,10 @@ export default function ClientsPage() {
                 <div>
                   <p className="text-muted-foreground mb-0.5">合计建仓本金</p>
                   <p className="font-mono font-semibold text-success">{addClientTotalCapital > 0 ? formatCurrency(addClientTotalCapital) : "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground mb-0.5">分成比例</p>
+                  <p className="font-semibold text-foreground" aria-live="polite">{addClientSplitLabel}</p>
                 </div>
               </div>
 
