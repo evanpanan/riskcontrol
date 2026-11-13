@@ -63,20 +63,26 @@ export function TopBar() {
   const [lastReadNotifAt, setLastReadNotifAt] = useState<number>(0);
   const { user, role, logoutToLogin } = useCurrentUser();
   const [quote, setQuote] = useState<LiveQuoteSettings>(() => ({ ...DEFAULT_LIVE_QUOTE }));
-  const [quoteTick, setQuoteTick] = useState(0);
-  const quoteTickRef = useRef(0);
-  const [liveQuote, setLiveQuote] = useState<BrowserQuote | null>(null);
-  const prevPriceRef = useRef<number>(0);
+  const quoteSymbol = quote.symbol.trim().toUpperCase();
+  const [quoteResult, setQuoteResult] = useState<{ symbol: string; value: BrowserQuote } | null>(null);
   const [quoteFetching, setQuoteFetching] = useState(false);
+  const [quoteRefresh, setQuoteRefresh] = useState(0);
   const [klineOpen, setKlineOpen] = useState(false);
-  const [nyseTick, setNyseTick] = useState(0);
   const [quoteFlashDir, setQuoteFlashDir] = useState<"up" | "down" | null>(null);
-  const cachedQuote = hydrated ? getCachedQuote(quote.symbol) : null;
-  const quoteAsOf = liveQuote?.data?.updatedAt ?? cachedQuote?.data?.updatedAt ?? 0;
+  const previousQuote = useRef<{ symbol: string; price: number } | null>(null);
+  const nyse = getNYSEInfo(now?.getTime());
+  const liveQuote = quoteResult?.symbol === quoteSymbol
+    ? quoteResult.value
+    : hydrated ? getCachedQuote(quoteSymbol) : null;
+  const quoteAsOf = liveQuote?.data?.updatedAt ?? 0;
   const quoteAge = (now?.getTime() ?? Date.now()) - quoteAsOf;
-  const quoteFresh = quoteAsOf > 0 && quoteAge >= -30_000 && quoteAge <= 120_000;
-  const quoteStatus = quoteFetching ? '行情更新中' : quoteFresh ? '行情已更新' : quoteAsOf > 0 ? '行情已过期' : '行情待核验';
-
+  const hasQuoteTime = Number.isFinite(quoteAsOf) && quoteAsOf > 0 && quoteAge >= -30_000;
+  const quoteFresh = hasQuoteTime && quoteAge <= 120_000;
+  const quoteStatus = quoteFetching ? "行情更新中"
+    : !liveQuote || liveQuote.source === "OFFLINE" ? "行情暂不可用"
+    : !hasQuoteTime ? "行情待核验"
+    : quoteFresh ? "行情已更新"
+    : nyse.shouldBreathe ? "行情已过期" : "休市 · 最近行情";
 
   useEffect(() => {
     setHydrated(true);
@@ -89,38 +95,9 @@ export function TopBar() {
     } catch {}
     try {
       setQuote(getQuoteSettings());
-      const onQuoteChanged = (e: Event) => {
-        const ce = e as CustomEvent<any>;
-        if (!ce?.detail) return;
-        if (ce.detail.symbol || ce.detail.displaySymbol) {
-          setQuote((q) => ({ ...DEFAULT_LIVE_QUOTE, ...q, ...ce.detail }));
-        }
-        if (typeof ce.detail.updatedAt === "number") {
-          const qNow = getQuoteSettings();
-          const symKey = (qNow.symbol || "").trim().toUpperCase();
-          const quotes = ce.detail.quotes as Record<string, { price: number; changePercent: number }> | undefined;
-          if (symKey && quotes && typeof quotes[symKey] === "object") {
-            const q = quotes[symKey]!;
-            const old = prevPriceRef.current || Number(liveQuote?.price || 0);
-            const np = Number(q.price);
-            if (Number.isFinite(np)) {
-              if (old > 0 && Math.abs(np - old) > 1e-6) {
-                const dir: "up" | "down" = np > old ? "up" : "down";
-                setQuoteFlashDir(dir);
-                window.setTimeout(() => setQuoteFlashDir(null), 1500);
-              }
-              prevPriceRef.current = np;
-              setLiveQuote({
-                symbol: symKey,
-                provider: (q as any).provider || (liveQuote?.provider ?? null) as any,
-                source: (ce.detail.source as any) || (liveQuote?.source as any) || "LIVE",
-                fetchedAt: new Date(ce.detail.updatedAt).toISOString(),
-                price: String(q.price),
-                changePct: String(q.changePercent || 0),
-              } as any);
-            }
-          }
-        }
+      const onQuoteChanged = (event: Event) => {
+        const detail = (event as CustomEvent<Partial<LiveQuoteSettings>>).detail;
+        if (detail?.symbol) setQuote(getQuoteSettings());
       };
       const onStorage = (e: StorageEvent) => {
         if (e.key === LIVE_QUOTE_SETTINGS_KEY) {
@@ -134,68 +111,51 @@ export function TopBar() {
         window.removeEventListener("storage", onStorage);
       };
     } catch {}
-  }, [liveQuote?.price, liveQuote?.provider, liveQuote?.source]);
+  }, []);
 
-  // 实时行情 tick：按 NYSE 时段动态刷新；休市期间完全停止 setQuoteTick 引起的 rerender（防止FlashNumber视觉抖动）
   useEffect(() => {
-    if (!hydrated) return;
-    let t1Id: any = null;
-    let t2Id: any = null;
+    if (!hydrated || !quoteSymbol) return;
+    let timer: ReturnType<typeof setTimeout>;
     let cancelled = false;
-    const scheduleLoop = () => {
-      if (cancelled) return;
-      const nyse = getNYSEInfo();
-      const tickMs = nyse.shouldBreathe ? 1000 : 30_000;
-      t1Id = setTimeout(() => {
-        if (nyse.shouldBreathe) {
-          quoteTickRef.current += 1;
-          setQuoteTick((x) => x + 1);
-        }
-        setNyseTick((x) => x + 1);
-        scheduleLoop();
-      }, tickMs);
-    };
-    scheduleLoop();
+
     const runFetch = async () => {
       setQuoteFetching(true);
       try {
-        const q = await fetchQuoteBrowser(quote.symbol);
-        if (!cancelled) setLiveQuote(q);
-        refreshMockDataPrices();
-      } catch {} finally {
-        if (!cancelled) setQuoteFetching(false);
+        const value = await fetchQuoteBrowser(quoteSymbol);
+        if (!cancelled) setQuoteResult({ symbol: quoteSymbol, value });
+      } catch {
+        // Keep the last quote if the refresh fails.
+      } finally {
+        if (!cancelled) {
+          setQuoteFetching(false);
+          const interval = Math.min(60, Math.max(1, Number(quote.refreshSec) || 8));
+          const seconds = getNYSEInfo().shouldRefreshReal ? interval : Math.max(30, interval);
+          setNextUpdateAt(Date.now() + seconds * 1000);
+          timer = setTimeout(() => void runFetch(), seconds * 1000);
+          refreshMockDataPrices();
+        }
       }
     };
-    runFetch();
-    const scheduleFetch = () => {
-      if (cancelled) return;
-      const nyseNow = getNYSEInfo();
-      const userRefresh = Math.max(1, Math.min(3600, Number(quote.refreshSec) || 0)) || 8;
-      const refreshSec = nyseNow.shouldRefreshReal
-        ? Math.min(60, userRefresh)
-        : Math.min(60, Math.max(30, userRefresh));
-      
-      setNextUpdateAt(Date.now() + refreshSec * 1000);
-      
-      t2Id = setTimeout(async () => {
-        setQuoteFetching(true);
-        try {
-          const q = await fetchQuoteBrowser(quote.symbol);
-          if (!cancelled) setLiveQuote(q);
-          refreshMockDataPrices();
-        } catch {} finally {
-          if (!cancelled) setQuoteFetching(false);
-          scheduleFetch();
-        }
-      }, refreshSec * 1000);
-    };
-    scheduleFetch();
+    void runFetch();
     return () => {
       cancelled = true;
-      if (t1Id) clearTimeout(t1Id);
-      if (t2Id) clearTimeout(t2Id);
+      clearTimeout(timer);
     };
-  }, [hydrated, quote.refreshSec, quote.symbol]);
+  }, [hydrated, quote.refreshSec, quoteSymbol, quoteRefresh]);
+
+  useEffect(() => {
+    const value = quoteResult?.value;
+    if (!value || quoteResult.symbol !== quoteSymbol || value.source === "OFFLINE") return;
+    const previous = previousQuote.current;
+    previousQuote.current = { symbol: quoteSymbol, price: value.price };
+    if (previous?.symbol !== quoteSymbol || previous.price === value.price) {
+      setQuoteFlashDir(null);
+      return;
+    }
+    setQuoteFlashDir(value.price > previous.price ? "up" : "down");
+    const timer = setTimeout(() => setQuoteFlashDir(null), 1500);
+    return () => clearTimeout(timer);
+  }, [quoteResult, quoteSymbol]);
 
   // 移除自动聚焦：页面刷新时如果 Chrome 自动聚焦到搜索框，强制 blur
   useEffect(() => {
@@ -219,10 +179,9 @@ export function TopBar() {
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    try { refreshMockDataPrices(); } catch {}
+    setQuoteRefresh((refresh) => refresh + 1);
     setTimeout(() => {
       setIsRefreshing(false);
-      setNextUpdateAt(Date.now() + (Number(quote.refreshSec) || 8) * 1000);
     }, 1500);
   };
 
@@ -255,11 +214,6 @@ export function TopBar() {
         return r;
     }
   };
-
-  const nyse = useMemo(() => {
-    void nyseTick;
-    return getNYSEInfo();
-  }, [nyseTick]);
 
   const unreadCount = useMemo(() => {
     try {
@@ -318,7 +272,7 @@ export function TopBar() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground" title={quoteAsOf > 0 ? `行情时间：${new Date(quoteAsOf).toLocaleString('zh-CN')}；${nyse.shouldBreathe ? '交易时段' : '休市时段'}` : '尚未取得可核验的行情时间'}>
+          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground" title={hasQuoteTime ? `行情时间：${new Date(quoteAsOf).toLocaleString('zh-CN')}；${nyse.shouldBreathe ? '交易时段' : '休市时段'}` : '尚未取得可核验的行情时间'}>
             <span className={cn('h-1.5 w-1.5 rounded-full', quoteFresh ? 'bg-success' : 'bg-warning')} />
             {quoteStatus}
           </div>
@@ -328,8 +282,8 @@ export function TopBar() {
             if (!quote.showOnTopBar) return null;
             const symbol = (quote.symbol || "").trim().toUpperCase();
             if (!symbol) return null;
-            const price = liveQuote ? Number(liveQuote.price) : NaN;
-            const chg = liveQuote ? Number(liveQuote.changePct) : NaN;
+            const price = liveQuote?.source !== "OFFLINE" ? liveQuote?.price ?? NaN : NaN;
+            const chg = Number.isFinite(price) ? liveQuote?.changePct ?? NaN : NaN;
             const up = chg >= 0;
             const badge = (
               <button
@@ -382,7 +336,7 @@ export function TopBar() {
                 <TooltipContent>
                   <div className="text-[11px] leading-relaxed">
                     <p className="font-semibold mb-0.5">{symbol}</p>
-                    <p>
+                    {Number.isFinite(price) ? <p>
                       最新价 <span className="font-mono font-bold">${Number(price).toFixed(2)}</span>
                       （日涨跌{" "}
                       <span className={cn(up ? "text-success" : "text-danger", "font-mono font-semibold")}>
@@ -390,7 +344,7 @@ export function TopBar() {
                         {Number(chg).toFixed(2)}%
                       </span>
                       ）
-                    </p>
+                    </p> : <p>行情暂不可用</p>}
                     {liveQuote?.provider && (
                       <p className="text-muted-foreground mt-1">
                         数据源：{quoteProviderLabel(liveQuote.provider)}（{quoteSourceLabel(liveQuote)}）
