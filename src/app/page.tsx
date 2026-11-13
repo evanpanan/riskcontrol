@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { QuoteStatus } from "@/components/dashboard/QuoteStatus";
 import { formatCurrency } from "@/lib/utils";
 import { getStoredThresholds } from "@/lib/thresholds";
 import { Suspense, useMemo, useState, useEffect, useRef } from "react";
@@ -400,11 +399,6 @@ export default function DashboardPage() {
           <span className="text-sm text-muted-foreground">待确认风险批次</span><p className="text-2xl font-semibold tabular-nums mt-2">{alerts.length}<span className="ml-2 text-sm">个</span></p><p className="sr-only">当前预警范围 · 确认冷却 30 分钟 →</p>
         </Link>
       </section>
-      <div className="rounded-xl border border-border bg-card px-3 py-2 space-y-1">
-        {[...new Set(batches.map(b => b.stockSymbol))].map(symbol => <QuoteStatus key={symbol} symbol={symbol} />)}
-        {!batches.length && <p className="text-sm text-muted-foreground">暂无在管批次，添加数据后展示行情状态。</p>}
-      </div>
-
       <div className="space-y-4">
       {/* ===== 顶部：OKX 风格仪表盘双折线图 ===== */}
       <DashboardCharts summary={summary} />

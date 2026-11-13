@@ -80,7 +80,7 @@ export function TopBar() {
   const quoteFresh = hasQuoteTime && quoteAge <= 120_000;
   const quoteStatus = quoteFetching ? "行情更新中"
     : !liveQuote || liveQuote.source === "OFFLINE" ? "行情暂不可用"
-    : !hasQuoteTime ? "行情待核验"
+    : !hasQuoteTime ? null
     : quoteFresh ? "行情已更新"
     : nyse.shouldBreathe ? "行情已过期" : "休市 · 最近行情";
 
@@ -272,10 +272,12 @@ export function TopBar() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground" title={hasQuoteTime ? `行情时间：${new Date(quoteAsOf).toLocaleString('zh-CN')}；${nyse.shouldBreathe ? '交易时段' : '休市时段'}` : '尚未取得可核验的行情时间'}>
-            <span className={cn('h-1.5 w-1.5 rounded-full', quoteFresh ? 'bg-success' : 'bg-warning')} />
-            {quoteStatus}
-          </div>
+          {quoteStatus && (
+            <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground" title={hasQuoteTime ? `行情时间：${new Date(quoteAsOf).toLocaleString('zh-CN')}；${nyse.shouldBreathe ? '交易时段' : '休市时段'}` : '尚未取得可核验的行情时间'}>
+              <span className={cn('h-1.5 w-1.5 rounded-full', quoteFresh ? 'bg-success' : 'bg-warning')} />
+              {quoteStatus}
+            </div>
+          )}
 
           {/* 实时股票行情徽章（TopBar「实时连接中」旁边展示）：真实数据直出，零任何模拟/抖动 */}
           {(() => {
