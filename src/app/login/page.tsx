@@ -5,15 +5,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Shield,
-  Users,
   Mail,
   Lock,
-  LogIn,
   Eye,
   EyeOff,
   User,
-  BadgeCheck,
-  LineChart,
   AlertTriangle,
   ArrowRight,
 } from "lucide-react";
@@ -22,14 +18,14 @@ import { Logo } from "@/components/branding/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { useAuthContext } from "@/lib/auth/authProvider";
 import { type AppSessionUser } from "@/types/auth";
 import { cn } from "@/lib/utils";
-import { logAudit, logAuthDeny } from "@/lib/auth/audit";
+import { logAudit } from "@/lib/auth/audit";
+import styles from "./login.module.css";
 
 const PASSWORD_MIN_LENGTH = 6;
 
@@ -52,7 +48,6 @@ function LoginPageInner() {
   const [remember, setRemember] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({});
-  const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
   const [welcomeState, setWelcomeState] = useState<{
     visible: boolean;
     displayName: string;
@@ -60,18 +55,11 @@ function LoginPageInner() {
     email: string;
   } | null>(null);
 
-  const [customAccounts] = useState<Array<{
-    id: string; email: string; role: any; displayName: string;
-    avatarInitials: string; bdManagerFullName?: string; menuLabel?: string;
-  }>>([]);
-
   const nextPath = searchParams.get("next");
 
   useEffect(() => {
     setHydrated(true);
     try {
-      const storedLast = window.localStorage.getItem("risk_control_last_login_at");
-      if (storedLast) setLastLoginAt(storedLast);
       const storedEmail = window.localStorage.getItem("risk_control_remember_email");
       if (storedEmail?.trim()) setEmail(storedEmail);
     } catch {
@@ -91,6 +79,7 @@ function LoginPageInner() {
 
   const handleLoginForm = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || welcomeState) return;
     const nextErrors: { email?: string; password?: string; form?: string } = {};
     const identifier = email.trim();
     if (!identifier) nextErrors.email = "请输入企业邮箱或账号";
@@ -146,26 +135,18 @@ function LoginPageInner() {
   };
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-background">
-      {/* 背景渐变光斑 + 网格（商用级） */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -left-32 top-[-8rem] h-96 w-96 rounded-full bg-primary/15 blur-[140px]" />
-        <div className="absolute -right-40 top-40 h-[28rem] w-[28rem] rounded-full bg-indigo-500/10 blur-[140px]" />
-        <div className="absolute bottom-[-10rem] left-1/3 h-80 w-80 rounded-full bg-success/5 blur-[120px]" />
-        <div
-          className="absolute inset-0 opacity-[0.07]"
-          style={{
-            backgroundImage:
-              "linear-gradient(rgba(148,163,184,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.4) 1px, transparent 1px)",
-            backgroundSize: "40px 40px",
-            maskImage:
-              "radial-gradient(ellipse at center, rgba(0,0,0,1) 30%, rgba(0,0,0,0) 75%)",
-            WebkitMaskImage:
-              "radial-gradient(ellipse at center, rgba(0,0,0,1) 30%, rgba(0,0,0,0) 75%)",
-          }}
-        />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.06),transparent_55%)]" />
-      </div>
+    <div
+      className={cn(styles.shell, "relative min-h-screen w-full overflow-hidden")}
+      onPointerMove={(event) => {
+        if (event.pointerType !== "mouse") return;
+        const element = event.currentTarget;
+        const bounds = element.getBoundingClientRect();
+        element.style.setProperty("--pointer-x", `${event.clientX - bounds.left}px`);
+        element.style.setProperty("--pointer-y", `${event.clientY - bounds.top}px`);
+      }}
+    >
+      <div aria-hidden className={cn(styles.grid, "pointer-events-none absolute inset-0")} />
+      <div aria-hidden className={cn(styles.ambient, "pointer-events-none absolute inset-0")} />
 
       {/* 欢迎登录过渡遮罩 */}
       {welcomeState?.visible && (
@@ -177,105 +158,36 @@ function LoginPageInner() {
         />
       )}
 
-      <div className="relative flex min-h-screen flex-col">
-        {/* 顶部品牌栏 */}
-        <div className="flex items-center justify-between px-6 md:px-10 py-5">
-          <Link href="/" className="flex items-center gap-3 group">
-            <Logo size={38} />
-            <div className="flex flex-col">
-              <span className="font-bold tracking-tight text-gradient-primary text-lg">RiskControl</span>
-              <span className="text-[10px] text-muted-foreground/80 tracking-widest">机构级股票风控平台</span>
-            </div>
-          </Link>
-          <div className="hidden sm:flex items-center gap-3">
-            <Badge variant="outline" className="text-[10.5px] h-7 px-3 backdrop-blur-sm bg-card/40">
-              <BadgeCheck className="h-3 w-3 mr-1.5 text-success" />
-              15% 预警 · 20% 补仓自动击穿
-            </Badge>
-            <Badge variant="secondary" className="text-[10.5px] h-7 px-3 backdrop-blur-sm">
-              <Shield className="h-3 w-3 mr-1.5 text-primary" />
-              全量操作审计留痕
-            </Badge>
-          </div>
-        </div>
+      <div data-login-content className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-6 sm:px-10">
+        <Link href="/" className="mt-6 flex w-fit items-center gap-3 rounded-lg sm:mt-9">
+          <Logo size={42} />
+          <span className="text-lg font-semibold tracking-tight">RiskControl</span>
+        </Link>
 
-        {/* 主内容 */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 max-w-6xl w-full mx-auto px-6 md:px-10 py-6 md:py-12 gap-10 lg:gap-16 items-center">
-          {/* 左侧价值主张 */}
-          <div className="hidden lg:flex flex-col gap-8">
-            <div className="space-y-5">
-              <Badge variant="secondary" className="h-7 px-3 backdrop-blur w-fit">
-                <LineChart className="h-3 w-3 mr-1.5 text-primary" />
-                优先劣后股票产品 · 全景风控预警
-              </Badge>
-              <h1 className="text-4xl font-extrabold leading-tight tracking-tight">
-                统一机构级
-                <span className="block text-gradient-primary mt-1">风险与客户控制中心</span>
-              </h1>
-              <p className="text-muted-foreground/90 leading-relaxed max-w-lg">
-                实时监控股票组合跌幅，15% 预警 / 20% 补仓自动击穿，机构分层补仓台账与客户结算穿透。
-                商务经理、风控总监、运营角色权限分离，全部操作审计留痕。
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 max-w-lg">
-              <Card className="p-4 gradient-card border-border/50">
-                <Shield className="h-5 w-5 text-primary mb-2" />
-                <p className="text-sm font-semibold">角色权限分离</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">系统管理员 / 风控总监 / 商务经理 / 运营</p>
-              </Card>
-              <Card className="p-4 gradient-card border-border/50">
-                <Users className="h-5 w-5 text-success mb-2" />
-                <p className="text-sm font-semibold">客户归属锁定</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">商务经理仅可见自有客户与对应批次</p>
-              </Card>
-              <Card className="p-4 gradient-card border-border/50">
-                <Lock className="h-5 w-5 text-warning mb-2" />
-                <p className="text-sm font-semibold">20% 击穿自动预警</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">邮件 + WhatsApp 双通道</p>
-              </Card>
-              <Card className="p-4 gradient-card border-border/50">
-                <BadgeCheck className="h-5 w-5 text-primary mb-2" />
-                <p className="text-sm font-semibold">结算锁定 & 审计</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">每笔补仓 / 退出操作可追溯</p>
-              </Card>
-            </div>
-
-            <div className="space-y-2 max-w-lg">
-              <div className="flex items-start gap-2 text-[11.5px] text-muted-foreground/85">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-warning shrink-0" />
-                <div>
-                  <span className="font-semibold text-foreground/80">首次登录指引：</span>
-                  &nbsp;默认使用企业邮箱 + 密码。管理员在「系统设置 → 新增账号」创建账号。
-                  忘记密码请联系 ADMIN 角色进行重置。
-                </div>
-              </div>
-            </div>
+        <div className="grid flex-1 items-center gap-10 py-10 lg:grid-cols-[1.15fr_1fr]">
+          <div className={cn(styles.visual, "relative mx-auto hidden lg:grid")} aria-hidden="true">
+            <div className={styles.orbit} />
+            <div className={styles.orbit} />
+            <div className={styles.orbit} />
+            <div className={styles.core}><Shield className="h-12 w-12 text-sky-100" strokeWidth={1.25} /></div>
           </div>
 
-          {/* 右侧登录面板 */}
-          <div className="w-full max-w-md mx-auto">
-            <Card className="overflow-hidden border-border/60 shadow-2xl shadow-black/20 bg-card/60 backdrop-blur-xl">
-              <div className="px-6 md:px-8 pt-7 pb-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs uppercase tracking-wider font-semibold text-primary">Sign in</p>
-                  {hydrated && lastLoginAt && (
-                    <span className="text-[10px] font-mono text-muted-foreground">上次登录 {lastLoginAt}</span>
-                  )}
-                </div>
-                <h2 className="text-2xl font-bold tracking-tight">登录您的账号</h2>
-                <p className="text-sm text-muted-foreground">请使用企业邮箱与凭据登录进入工作台</p>
+          <div className="mx-auto w-full max-w-[440px]">
+            <Card className={cn(styles.panel, "overflow-hidden rounded-3xl")}>
+              <div className="space-y-2 px-6 pb-2 pt-8 sm:px-9">
+                <h1 className="text-3xl font-semibold tracking-tight">登录工作台</h1>
               </div>
 
-              <div className="px-6 md:px-8 py-5 space-y-5">
+              <div className="px-6 pb-8 pt-6 sm:px-9">
                 <form onSubmit={handleLoginForm} className="space-y-4">
                   <div className="space-y-1.5">
-                    <Label className="text-xs flex items-center gap-1">
+                    <Label htmlFor="login-email" className="text-xs flex items-center gap-1">
                       <Mail className="h-3 w-3" /> 企业邮箱
                     </Label>
                     <div className="relative">
                       <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
+                        id="login-email"
                         type="email"
                         placeholder="name@institution.com"
                         className={cn(
@@ -298,22 +210,22 @@ function LoginPageInner() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs flex items-center justify-between">
-                      <span className="flex items-center gap-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <Label htmlFor="login-password" className="flex items-center gap-1">
                         <Lock className="h-3 w-3" /> 登录密码
-                      </span>
+                      </Label>
                       <button
                         type="button"
                         onClick={() => toast.info("请联系系统管理员重置密码")}
                         className="text-[10.5px] font-medium text-primary hover:underline underline-offset-2"
-                        tabIndex={-1}
                       >
                         忘记密码？
                       </button>
-                    </Label>
+                    </div>
                     <div className="relative">
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
+                        id="login-password"
                         type={showPwd ? "text" : "password"}
                         placeholder="••••••••"
                         className={cn(
@@ -331,7 +243,6 @@ function LoginPageInner() {
                         type="button"
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/40"
                         onClick={() => setShowPwd((s) => !s)}
-                        tabIndex={-1}
                         aria-label={showPwd ? "隐藏密码" : "显示密码"}
                       >
                         {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -353,15 +264,18 @@ function LoginPageInner() {
                         className="h-3.5 w-3.5"
                       />
                       <span className="text-[11px] text-muted-foreground group-hover:text-foreground/80 transition-colors">
-                        记住此设备（安全网络环境）
+                        记住邮箱
                       </span>
                     </label>
                   </div>
 
+                  {errors.form && <p role="alert" className="rounded-lg border border-red-300/25 bg-red-400/10 px-3 py-2 text-sm text-red-200">{errors.form}</p>}
+
                   <Button
                     type="submit"
-                    className="w-full h-11 gap-2 text-sm font-semibold shadow-lg shadow-primary/20"
-                    disabled={isSubmitting}
+                    className={cn(styles.submit, "h-11 w-full gap-2 bg-blue-500 text-sm font-semibold text-white hover:bg-blue-600")}
+                    disabled={isSubmitting || !!welcomeState}
+                    aria-busy={isSubmitting}
                   >
                     {isSubmitting ? (
                       <>
@@ -370,35 +284,15 @@ function LoginPageInner() {
                       </>
                     ) : (
                       <>
-                        登录进入工作台
+                        登录
                         <ArrowRight className="h-3.5 w-3.5 -mr-1 ml-0.5 opacity-80" />
                       </>
                     )}
                   </Button>
                 </form>
 
-                {/* 自定义账号 / 演示账号：商用化 UI 下不展示快捷卡片，仅静默匹配邮箱 */}
-                <div className="hidden">
-                  {customAccounts.length}
-                </div>
-              </div>
-
-              <div className="border-t border-border/50 px-6 md:px-8 py-4 flex items-center justify-between">
-                <p className="text-[10.5px] text-muted-foreground/80">
-                  <Lock className="inline h-3 w-3 -mt-0.5 mr-1 text-primary/80" />
-                  登录即代表同意《平台服务条款》与《数据处理协议》
-                </p>
-                <Link href="/" className="text-[11px] font-medium text-primary hover:underline underline-offset-2">
-                  返回大盘 →
-                </Link>
               </div>
             </Card>
-
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/70 font-mono">
-              <span>© 2026 RiskControl</span>
-              <span>·</span>
-              <span>机构级股票风控平台</span>
-            </div>
           </div>
         </div>
       </div>
@@ -563,7 +457,7 @@ function WelcomeTransitionOverlay(props: {
                     className="h-1.5 w-1.5 rounded-full bg-success"
                     style={{ animation: "rc-blink 1s ease-in-out infinite" }}
                   />
-                  正在验证身份
+                  身份已验证
                 </span>
                 <span>正在跳转工作台…</span>
               </div>
