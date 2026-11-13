@@ -5,6 +5,8 @@ import { RC_SESSION_COOKIE } from "@/lib/auth/session";
 import { resolveSessionUserFromToken } from "@/lib/server/apiAuth";
 import { hashPassword, generateSalt } from "@/lib/auth/password";
 import { isAllowedRole, type AppRole, APP_ROLES } from "@/types/auth";
+import { NOTIFICATION_POLICY_KEY, parseNotificationPolicy, parseNotificationRecipients } from "@/lib/notificationPolicy";
+import { loadNotificationPolicy, notificationPolicyWhere, recipientsFromLegacyEmails } from "@/lib/server/notificationDispatch";
 import type { AppSessionUser } from "@/types/auth";
 
 export const runtime = "nodejs";
@@ -145,6 +147,8 @@ export async function GET(req: NextRequest) {
   }
 }
 
+class RecipientLimitError extends Error {}
+
 export async function POST(req: NextRequest) {
   const guard = await requireAdminSession(req);
   if (!guard.ok) return guard.res!;
@@ -163,6 +167,10 @@ export async function POST(req: NextRequest) {
   try { payload = JSON.parse(raw.toString("utf-8")); }
   catch { return jsonError("invalid json body", 400); }
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return jsonError("body must be a json object", 400);
+
+  const receiveRiskEmail: unknown = payload.receiveRiskEmail;
+  if (receiveRiskEmail !== undefined && typeof receiveRiskEmail !== "boolean")
+    return jsonError("请选择是否接收风控邮件提醒");
 
   if (!validateEmail(payload.email)) return jsonError("请填写有效邮箱", 400);
   const email = payload.email.trim().toLowerCase();
@@ -196,7 +204,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const prisma = await getPrisma();
-    const created = await prisma.appUser.create({
+    const createAccount = async (db: Prisma.TransactionClient) => db.appUser.create({
       data: {
         email,
         displayName,
@@ -209,11 +217,52 @@ export async function POST(req: NextRequest) {
       },
       select: { id: true, email: true, displayName: true, role: true, avatarInitials: true, bdManagerFullName: true, enabled: true, isPrimaryAdmin: true, createdAt: true, avatarDataUrl: true },
     });
+    const created = receiveRiskEmail === undefined
+      ? await createAccount(prisma)
+      : await prisma.$transaction(async (tx) => {
+          const account = await createAccount(tx);
+          const record = await tx.workspaceRecord.findUnique({ where: notificationPolicyWhere });
+          const stored = record?.payload as Record<string, unknown> | undefined;
+          const accounts = await tx.appUser.findMany({ select: { id: true, email: true } });
+          const policy = stored
+            ? parseNotificationPolicy({ ...stored, coreEmails: stored.coreEmails ?? [] }, false)
+            : await loadNotificationPolicy(tx);
+          const recipients = stored && "accountIds" in stored
+            ? parseNotificationRecipients(stored)
+            : recipientsFromLegacyEmails(policy.coreEmails, accounts.filter(({ id }) => id !== account.id));
+
+          const existingExternal = recipients.externalRecipients.some((entry) => entry.email === email);
+          if (!receiveRiskEmail && !existingExternal) return account;
+
+          const activeIds = new Set(accounts.map(({ id }) => id));
+          const accountIds = recipients.accountIds.filter((id) => activeIds.has(id));
+          const externalRecipients = recipients.externalRecipients.filter((entry) => entry.email !== email);
+          if (receiveRiskEmail) accountIds.push(account.id);
+          if (accountIds.length + externalRecipients.length > 10) throw new RecipientLimitError();
+
+          const config = {
+            telegramEnabled: policy.telegramEnabled,
+            criticalEmailEnabled: policy.criticalEmailEnabled,
+            fallbackEmailEnabled: policy.fallbackEmailEnabled,
+            accountIds,
+            externalRecipients: externalRecipients.map(({ email, note }) => ({ email, note })),
+          };
+          await tx.workspaceRecord.upsert({
+            where: notificationPolicyWhere,
+            create: { kind: "config", key: NOTIFICATION_POLICY_KEY, payload: config, updatedBy: guard.actor!.id },
+            update: { payload: config, revision: { increment: 1 }, updatedBy: guard.actor!.id },
+          });
+          return account;
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return NextResponse.json(
       { ok: true, receivedAt: new Date().toISOString(), stored: "db", user: created },
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
+    if (err instanceof RecipientLimitError)
+      return jsonError("风控邮件收件人已满（最多 10 位），请调整名单后再创建", 409);
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034")
+      return jsonError("账号或收件人名单正在更新，请重新提交", 409);
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       const fields = Array.isArray(err.meta?.target) ? err.meta.target : [];
       if (fields.includes("email")) return jsonError("该邮箱已创建账号", 409);

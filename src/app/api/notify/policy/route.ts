@@ -5,6 +5,7 @@ import {
   loadNotificationPolicy,
   notificationPolicyWhere,
   resolveNotificationEmails,
+  recipientsFromLegacyEmails,
 } from "@/lib/server/notificationDispatch";
 import {
   parseNotificationPolicy,
@@ -37,14 +38,7 @@ export async function GET() {
       : await loadNotificationPolicy();
     const recipients = stored && "accountIds" in stored
       ? parseNotificationRecipients(stored)
-      : {
-          accountIds: accounts
-            .filter(({ email }) => policy.coreEmails.includes(email.trim().toLowerCase()))
-            .map(({ id }) => id),
-          externalRecipients: policy.coreEmails
-            .filter((email) => !accounts.some((account) => account.email.trim().toLowerCase() === email))
-            .map((email) => ({ email, note: "" })),
-        };
+      : recipientsFromLegacyEmails(policy.coreEmails, accounts);
     const accountIds = new Set(accounts.map(({ id }) => id));
     recipients.accountIds = recipients.accountIds.filter((id) => accountIds.has(id));
     return NextResponse.json(

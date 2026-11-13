@@ -199,6 +199,7 @@ type UserFormState = Omit<SystemAppUser, "id" | "createdAt" | "avatarInitials" |
   id?: string;
   password?: string;
   confirmPassword?: string;
+  receiveRiskEmail?: boolean;
 };
 
 const emptyUserForm = (): UserFormState => ({
@@ -211,6 +212,7 @@ const emptyUserForm = (): UserFormState => ({
   enabled: true,
   password: "",
   confirmPassword: "",
+  receiveRiskEmail: false,
 });
 
 const SYSTEM_ROLE_LABELS: Record<SystemAppUser["role"], string> = {
@@ -614,6 +616,7 @@ export default function SettingsPage() {
       avatarInitials: computeInitials(displayName, uForm.email),
       avatarDataUrl: uForm.avatarDataUrl || undefined,
       enabled: uForm.enabled,
+      ...(!editingUserId && { receiveRiskEmail: uForm.receiveRiskEmail === true }),
       password: uForm.password?.trim() || undefined,
     };
     let savedUser: SystemAppUser | undefined;
@@ -2412,6 +2415,18 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+      {!editingUserId && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={uForm.receiveRiskEmail === true}
+            disabled={usersSaving}
+            onChange={(event) => setUForm({ ...uForm, receiveRiskEmail: event.target.checked })}
+          />
+          接收风控邮件提醒
+        </label>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs flex items-center gap-1">

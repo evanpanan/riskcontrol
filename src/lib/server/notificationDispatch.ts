@@ -59,15 +59,32 @@ export function resolveNotificationEmails(
   ];
 }
 
-export async function loadNotificationPolicy(): Promise<NotificationPolicy> {
-  const record = await prisma.workspaceRecord.findUnique({
+export function recipientsFromLegacyEmails(
+  emails: string[],
+  accounts: { id: string; email: string }[],
+): NotificationRecipientSettings {
+  const byEmail = new Map(accounts.map(({ id, email }) => [email.trim().toLowerCase(), id]));
+  const accountIds: string[] = [];
+  const externalRecipients: NotificationRecipientSettings["externalRecipients"] = [];
+  for (const email of emails) {
+    const id = byEmail.get(email);
+    if (id) accountIds.push(id);
+    else externalRecipients.push({ email, note: "" });
+  }
+  return { accountIds, externalRecipients };
+}
+
+export async function loadNotificationPolicy(
+  db: Pick<Prisma.TransactionClient, "workspaceRecord" | "appUser"> = prisma,
+): Promise<NotificationPolicy> {
+  const record = await db.workspaceRecord.findUnique({
     where: notificationPolicyWhere,
   });
   if (record) {
     const payload = record.payload as Record<string, unknown>;
     if (payload && "accountIds" in payload) {
       const recipients = parseNotificationRecipients(payload);
-      const accounts = await prisma.appUser.findMany({
+      const accounts = await db.appUser.findMany({
         select: { id: true, email: true, enabled: true },
       });
       return parseNotificationPolicy({
@@ -77,7 +94,7 @@ export async function loadNotificationPolicy(): Promise<NotificationPolicy> {
     }
     return parseNotificationPolicy(payload, false);
   }
-  const records = await prisma.workspaceRecord.findMany({
+  const records = await db.workspaceRecord.findMany({
     where: {
       kind: "config",
       key: { in: ["risk_control_recipients", "risk_control_settings"] },
