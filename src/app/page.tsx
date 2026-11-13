@@ -20,8 +20,11 @@ import type { AppSessionUser, AppRole } from "@/types/auth";
 import { filterBatchesForUser } from "@/lib/auth";
 import {
   Building2,
+  TrendingUp,
   AlertTriangle,
   Wallet,
+  Layers,
+  Shield,
   Target,
   Landmark,
   UserCheck,
@@ -90,16 +93,12 @@ export default function DashboardPage() {
     try {
       const saved = JSON.parse(localStorage.getItem('rc_dashboard_filters_v1') || '{}');
       if (saved.density === 'standard') setDensity('standard');
-      if (typeof saved.year === 'string') setYearFilter(saved.year);
-      if (typeof saved.month === 'string') setMonthFilter(saved.month);
-      if (['ALL', 'CRITICAL', 'WARNING', 'NORMAL', 'PROFIT'].includes(saved.risk)) setRiskLevelFilter(saved.risk);
-      // 首页默认恢复原版批次卡片；表格由用户手动切换。
     } catch { /* use defaults */ }
     setFiltersReady(true);
   }, []);
   useEffect(() => {
-    if (filtersReady) localStorage.setItem('rc_dashboard_filters_v1', JSON.stringify({ year: yearFilter, month: monthFilter, risk: riskLevelFilter, view, density }));
-  }, [filtersReady, yearFilter, monthFilter, riskLevelFilter, view, density]);
+    if (filtersReady) localStorage.setItem('rc_dashboard_filters_v1', JSON.stringify({ density }));
+  }, [filtersReady, density]);
   const pendingMargin = useMemo(() => batches.reduce((total, batch) => total + summarizeBatchMarginFromClients(batch).totalPending, 0), [batches]);
   const focusRisk = (risk: string) => {
     setYearFilter('ALL'); setMonthFilter('ALL'); setRiskLevelFilter(risk);
@@ -417,20 +416,7 @@ export default function DashboardPage() {
           <div className="h-16 w-full rounded-xl bg-secondary/40 animate-pulse" />
         </div>
       }>
-        <RiskLadderBar
-          batches={batches as any}
-          summary={ladderSummary}
-          selectedRisk={riskLevelFilter.toLowerCase()}
-          onJump={(risk) => {
-            setRiskLevelFilter(risk.toUpperCase());
-            document.getElementById("batch-monitor")?.scrollIntoView({ behavior: "smooth" });
-          }}
-          onFocusBatch={() => {
-            setRiskLevelFilter("ALL");
-            setYearFilter("ALL");
-            setMonthFilter("ALL");
-          }}
-        />
+        <RiskLadderBar batches={batches as any} summary={ladderSummary} />
       </Suspense>
 
       </div>
@@ -445,6 +431,49 @@ export default function DashboardPage() {
             </span>
           </div>
 
+        </div>
+
+        {/* ===== 风险状态筛选 ===== */}
+        <div className="flex flex-wrap items-center gap-1.5 -mx-1 px-1">
+          <FilterTab
+            active={riskLevelFilter === "ALL"}
+            onClick={() => {
+              setRiskLevelFilter("ALL");
+              setYearFilter("ALL");
+              setMonthFilter("ALL");
+            }}
+            left={<Layers className="h-3.5 w-3.5" />}
+            label="全部状态"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{batches.length}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.CRITICAL}
+            onClick={() => setRiskLevelFilter(RiskLevel.CRITICAL)}
+            left={<Flame className="h-3.5 w-3.5 text-danger" />}
+            label="需补仓（击穿）"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.criticalCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.WARNING}
+            onClick={() => setRiskLevelFilter(RiskLevel.WARNING)}
+            left={<AlertTriangle className="h-3.5 w-3.5 text-warning" />}
+            label="接近预警"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.warningCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === RiskLevel.NORMAL}
+            onClick={() => setRiskLevelFilter(RiskLevel.NORMAL)}
+            left={<Shield className="h-3.5 w-3.5 text-primary" />}
+            label="正常安全"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1">{summary.normalCount - summary.profitableCount}</Badge>}
+          />
+          <FilterTab
+            active={riskLevelFilter === "PROFIT"}
+            onClick={() => setRiskLevelFilter("PROFIT")}
+            left={<TrendingUp className="h-3.5 w-3.5 text-success" />}
+            label="盈利批次"
+            right={<Badge variant="outline" className="h-5 text-[10px] px-2 ml-1 text-success border-success/40">{summary.profitableCount}</Badge>}
+          />
         </div>
 
         <details className="rounded-lg border border-border/60 px-3 py-2"><summary className="cursor-pointer text-xs text-muted-foreground">日期筛选{yearMonthFilterActive ? ` · ${yearFilter} / ${monthFilter}` : " · 全部年份与月份"}</summary><div className="space-y-2 mt-2">
@@ -541,7 +570,7 @@ export default function DashboardPage() {
             const metrics = getBatchMetrics(b);
             const pending = summarizeBatchMarginFromClients(b).totalPending;
             const distance = getStoredThresholds().marginDropPercent - metrics.dropPercent;
-            return <tr key={b.id} id={`batch-${b.id}`} className="scroll-mt-24 border-t border-border hover:bg-secondary/40">
+            return <tr key={b.id} className="border-t border-border hover:bg-secondary/40">
               <td className="px-3 py-2 font-medium">{b.batchNumber}<span className="block text-xs text-muted-foreground mt-1">{b.stockSymbol}</span></td>
               <td className={cn('px-3 py-2', pending > 0 || metrics.riskLevel === 'CRITICAL' ? 'text-danger' : metrics.riskLevel === 'WARNING' ? 'text-warning' : 'text-muted-foreground')}>{pending > 0 || metrics.riskLevel === 'CRITICAL' ? '击穿' : metrics.riskLevel === 'WARNING' ? '预警' : '正常'}</td>
               <td className="px-3 py-2 tabular-nums">{formatCurrency(b.currentStockPrice ?? b.stockPriceAtStart ?? 0)}</td>
@@ -554,11 +583,27 @@ export default function DashboardPage() {
         </div>}
         {/* 批次网格 */}
         <div className={cn("grid gap-3 items-start", density === "compact" ? "grid-cols-[repeat(auto-fit,minmax(min(100%,270px),1fr))]" : "grid-cols-[repeat(auto-fit,minmax(min(100%,340px),1fr))]", view === "table" && "hidden")}>
-          {view === "cards" && visibleBatches.map((batch) => (
-            <div key={batch.id} id={`batch-${batch.id}`} className="scroll-mt-24 min-w-0">
-              <BatchCardV2 density={density} batch={batch as any} onAction={() => setTick(x => x + 1)} viewerRole={role} viewerUser={user ?? undefined} />
-            </div>
-          ))}
+          {(() => {
+            const seen: Record<string, boolean> = { profit: false, normal: false, warning: false, critical: false };
+            return visibleBatches.map((b) => {
+              const mv = b.currentMarketValue ?? b.initialTotalAmount ?? 0;
+              const metrics = getBatchMetrics(b);
+              const isProfitable = mv >= (b.initialTotalAmount ?? 0);
+              let anchor: string | null = null;
+              if (isProfitable && !seen.profit) { anchor = "anchor-profit"; seen.profit = true; }
+              else if (!isProfitable && b.riskLevel === RiskLevel.NORMAL && !seen.normal) { anchor = "anchor-normal"; seen.normal = true; }
+              else if (b.riskLevel === RiskLevel.WARNING && !seen.warning) { anchor = "anchor-warning"; seen.warning = true; }
+              else if (b.riskLevel === RiskLevel.CRITICAL && !seen.critical) { anchor = "anchor-critical"; seen.critical = true; }
+              const card = (
+                <BatchCardV2 density={density} key={b.id} batch={b as any} onAction={() => setTick(x => x + 1)} viewerRole={role} viewerUser={user ?? undefined} />
+              );
+              return (
+                <div key={`wrap-${b.id}`} id={`batch-${b.id}`} className="scroll-mt-24 min-w-0">
+                  {anchor ? <div id={anchor} className="h-full">{card}</div> : card}
+                </div>
+              );
+            });
+          })()}
         </div>
 
         {visibleBatches.length === 0 && (
