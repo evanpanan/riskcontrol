@@ -8,8 +8,13 @@ import { encryptBackup, decryptBackup, backupSha256 } from '../src/lib/server/ba
 import { validateSpecialExitWrite } from '../src/lib/server/specialExitGuard';
 import { deliverNotification } from '../src/lib/server/notificationDelivery';
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 0.01, `${a} != ${b}`);
-function make(price = 70): BatchLike {
+function make(price = 70, splitClients = false): BatchLike {
   const b = { id: 'test', batchNumber: 'TEST', stockSymbol: 'TEST', stockPriceAtStart: 100, currentStockPrice: price, initialTotalAmount: 1000000, priorityAmount: 700000, subordinateAmount: 300000, totalShares: 10000, cumulativeMarginCalls: 0, marginCalls: [], signDate: new Date(), maturityDate: new Date(Date.now() + 730 * 86400000), clients: [{ id: 'a', batchId: 'test', name: 'A', bdManager: 'B', investmentAmount: 700000, status: ClientStatus.ACTIVE, signDate: new Date(), profitSplitClient: 40, profitSplitInstitution: 60 }] } as BatchLike;
+  if (splitClients) {
+    const client = b.clients![0];
+    client.investmentAmount = 175000;
+    b.clients!.push({ ...client, id: 'b', name: 'B', investmentAmount: 525000 });
+  }
   initializeBatchFinance(b); return b;
 }
 async function main() {
@@ -25,6 +30,23 @@ async function main() {
   near(calculateRescueStats(excess, 70).totalRescueShares, (required + 700) / 70);
   near(calculateRescueStats(excess, 140).rescueCurrentValue, (required + 700) * 2);
   assert.equal(executeInstitutionTopup(excess, { amount: 700, allowExcess: true }), 0);
+  for (const ratio of [0.5, 1, 2]) {
+    const proportional = make(70, true);
+    const needed = getBatchMetrics(proportional).requiredMarginCall;
+    const amount = needed * ratio;
+    near(executeInstitutionTopup(proportional, { amount, allowExcess: true }), amount);
+    const trades = proportional.finance!.trades.filter((trade) => trade.source === "batch_one_click");
+    near(trades.filter((trade) => trade.clientId === "a").reduce((sum, trade) => sum + trade.amount, 0), amount * 0.25);
+    near(trades.filter((trade) => trade.clientId === "b").reduce((sum, trade) => sum + trade.amount, 0), amount * 0.75);
+    near(trades.reduce((sum, trade) => sum + trade.shares, 0), amount / 70);
+  }
+  const partial = make(70, true);
+  const partialRequired = getBatchMetrics(partial).requiredMarginCall;
+  executeInstitutionTopup(partial, { amount: partialRequired / 2 });
+  executeInstitutionTopup(partial, { amount: partialRequired / 2 });
+  near(partial.finance!.rounds[0].allocations.a.fulfilled, partialRequired * 0.25);
+  near(partial.finance!.rounds[0].allocations.b.fulfilled, partialRequired * 0.75);
+  console.log("PASS proportional underpayment, exact payment, overpayment and successive partial payments");
   const cash = make(); executeInstitutionTopup(cash, { amount: required, collateralType: 'cash' });
   near(calculateRescueStats(cash, 140).rescueCurrentValue, required);
   near(calculateRescueStats(cash, 140).unpricedAmount!, 0);

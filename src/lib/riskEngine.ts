@@ -948,18 +948,19 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
     .filter(([id]) => (!options.clientId || id === options.clientId) && batch.clients?.some((client) => client.id === id && client.status !== ClientStatus.SETTLED))
     .sort((a, b) => (b[1].required - b[1].fulfilled) - (a[1].required - a[1].fulfilled));
   const outstanding = targets.reduce((sum, [, state]) => sum + Math.max(0, state.required - state.fulfilled), 0);
-  const extra = options.allowExcess ? money(Math.max(0, options.amount - outstanding)) : 0;
-  let extraRemaining = extra;
-  let remaining = money(Math.min(options.amount, outstanding));
+  if (outstanding <= 0) return 0;
+  let remaining = money(options.allowExcess ? options.amount : Math.min(options.amount, outstanding));
+  let remainingWeight = outstanding;
   let applied = 0;
-  for (const [index, [clientId, state]] of targets.entries()) {
+  for (const [clientId, state] of targets) {
     const client = batch.clients?.find((c) => c.id === clientId);
     if (!client || client.status === ClientStatus.SETTLED) continue;
-    const obligationPay = money(Math.min(remaining, Math.max(0, state.required - state.fulfilled)));
-    const excessPay = index === targets.length - 1 ? extraRemaining
-      : money(extra * Math.max(0, state.required - state.fulfilled) / Math.max(outstanding, 0.01));
-    extraRemaining = money(extraRemaining - excessPay);
-    const pay = money(obligationPay + excessPay);
+    const weight = Math.max(0, state.required - state.fulfilled);
+    if (weight <= 0) continue;
+    // Allocate against the remaining weights so rounding preserves the exact total.
+    const pay = money(Math.min(remaining, remaining * weight / remainingWeight));
+    remainingWeight = Math.max(0, remainingWeight - weight);
+    remaining = money(remaining - pay);
     if (pay <= 0) continue;
     const id = uid();
     const source = options.clientId ? "client_single" : "batch_one_click";
@@ -971,7 +972,6 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
       shares, remainingFraction: 1, createdAt, source, operatorName: options.operatorName, collateralType: ct });
     state.fulfilled = money(state.fulfilled + pay);
     state.history.push({ id, clientId, amount: pay, fulfilledAt: createdAt, source, roundId: round.id, operatorName: options.operatorName });
-    remaining = money(remaining - obligationPay);
     applied = money(applied + pay);
   }
   round.fulfilledAmount = money(round.fulfilledAmount + applied);

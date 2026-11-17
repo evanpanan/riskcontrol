@@ -1743,7 +1743,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 确认补仓操作
               </DialogTitle>
               <DialogDescription className="text-left">
-                按本轮锁定缺口记录 WIN100 补仓。股票按当前价折算等值份额，现金按金额入账，本金和收益全部归 WIN100。
+                按各客户本轮剩余缺口比例分配本次补仓，多补和少补均按比例分配。本金和收益全部归 WIN100。
               </DialogDescription>
             </DialogHeader>
           </div>
