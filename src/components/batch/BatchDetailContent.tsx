@@ -48,6 +48,7 @@ import { cn, calculateTradingWindows, formatCurrency, formatDate, formatDateTime
 import { Batch, BatchStatus, Client, ClientStatus, MarginCallStatus, RiskLevel } from "@prisma/client";
 import * as XLSX from "@/lib/excelExport";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/auth/RoleGate";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
@@ -271,6 +272,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [topupInput, setTopupInput] = useState("");
   const [topupCollateralType, setTopupCollateralType] = useState<"cash" | "stock">("stock");
   const [lockedExitTarget, setLockedExitTarget] = useState<string | null>(null);
   const [lockupExitConfirmed, setLockupExitConfirmed] = useState(false);
@@ -583,6 +585,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const handleFulfill = () => {
     if (isTopupBlockedByLegacyLedger(batch as any)) { setRecoveryOpen(true); return; }
     setTopupCollateralType("stock");
+    setTopupInput("");
     setFulfillOpen(true);
   };
   const handleNotify = async (channel: "email" | "telegram") => {
@@ -593,11 +596,24 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     try { toast.success(await notifyBatchChannel(batch as any, channel)); }
     catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
   };
+  const topupPrice = batch.currentStockPrice || batch.stockPriceAtStart;
+  const topupAmount = topupInput === ""
+    ? marginSummary.totalPending
+    : Number(topupInput) * (topupCollateralType === "stock" ? topupPrice : 1);
+  const topupShares = topupAmount / topupPrice;
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("topup") === "1" &&
+        (user?.role === APP_ROLES.ADMIN || user?.role === APP_ROLES.RISK_MANAGER)) {
+      setFulfillOpen(true);
+    }
+  }, [user?.role]);
+
   const doFulfill = () => {
+    if (!Number.isFinite(topupAmount) || topupAmount <= 0) throw new Error("请输入有效补仓股数或金额");
     const canonical = getMockData().batches.find((b) => b.id === batch.id);
     if (!canonical) throw new Error("批次不存在，请刷新。");
     const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
-      amount: marginSummary.totalPending, expectedRoundId: marginSummary.roundId,
+      amount: topupAmount, allowExcess: true, expectedPrice: topupPrice, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
       collateralType: topupCollateralType,
     }));
@@ -1744,7 +1760,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 space-y-1 col-span-2">
                 <p className="text-[10px] uppercase tracking-wider text-danger">{topupCollateralType === "stock" ? "补仓股数" : "补仓金额"}</p>
                 <p className="font-mono font-extrabold text-2xl text-danger">
-                  {topupCollateralType === "stock" ? `${(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `$${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  {topupCollateralType === "stock" ? `${topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `$${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 </p>
               </div>
             </div>
@@ -1754,7 +1770,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setTopupCollateralType("stock")}
+                  onClick={() => { setTopupCollateralType("stock"); setTopupInput(""); }}
                   className={cn(
                     "rounded-lg border p-3 text-left transition-all",
                     topupCollateralType === "stock"
@@ -1770,7 +1786,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTopupCollateralType("cash")}
+                  onClick={() => { setTopupCollateralType("cash"); setTopupInput(""); }}
                   className={cn(
                     "rounded-lg border p-3 text-left transition-all",
                     topupCollateralType === "cash"
@@ -1786,12 +1802,21 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </button>
               </div>
             </div>
-            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>
+            <label className="block space-y-2 text-sm">
+              <span>{topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"}</span>
+              <Input type="number" min="0" step={topupCollateralType === "stock" ? "0.000001" : "0.01"}
+                value={topupInput} placeholder={String(topupCollateralType === "stock" ? marginSummary.totalPending / topupPrice : marginSummary.totalPending)}
+                onChange={(event) => setTopupInput(event.target.value)} />
+            </label>
+            {topupAmount > marginSummary.totalPending + 0.005 && (
+              <p className="text-sm text-warning">本次超额补仓 {formatCurrency(topupAmount - marginSummary.totalPending)}，全部计入 WIN100 补仓本金。</p>
+            )}
+            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>
             <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
               <div className="space-y-0.5">
                 <p>补仓完成后将：</p>
-                <p>· 累计补仓金额 + ${metrics.requiredMarginCall.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                <p>· 累计补仓金额 + ${topupAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                 <p>· 原始仓位和 WIN100 补仓仓位分别核算，股票价格不变</p>
                 <p>· 客户保本进度与分成比例保持不变</p>
               </div>
@@ -1805,7 +1830,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               try { doFulfill(); } catch (err) { toast.error(err instanceof Error ? err.message : "补仓失败"); }
             }} className="h-9 px-4 gap-1.5">
               <Zap className="h-3.5 w-3.5" />
-              {topupCollateralType === "stock" ? `确认补入 ${(marginSummary.totalPending / (batch.currentStockPrice || batch.stockPriceAtStart)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 $${marginSummary.totalPending.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              {topupCollateralType === "stock" ? `确认补入 ${topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 $${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             </Button>
           </DialogFooter>
         </DialogContent>

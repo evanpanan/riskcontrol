@@ -20,6 +20,11 @@ async function main() {
   near(executeInstitutionTopup(stock, { amount: required }), required);
   near(calculateRescueStats(stock, 70).totalRescueShares, required / 70);
   near(calculateRescueStats(stock, 140).rescueCurrentValue, required * 2);
+  const excess = make();
+  near(executeInstitutionTopup(excess, { amount: required + 700, allowExcess: true }), required + 700);
+  near(calculateRescueStats(excess, 70).totalRescueShares, (required + 700) / 70);
+  near(calculateRescueStats(excess, 140).rescueCurrentValue, (required + 700) * 2);
+  assert.equal(executeInstitutionTopup(excess, { amount: 700, allowExcess: true }), 0);
   const cash = make(); executeInstitutionTopup(cash, { amount: required, collateralType: 'cash' });
   near(calculateRescueStats(cash, 140).rescueCurrentValue, required);
   near(calculateRescueStats(cash, 140).unpricedAmount!, 0);

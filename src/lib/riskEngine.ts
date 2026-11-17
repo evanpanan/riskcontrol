@@ -929,6 +929,8 @@ export function isTopupBlockedByLegacyLedger(batch: BatchLike): boolean {
 export function executeInstitutionTopup(batch: BatchLike, options: {
   amount: number; clientId?: string; operatorName?: string; expectedRoundId?: string;
   collateralType?: "cash" | "stock";
+  allowExcess?: boolean;
+  expectedPrice?: number;
 }): number {
   initializeBatchFinance(batch);
   const round = openObligationRound(batch);
@@ -938,18 +940,26 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
     throw new Error("历史结算或补仓分配尚未核对，本次未记账。请进入批次详情，点击「重新检查账本」或「查看处理方法」。");
   }
   const ct = options.collateralType ?? "stock";
+  if (ct === "stock" && options.expectedPrice !== undefined && Math.abs(price - options.expectedPrice) > 0.000001) throw new Error("股价已更新，请核对等值金额后重新确认补仓。");
   if (ct === "stock" && (!Number.isFinite(price) || price <= 0)) throw new Error("当前成交价无效，无法记录股票补仓。");
   if (!Number.isFinite(options.amount) || options.amount <= 0) return 0;
   round.collateralType = ct;
   const targets = Object.entries(round.allocations)
-    .filter(([id]) => !options.clientId || id === options.clientId)
+    .filter(([id]) => (!options.clientId || id === options.clientId) && batch.clients?.some((client) => client.id === id && client.status !== ClientStatus.SETTLED))
     .sort((a, b) => (b[1].required - b[1].fulfilled) - (a[1].required - a[1].fulfilled));
-  let remaining = money(Math.min(options.amount, round.requiredAmount - round.fulfilledAmount));
+  const outstanding = targets.reduce((sum, [, state]) => sum + Math.max(0, state.required - state.fulfilled), 0);
+  const extra = options.allowExcess ? money(Math.max(0, options.amount - outstanding)) : 0;
+  let extraRemaining = extra;
+  let remaining = money(Math.min(options.amount, outstanding));
   let applied = 0;
-  for (const [clientId, state] of targets) {
+  for (const [index, [clientId, state]] of targets.entries()) {
     const client = batch.clients?.find((c) => c.id === clientId);
-    if (!client || client.status === ClientStatus.SETTLED || remaining <= 0) continue;
-    const pay = money(Math.min(remaining, Math.max(0, state.required - state.fulfilled)));
+    if (!client || client.status === ClientStatus.SETTLED) continue;
+    const obligationPay = money(Math.min(remaining, Math.max(0, state.required - state.fulfilled)));
+    const excessPay = index === targets.length - 1 ? extraRemaining
+      : money(extra * Math.max(0, state.required - state.fulfilled) / Math.max(outstanding, 0.01));
+    extraRemaining = money(extraRemaining - excessPay);
+    const pay = money(obligationPay + excessPay);
     if (pay <= 0) continue;
     const id = uid();
     const source = options.clientId ? "client_single" : "batch_one_click";
@@ -961,7 +971,7 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
       shares, remainingFraction: 1, createdAt, source, operatorName: options.operatorName, collateralType: ct });
     state.fulfilled = money(state.fulfilled + pay);
     state.history.push({ id, clientId, amount: pay, fulfilledAt: createdAt, source, roundId: round.id, operatorName: options.operatorName });
-    remaining = money(remaining - pay);
+    remaining = money(remaining - obligationPay);
     applied = money(applied + pay);
   }
   round.fulfilledAmount = money(round.fulfilledAmount + applied);

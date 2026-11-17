@@ -1426,10 +1426,6 @@ export function reloadMockData(): MockDataSet {
 }
 
 export function refreshMockDataPrices(): MockDataSet {
-  const nyse = getNYSEInfo();
-  if (!nyse.shouldBreathe) {
-    return getMockData();
-  }
   const data = getMockData();
   const now = new Date();
   const symbolsQueried = new Set<string>();

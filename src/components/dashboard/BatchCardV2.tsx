@@ -9,7 +9,6 @@ import {
   calculateBatchPnLSplit,
   calculateTotalShares,
   summarizeBatchMarginFromClients,
-  executeInstitutionTopup,
   isTopupBlockedByLegacyLedger,
   getLockedBatchRequiredMargin,
   type BatchLike as RiskEngineBatchLike,
@@ -29,7 +28,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatCurrency as fmtCur } from "@/lib/utils";
 import {
   AlertTriangle,
@@ -72,7 +70,6 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
   const tradingInfo = calculateTradingWindows(batch.signDate);
   const split = calculateBatchPnLSplit(batch, mv);
 
-  const [showFulfillDialog, setShowFulfillDialog] = useState(false);
 
   const currentPrice =
     (batch as any).currentPrice ?? (batch as any).currentStockPrice ?? batch.stockPriceAtStart ?? 0;
@@ -548,7 +545,7 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
                     window.location.assign(`/batch/${encodeURIComponent(batch.id)}`);
                     return;
                   }
-                  setShowFulfillDialog(true);
+                  window.location.assign(`/batch/${encodeURIComponent(batch.id)}?topup=1`);
                 }}
               >
                 <Zap className="h-3.5 w-3.5" />
@@ -567,64 +564,6 @@ export const BatchCardV2 = memo(function BatchCardV2({ batch, onAction, viewerRo
           )}
         </div>
       </div>
-      <ConfirmDialog
-        open={showFulfillDialog}
-        onOpenChange={(v) => {
-          if (adjustedRequired <= 0 && v) return;
-          setShowFulfillDialog(v);
-        }}
-        tone="danger"
-        title={
-          hasSingleTopups
-            ? "补仓剩余缺口（扣除客户已单独补仓部分）"
-            : "确认处理本次补仓"
-        }
-        description={
-          hasSingleTopups
-            ? "部分客户已单独补仓完成。本次「批次一键补仓」将按剩余缺口从大到小分配到每位客户，补齐未到账部分；已单独补仓客户不会重复分配。"
-            : "按本轮锁定缺口记录 WIN100 担保出资及成交份额。WIN100 补仓本金和收益全部归 WIN100，不改变客户原始本金或股票价格。"
-        }
-        summary={[
-          { label: "批次号", value: batch.batchNumber, accent: "primary" },
-          { label: "股票", value: `${batch.stockSymbol} · ${batch.stockName}`, accent: "muted" },
-          { label: "批次原始需补仓", value: fmtCur(lockedRequiredBase), accent: "muted" },
-          hasSingleTopups
-            ? { label: "客户已单独补仓", value: fmtCur(marginAgg.totalFulfilled) + ` · ${marginAgg.clientCountWithSingleTopup}位`, accent: "success" }
-            : null,
-          { label: "当前跌幅", value: `${metrics.dropPercent.toFixed(2)}%`, accent: "danger" },
-          hasSingleTopups
-            ? { label: "本次一键补仓(剩余)", value: fmtCur(adjustedRequired), accent: "danger" }
-            : { label: "需补仓金额", value: fmtCur(lockedRequiredBase), accent: "danger" },
-          { label: "补仓后市值", value: fmtCur(mv + adjustedRequired), accent: "success" },
-          { label: "累计补仓(含本次)", value: fmtCur((batch.cumulativeMarginCalls ?? 0) + adjustedRequired), accent: "warning" },
-        ].filter(Boolean) as any}
-        confirmText={
-          hasSingleTopups
-            ? `一键补齐剩余 ${fmtCur(adjustedRequired)}`
-            : "确认处理补仓"
-        }
-        cancelText="再想一想"
-        onConfirm={async () => {
-          const req = adjustedRequired;
-          if (req <= 0) {
-            setShowFulfillDialog(false);
-            return;
-          }
-          const canonical = getMockData().batches.find((b) => b.id === batch.id);
-          if (!canonical) throw new Error("批次不存在，请刷新。");
-          const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
-            amount: req, expectedRoundId: marginAgg.roundId,
-            operatorName: viewerUser?.displayName ?? viewerUser?.email,
-          }));
-          if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
-          onAction?.("fulfill-mc", batch.id);
-          window.dispatchEvent(new CustomEvent("risk-control:margin-fulfilled", {
-            detail: { batchId: batch.id, amount: applied },
-          }));
-          setMarginTick((t) => t + 1);
-          setShowFulfillDialog(false);
-        }}
-      />
     </Link>
   );
 });
