@@ -117,6 +117,7 @@ export default function ClientsPage() {
     signDate: new Date().toISOString().split("T")[0],
     entryPrice: "",
   });
+  const [addShares, setAddShares] = useState("");
   const [pendingAddAction, setPendingAddAction] = useState<"close" | "continue" | null>(null);
   const [createBatchForm, setCreateBatchForm] = useState<{
     signDate: string;
@@ -456,10 +457,11 @@ export default function ClientsPage() {
         detail: addClientTier ? `${addClientTier} · ${addClientSplitLabel}` : undefined,
       },
       { label: "机构应入金", value: addClientInstitutionAmount > 0 ? formatCurrency(addClientInstitutionAmount) : "—", accent: "primary" as const },
+      { label: "客户股数", value: addShares || "—" },
       { label: "客户入场价", value: addForm.entryPrice || "—" },
       { label: "签约日期", value: addForm.signDate || "—" },
     ],
-    [addClientAmount, addClientInstitutionAmount, addClientTier, addClientSplitLabel, addForm.entryPrice, addForm.name, addForm.signDate, selectedAddBatch?.batchNumber]
+    [addShares, addClientAmount, addClientInstitutionAmount, addClientTier, addClientSplitLabel, addForm.entryPrice, addForm.name, addForm.signDate, selectedAddBatch?.batchNumber]
   );
 
   const editingBatch = useMemo(
@@ -473,6 +475,7 @@ export default function ClientsPage() {
     const numAmt = Number(addForm.investment.replace(/[^0-9.]/g, ""));
     if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
     if (!batches.some((batch) => batch.id === addForm.batchId)) errs.batchId = "请选择有效的所属批次";
+    if (!Number.isFinite(Number(addShares)) || Number(addShares) <= 0) errs.shares = "请输入有效客户股数";
     const entryPrice = Number(addForm.entryPrice.replace(/[^0-9.]/g, ""));
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) errs.entryPrice = "请填写有效的客户入场价";
     setAddErrors(errs);
@@ -537,32 +540,22 @@ export default function ClientsPage() {
     if (mode === "close") {
       setAddClientOpen(false);
     } else {
+      setAddShares("");
       setAddForm({
         name: "",
         investment: "",
         bdManager: addForm.bdManager,
         batchId: addForm.batchId,
         signDate: addForm.signDate,
-        entryPrice: addForm.entryPrice,
+        entryPrice: "",
       });
       setAddErrors({});
     }
   };
 
   useEffect(() => {
-    if (!addClientOpen) return;
-    if (!selectedAddBatch) return;
-    setAddForm((prev) => {
-      const nextEntryPrice = Number(selectedAddBatch.stockPriceAtStart ?? selectedAddBatch.currentStockPrice ?? 0);
-      const shouldReplace =
-        !prev.entryPrice ||
-        prev.entryPrice === Number(selectedAddBatch.currentStockPrice ?? 0).toFixed(4) ||
-        prev.entryPrice === Number(selectedAddBatch.stockPriceAtStart ?? 0).toFixed(4);
-      if (!shouldReplace || !(nextEntryPrice > 0)) return prev;
-      return { ...prev, entryPrice: nextEntryPrice.toFixed(4) };
-    });
-  }, [addClientOpen, selectedAddBatch?.id]);
-
+    if (!addClientOpen) setAddShares("");
+  }, [addClientOpen]);
   useEffect(() => {
     if (!editingBatch) return;
     setEditBatchForm({
@@ -690,6 +683,7 @@ export default function ClientsPage() {
       bdManager: string;
       clients: any[];
       totalInvestment: number;
+      totalShares: number;
       activeCount: number;
       exitRequestedCount: number;
       settledCount: number;
@@ -708,6 +702,7 @@ export default function ClientsPage() {
           bdManager: String(c.bdManager),
           clients: [c],
           totalInvestment: inv,
+          totalShares: inv / (Number(c.entryStockPrice) || Number(batches.find((batch) => batch.id === c.batchId)?.stockPriceAtStart) || Infinity),
           activeCount: c.status === ClientStatus.ACTIVE ? 1 : 0,
           exitRequestedCount: c.status === ClientStatus.EXIT_REQUESTED ? 1 : 0,
           settledCount: c.status === ClientStatus.SETTLED ? 1 : 0,
@@ -717,6 +712,7 @@ export default function ClientsPage() {
       } else {
         existing.clients.push(c);
         existing.totalInvestment += inv;
+        existing.totalShares += inv / (Number(c.entryStockPrice) || Number(batches.find((batch) => batch.id === c.batchId)?.stockPriceAtStart) || Infinity);
         if (c.status === ClientStatus.ACTIVE) existing.activeCount++;
         if (c.status === ClientStatus.EXIT_REQUESTED) existing.exitRequestedCount++;
         if (c.status === ClientStatus.SETTLED) existing.settledCount++;
@@ -731,7 +727,7 @@ export default function ClientsPage() {
       }
     }
     return Array.from(groups.values());
-  }, [allClients]);
+  }, [allClients, batches]);
 
   const togglePersonExpand = (key: string) => {
     setExpandedPersons((prev) => {
@@ -892,9 +888,7 @@ export default function ClientsPage() {
                     bdManager: bdManagerFullName ?? "",
                     batchId: batches[0]?.id ?? "",
                     signDate: new Date().toISOString().split("T")[0],
-                    entryPrice: Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0) > 0
-                      ? Number(batches[0]?.stockPriceAtStart ?? batches[0]?.currentStockPrice ?? 0).toFixed(4)
-                      : "",
+                    entryPrice: "",
                   });
                   setAddErrors({});
                   setLastAddedSummary([]);
@@ -1183,9 +1177,7 @@ export default function ClientsPage() {
                                       bdManager: bdManagerFullName ?? "",
                                       batchId: batch.id,
                                       signDate: new Date().toISOString().split("T")[0],
-                                      entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
-                                        ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
-                                        : "",
+                                      entryPrice: "",
                                     });
                                     setAddErrors({});
                                     setAddClientOpen(true);
@@ -1314,9 +1306,7 @@ export default function ClientsPage() {
                                 bdManager: bdManagerFullName ?? "",
                                 batchId: batch.id,
                                 signDate: new Date().toISOString().split("T")[0],
-                                entryPrice: Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0) > 0
-                                  ? Number(batch.stockPriceAtStart ?? batch.currentStockPrice ?? 0).toFixed(4)
-                                  : "",
+                                entryPrice: "",
                               });
                               setAddErrors({});
                               setAddClientOpen(true);
@@ -1397,9 +1387,7 @@ export default function ClientsPage() {
                         bdManager: bdManagerFullName ?? "",
                         batchId: selectedFilteredBatch.id,
                         signDate: new Date().toISOString().split("T")[0],
-                        entryPrice: Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0) > 0
-                          ? Number(selectedFilteredBatch.stockPriceAtStart ?? selectedFilteredBatch.currentStockPrice ?? 0).toFixed(4)
-                          : "",
+                        entryPrice: "",
                       });
                       setAddErrors({});
                       setAddClientOpen(true);
@@ -1583,6 +1571,9 @@ export default function ClientsPage() {
                         <div className="col-span-2 text-right">
                           <p className="font-mono font-bold text-sm">
                             {formatCurrency(g.totalInvestment)}
+                          </p>
+                          <p className="mt-1 text-xs font-mono text-muted-foreground">
+                            {g.totalShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股
                           </p>
                           {g.clients.some((c: any) => isVipClient(c)) && (
                             <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
@@ -1831,7 +1822,7 @@ export default function ClientsPage() {
                         const v = e.target.value.replace(/[^0-9.]/g, "");
                         const parts = v.split(".");
                         const cleaned = parts[0] + (parts.length > 1 ? "." + parts.slice(1).join("") : "");
-                        setAddForm({ ...addForm, investment: cleaned });
+                        setAddForm({ ...addForm, investment: cleaned, entryPrice: Number(addShares) > 0 && Number(cleaned) > 0 ? String(Number(cleaned) / Number(addShares)) : "" });
                       }}
                       onBlur={() => {
                         const n = Number(addForm.investment.replace(/[^0-9.]/g, ""));
@@ -1905,9 +1896,6 @@ export default function ClientsPage() {
                                   setAddForm({
                                     ...addForm,
                                     batchId: b.id,
-                                    entryPrice: Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0) > 0
-                                      ? Number(b.stockPriceAtStart ?? b.currentStockPrice ?? 0).toFixed(4)
-                                      : "",
                                   });
                                   setBatchPickerOpen(false);
                                   setBatchPickerQuery("");
@@ -1969,21 +1957,35 @@ export default function ClientsPage() {
                     onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
                   />
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="new-client-shares" className="text-[11px]">客户股数 *</Label>
+                  <Input id="new-client-shares" type="number" min="0" step="any" value={addShares}
+                    onChange={(event) => {
+                      const shares = event.target.value;
+                      setAddShares(shares);
+                      setAddForm((previous) => ({ ...previous, entryPrice: Number(shares) > 0 && addClientAmount > 0 ? String(addClientAmount / Number(shares)) : "" }));
+                    }} />
+                  {addErrors.shares && <p className="text-[10px] text-danger">{addErrors.shares}</p>}
+                </div>
+                <div className="space-y-1.5">
                   <Label className="text-[11px]">客户入场价（USD）*</Label>
                   <Input
                     type="number"
                     step="0.0001"
                     value={addForm.entryPrice}
-                    onChange={(e) => setAddForm({ ...addForm, entryPrice: e.target.value })}
-                    placeholder="默认为批次建仓价，可修改为约定认购价"
+                    readOnly={role !== APP_ROLES.ADMIN}
+                    onChange={(e) => {
+                      setAddForm({ ...addForm, entryPrice: e.target.value });
+                      setAddShares(Number(e.target.value) > 0 ? String(addClientAmount / Number(e.target.value)) : "");
+                    }}
+                    placeholder="本金 ÷ 股数"
                     className={cn(addErrors.entryPrice && "border-danger ring-danger/20", "font-mono tabular-nums")}
                   />
                   {addErrors.entryPrice ? (
                     <p className="text-[10px] text-danger font-mono">{addErrors.entryPrice}</p>
                   ) : (
                     <p className="text-[10px] text-muted-foreground">
-                      默认为所选批次的历史建仓价 {selectedAddBatch ? formatCurrency(selectedAddBatch.stockPriceAtStart ?? 0) : "—"}，可修改为约定认购价。
+                      由本金 ÷ 股数计算。管理员修改入场价时，股数会按本金同步换算。
                     </p>
                   )}
                 </div>

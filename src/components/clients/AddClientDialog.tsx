@@ -1,4 +1,5 @@
 "use client";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 
 import { toast } from "sonner";
 import { useState, useMemo, useEffect } from "react";
@@ -81,6 +82,8 @@ export function AddClientDialog({
   batchId,
   lockedBdManager,
 }: AddClientDialogProps) {
+  const { role } = useCurrentUser();
+  const [shares, setShares] = useState("");
   const [name, setName] = useState("");
   const [investmentAmount, setInvestmentAmount] = useState<string>("");
   const [bdManager, setBdManager] = useState<string>(lockedBdManager || "");
@@ -114,6 +117,7 @@ export function AddClientDialog({
         setBdManager(lockedBdManager || "");
         setSignDate(new Date().toISOString().split("T")[0]);
         setEntryPrice("");
+        setShares("");
         setConfirmOpen(false);
         setErrors({});
       }, 200);
@@ -124,17 +128,9 @@ export function AddClientDialog({
     }
   }, [open, lockedBdManager, bdManager]);
 
-  const defaultBatchEntryPrice = useMemo(() => {
-    const mock = getMockData();
-    const batch = mock.batches.find((b) => b.id === batchId);
-    return Number(batch?.stockPriceAtStart ?? batch?.currentStockPrice ?? 0);
-  }, [batchId]);
-
   useEffect(() => {
-    if (!open) return;
-    if (!defaultBatchEntryPrice || defaultBatchEntryPrice <= 0) return;
-    setEntryPrice((prev) => prev || defaultBatchEntryPrice.toFixed(4));
-  }, [open, defaultBatchEntryPrice]);
+    setEntryPrice(numAmount > 0 && Number(shares) > 0 ? String(numAmount / Number(shares)) : "");
+  }, [numAmount, shares]);
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
@@ -149,6 +145,7 @@ export function AddClientDialog({
     }
     if (!bdManager) e.bdManager = "请选择负责的 商务经理（必填）";
     if (!signDate) e.signDate = "请选择签约日期";
+    if (!Number.isFinite(Number(shares)) || Number(shares) <= 0) e.shares = "请输入有效客户股数";
     const parsedEntryPrice = Number(entryPrice.replace(/[^\d.]/g, ""));
     if (!Number.isFinite(parsedEntryPrice) || parsedEntryPrice <= 0) {
       e.entryPrice = "请填写有效的客户入场价";
@@ -428,6 +425,12 @@ export function AddClientDialog({
           )}
 
           <div className="space-y-1.5">
+            <Label htmlFor="client-share-input">客户股数 *</Label>
+            <Input id="client-share-input" type="number" min="0" step="any" value={shares}
+              onChange={(event) => setShares(event.target.value)} />
+            {errors.shares && <p className="text-xs text-danger">{errors.shares}</p>}
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="entry-price" className="text-xs flex items-center gap-1.5">
               <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
               客户入场价 <span className="text-danger">*</span>
@@ -437,7 +440,8 @@ export function AddClientDialog({
               type="number"
               step="0.0001"
               value={entryPrice}
-              onChange={(e) => setEntryPrice(e.target.value)}
+              readOnly={role !== "ADMIN"}
+              onChange={(e) => { setEntryPrice(e.target.value); setShares(Number(e.target.value) > 0 ? String(numAmount / Number(e.target.value)) : ""); }}
               className={cn(errors.entryPrice && "border-destructive focus-visible:ring-destructive", "font-mono")}
             />
             {errors.entryPrice ? (
@@ -447,7 +451,7 @@ export function AddClientDialog({
               </p>
             ) : (
               <p className="text-[11px] text-muted-foreground">
-                默认取该批次建仓价 {defaultBatchEntryPrice > 0 ? formatCurrency(defaultBatchEntryPrice) : "—"}；你也可以手动改成更早锁定给客户的认购价。
+                由本金 ÷ 股数计算。管理员修改入场价时，股数会按本金同步换算。
               </p>
             )}
           </div>
