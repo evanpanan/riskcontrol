@@ -129,6 +129,12 @@ export interface MarginRound {
   win100Decision?: string;
 }
 export interface BatchFinance {
+  institutionPosition?: {
+    capital: number;
+    shares: number;
+    originalCapital: number;
+    originalShares: number;
+  };
   version: 2;
   legacyAllocationVersion?: 2;
   originalCapital: number;
@@ -855,12 +861,42 @@ function openObligationRound(batch: BatchLike): MarginRound | undefined {
   );
 }
 
+export function correctInstitutionPosition(batch: BatchLike, capital: number, shares: number): void {
+  if (!Number.isFinite(capital) || capital < 0 || !Number.isFinite(shares) || shares < 0)
+    throw new Error("机构投入金额和股数必须是有效的非负数");
+  initializeBatchFinance(batch);
+  const finance = batch.finance!;
+  if (finance.legacyWarnings.length) throw new Error("请先核对历史账本");
+  const previous = finance.institutionPosition;
+  const previousCapital = previous?.capital ?? batch.subordinateAmount;
+  const previousShares = previous?.shares ?? batch.totalShares * SUBORDINATE_RATIO;
+  finance.institutionPosition = {
+    capital, shares,
+    originalCapital: (previous?.originalCapital ?? finance.originalCapital * SUBORDINATE_RATIO) + capital - previousCapital,
+    originalShares: (previous?.originalShares ?? finance.originalShares * SUBORDINATE_RATIO) + shares - previousShares,
+  };
+  finance.originalCapital += capital - previousCapital;
+  finance.originalShares += shares - previousShares;
+  finance.revision++;
+  syncBatchFinance(batch);
+}
+
 export function syncBatchFinance(batch: BatchLike): void {
   if (!batch.finance) return;
   const f = batch.finance;
+  if (f.institutionPosition) {
+    const clients = (batch.clients ?? []).filter((client) => client.status !== ClientStatus.SETTLED);
+    const clientCapital = clients.reduce((sum, client) => sum + client.investmentAmount, 0);
+    const clientShares = clients.reduce((sum, client) => sum + client.investmentAmount / (client.entryStockPrice ?? batch.stockPriceAtStart), 0);
+    f.remainingCapital = money(clientCapital + f.institutionPosition.capital);
+    f.remainingShares = clientShares + f.institutionPosition.shares;
+    batch.priorityAmount = money(clientCapital);
+    batch.subordinateAmount = money(f.institutionPosition.capital);
+  } else {
+    batch.priorityAmount = money(f.remainingCapital * PRIORITY_RATIO);
+    batch.subordinateAmount = money(f.remainingCapital * SUBORDINATE_RATIO);
+  }
   batch.initialTotalAmount = money(f.remainingCapital);
-  batch.priorityAmount = money(f.remainingCapital * PRIORITY_RATIO);
-  batch.subordinateAmount = money(f.remainingCapital * SUBORDINATE_RATIO);
   batch.totalShares = f.remainingShares;
   batch.currentMarketValue = getAccountMarketValue(batch);
   batch.cumulativeMarginCalls = money(f.trades.reduce((s, t) => s + t.amount, 0));
@@ -1025,7 +1061,10 @@ export function calculateClientSettlement(client: ClientLike, batch: BatchLike, 
   const clientPnL = money(Math.max(0, initialPnL) * split.client);
   // 补仓按客户归属核销：只计入归属本客户的补仓，绝不按本金权重把整批补仓分摊给单个客户。
   const rescue = calculateClientRescueStats(batch, finalStockPrice, client.id, weight);
-  const accountSlice = shares / PRIORITY_RATIO * finalStockPrice + rescue.rescueCurrentValue;
+  const institutionShares = batch.finance?.institutionPosition
+    ? batch.finance.institutionPosition.shares * weight
+    : shares * SUBORDINATE_RATIO / PRIORITY_RATIO;
+  const accountSlice = (shares + institutionShares) * finalStockPrice + rescue.rescueCurrentValue;
   const clientReceives = money(client.investmentAmount + clientPnL);
   const institutionReceives = money(accountSlice - clientReceives);
   const marginCallReturned = money(rescue.totalRescueAmount);
@@ -1101,7 +1140,9 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     originalAccountCapital: money(f.remainingCapital * weight),
     institutionInitialCapital: money(batch.subordinateAmount * weight),
     institutionRescueValue: money(rescue.rescueCurrentValue),
-    institutionInitialPnL: money(initialPosPnl * SUBORDINATE_RATIO / PRIORITY_RATIO),
+    institutionInitialPnL: money(f.institutionPosition
+      ? (f.institutionPosition.shares * price - f.institutionPosition.capital) * weight
+      : initialPosPnl * SUBORDINATE_RATIO / PRIORITY_RATIO),
     institutionClientShare: money(initialPosPnl - result.clientPnL),
     institutionRescuePnL: money(rescue.rescuePnL),
     operatorName: opts.operatorName,
@@ -1114,6 +1155,10 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
     exitRequestedAt: client.exitRequestedAt ? new Date(client.exitRequestedAt).toISOString() : undefined,
   };
   f.settlements[clientId] = snapshot;
+  if (f.institutionPosition) {
+    f.institutionPosition.capital *= Math.max(0, 1 - weight);
+    f.institutionPosition.shares *= Math.max(0, 1 - weight);
+  }
   f.remainingCapital = money(f.remainingCapital - snapshot.originalAccountCapital);
   f.remainingShares = Math.max(0, f.remainingShares - client.investmentAmount / PRIORITY_RATIO / entryPrice);
   // 补仓成交按客户归属核销：只清除归属本客户的成交，机构为其他客户买入的补仓份额绝不被削减。
@@ -1164,8 +1209,8 @@ export function addClientPosition(batch: BatchLike, client: ClientLike): void {
   const price = client.entryStockPrice ?? batch.stockPriceAtStart ?? batch.currentStockPrice;
   if (!(price > 0)) throw new Error("当前成交价无效。");
   if (!Number.isFinite(client.investmentAmount) || client.investmentAmount <= 0) throw new Error("客户本金无效。");
-  const capital = client.investmentAmount / PRIORITY_RATIO;
   const f = batch.finance!;
+  const capital = client.investmentAmount / (f.institutionPosition ? 1 : PRIORITY_RATIO);
   f.originalCapital += capital;
   f.originalPriority += client.investmentAmount;
   f.remainingCapital += capital;
@@ -1193,8 +1238,8 @@ export function updateClientPosition(batch: BatchLike, clientId: string, patch: 
     const newPrice = Number(patch.entryStockPrice ?? previousPrice);
     if (!Number.isFinite(newAmount) || newAmount <= 0) throw new Error("客户本金无效。");
     if (!Number.isFinite(newPrice) || newPrice <= 0 || !(previousPrice > 0)) throw new Error("客户入场价无效。");
-    const capitalDelta = (newAmount - previousAmount) / PRIORITY_RATIO;
-    const sharesDelta = (newAmount / newPrice - previousAmount / previousPrice) / PRIORITY_RATIO;
+    const capitalDelta = (newAmount - previousAmount) / (f.institutionPosition ? 1 : PRIORITY_RATIO);
+    const sharesDelta = (newAmount / newPrice - previousAmount / previousPrice) / (f.institutionPosition ? 1 : PRIORITY_RATIO);
     f.originalCapital += capitalDelta;
     f.originalPriority += newAmount - previousAmount;
     f.remainingCapital += capitalDelta;
@@ -1226,7 +1271,7 @@ export function removeClientPosition(batch: BatchLike, clientId: string): void {
   if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再删除客户。");
   const price = (client as any).entryStockPrice ?? batch.stockPriceAtStart;
   if (!(price > 0)) throw new Error("当前成交价无效。");
-  const capital = Number(client.investmentAmount || 0) / PRIORITY_RATIO;
+  const capital = Number(client.investmentAmount || 0) / (f.institutionPosition ? 1 : PRIORITY_RATIO);
   f.originalCapital = Math.max(0, f.originalCapital - capital);
   f.originalPriority = Math.max(0, f.originalPriority - Number(client.investmentAmount || 0));
   f.remainingCapital = Math.max(0, f.remainingCapital - capital);
@@ -1312,7 +1357,9 @@ export function calculateBatchPnLSplit(batch: BatchLike, _currentMarketValue: nu
   const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
   const rescue = calculateRescueStats(batch, price);
   const fullRescuePnL = rescue.rescuePnL;
-  const initialBase = (batch.totalShares * price - batch.initialTotalAmount) * SUBORDINATE_RATIO;
+  const initialBase = batch.finance?.institutionPosition
+    ? batch.finance.institutionPosition.shares * price - batch.finance.institutionPosition.capital
+    : (batch.totalShares * price - batch.initialTotalAmount) * SUBORDINATE_RATIO;
   for (const client of batch.clients ?? []) {
     const snapshot = batch.finance?.settlements[client.id] ?? (client as ClientLike).settlement;
     const raw = (client.investmentAmount ?? 0) * (price / ((client as ClientLike).entryStockPrice ?? batch.stockPriceAtStart) - 1);

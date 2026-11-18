@@ -4,7 +4,7 @@ import {
   type BatchLike, type ClientLike, initializeBatchFinance, syncBatchFinance,
   executeInstitutionTopup, summarizeBatchMarginFromClients, getBatchMetrics,
   calculateBatchPnLSplit, calculateRescueStats, settleClientPosition,
-  calculateClientSettlement, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, updateClientPosition,
+  calculateClientSettlement, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, updateClientPosition, correctInstitutionPosition,
 } from "../src/lib/riskEngine";
 import { commitBatchFinance, FINANCE_STORE_KEY } from "../src/lib/mockData";
 import { formatPercent } from "../src/lib/utils";
@@ -52,6 +52,27 @@ function batch(price = 80): BatchLike {
   assert.throws(() => updateClientPosition(edited, "a", { investmentAmount: 430000, entryStockPrice: 0 }));
   assert.deepEqual(edited, previous, "invalid price must leave finance intact");
   console.log("PASS explicit client capital/share corrections preserve other accounts");
+}
+{
+  const corrected = batch(100);
+  const clientsBefore = structuredClone(corrected.clients);
+  correctInstitutionPosition(corrected, 320000, 3500);
+  near(corrected.priorityAmount, 700000);
+  near(corrected.subordinateAmount, 320000);
+  near(corrected.initialTotalAmount, 1020000);
+  near(corrected.totalShares, 10500);
+  assert.deepEqual(corrected.clients, clientsBefore);
+  near(calculateBatchPnLSplit(corrected, corrected.totalShares * 100).institutionTotalPnL, 30000);
+  const snapshot = structuredClone(corrected);
+  assert.throws(() => correctInstitutionPosition(corrected, -1, 3500));
+  assert.deepEqual(corrected, snapshot);
+  markExitReady(corrected, "a");
+  settleClientPosition(corrected, "a", { force: false });
+  near(corrected.finance!.institutionPosition!.capital, 160000);
+  near(corrected.finance!.institutionPosition!.shares, 1750);
+  near(corrected.totalShares, 5250);
+  near(corrected.priorityAmount, 350000);
+  console.log("PASS explicit institution correction, client isolation and partial settlement");
 }
 // Phase 3 起结算要求客户先提交退出申请且通知期已过。
 // 结算用例统一走“到期退出”路径（签约日早于最终到期日，无提前退出费），

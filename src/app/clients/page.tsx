@@ -28,7 +28,7 @@ import { triggerClientAddedAlert } from "@/lib/notifier";
 import { getLiveQuoteSettings, fetchQuoteBrowser, isQuoteUsableForRiskDecision, quoteAgeMs, quoteSourceLabel } from "@/lib/liveQuote";
 import { quoteProviderLabel } from "@/lib/quote/providers";
 import { formatCurrency, cn, formatDate, formatPercent, calculateTradingWindows } from "@/lib/utils";
-import { calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit, PRIORITY_RATIO, SUBORDINATE_RATIO, calculateBatchStatus, calculateCurrentMarketValue } from "@/lib/riskEngine";
+import { correctInstitutionPosition, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, isVipClient, updateClientPosition, removeClientPosition, getBatchMetrics, calculateBatchPnLSplit, PRIORITY_RATIO, SUBORDINATE_RATIO, calculateBatchStatus, calculateCurrentMarketValue } from "@/lib/riskEngine";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { filterClientsByRole, type ClientLike, canCreateBatch } from "@/lib/authz/dataScope";
@@ -147,6 +147,7 @@ export default function ClientsPage() {
     maturityDate: "",
     currentStockPrice: "",
   });
+  const [institutionCorrection, setInstitutionCorrection] = useState({ capital: "", shares: "" });
   const [editBatchErrors, setEditBatchErrors] = useState<Record<string, string>>({});
   const LAST_BATCH_SYMBOL_KEY = "risk_control_last_batch_symbol_v1";
   const FORBIDDEN_SYMBOL_FOR_MEMORY = /XMAX/i;
@@ -565,6 +566,10 @@ export default function ClientsPage() {
       signDate: editingBatch.signDate ? new Date(editingBatch.signDate).toISOString().split("T")[0] : "",
       maturityDate: editingBatch.maturityDate ? new Date(editingBatch.maturityDate).toISOString().split("T")[0] : "",
       currentStockPrice: Number(editingBatch.currentStockPrice ?? 0) > 0 ? Number(editingBatch.currentStockPrice).toFixed(4) : "",
+    });
+    setInstitutionCorrection({
+      capital: String(editingBatch.subordinateAmount ?? 0),
+      shares: String((editingBatch as any).finance?.institutionPosition?.shares ?? (editingBatch.totalShares ?? 0) * SUBORDINATE_RATIO),
     });
     setEditBatchErrors({});
   }, [editingBatch]);
@@ -3118,6 +3123,20 @@ export default function ClientsPage() {
                     <span className="font-mono font-semibold">{formatCurrency(editingBatch.stockPriceAtStart ?? 0)}</span>
                   </p>
                 </div>
+                <div className="grid gap-3 rounded-lg border border-border/50 p-3 sm:grid-cols-2">
+                  <label className="space-y-1 text-xs">
+                    <span>机构投入金额（USD）</span>
+                    <Input type="number" min="0" step="0.01" value={institutionCorrection.capital}
+                      onChange={(event) => setInstitutionCorrection({ ...institutionCorrection, capital: event.target.value })} />
+                  </label>
+                  <label className="space-y-1 text-xs">
+                    <span>机构投入股数</span>
+                    <Input type="number" min="0" step="any" value={institutionCorrection.shares}
+                      onChange={(event) => setInstitutionCorrection({ ...institutionCorrection, shares: event.target.value })} />
+                  </label>
+                  <p className="text-xs text-muted-foreground sm:col-span-2">当前剩余的机构初始担保投入，历次补仓另计。修改后同步调整本批次资产与机构盈亏。</p>
+                  {editBatchErrors.institution && <p className="text-xs text-danger sm:col-span-2">{editBatchErrors.institution}</p>}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-xs font-medium">批次号 *</Label>
@@ -3210,6 +3229,12 @@ export default function ClientsPage() {
                 if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
                   errors.currentStockPrice = "请填写有效的当前参考价";
                 }
+                const institutionCapital = Number(institutionCorrection.capital);
+                const institutionShares = Number(institutionCorrection.shares);
+                if (!institutionCorrection.capital || !institutionCorrection.shares ||
+                    !Number.isFinite(institutionCapital) || institutionCapital < 0 ||
+                    !Number.isFinite(institutionShares) || institutionShares < 0)
+                  errors.institution = "请填写有效的机构投入金额和股数";
                 setEditBatchErrors(errors);
                 if (Object.keys(errors).length > 0) return;
                 try {
@@ -3219,6 +3244,9 @@ export default function ClientsPage() {
                     draft.signDate = signDate!;
                     draft.maturityDate = maturityDate!;
                     draft.currentStockPrice = currentPrice;
+                    const previousInstitutionShares = draft.finance?.institutionPosition?.shares ?? draft.totalShares * SUBORDINATE_RATIO;
+                    if (institutionCapital !== draft.subordinateAmount || institutionShares !== previousInstitutionShares)
+                      correctInstitutionPosition(draft, institutionCapital, institutionShares);
                     draft.currentMarketValue = calculateCurrentMarketValue(
                       draft.stockPriceAtStart,
                       draft.currentStockPrice,

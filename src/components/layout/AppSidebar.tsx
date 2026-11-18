@@ -66,7 +66,7 @@ const NAV_ITEMS: NavItem[] = [
     scope: "institution",
   },
   {
-    title: "客户管理",
+    title: "批次&客户管理",
     icon: Users,
     href: "/clients",
     description: "客户名录 & 商务经理分配",
@@ -349,7 +349,7 @@ export function AppSidebar() {
               <span className="text-xs font-semibold">我的在管客户</span>
             </div>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
-              客户归属由 ADMIN / 风控总监 在「客户管理」中分配。
+              客户归属由 ADMIN / 风控总监 在「批次&客户管理」中分配。
               如有数据范围变更，请联系机构管理员。
             </p>
           </div>

@@ -157,11 +157,12 @@ export function buildCollateralLedger(batches: BatchLike[]): CollateralLedgerSum
         : 0;
 
     // 初始担保条目
-    const initialShares = entryPrice > 0 ? subAmount / entryPrice : 0;
-    const releasedInitialShares = initialShares * settledWeight;
-    const releasedInitialAmount = subAmount * settledWeight;
+    const position = (batch as BatchLike).finance?.institutionPosition;
+    const initialShares = position ? position.originalShares : entryPrice > 0 ? subAmount / entryPrice : 0;
+    const releasedInitialShares = position ? position.originalShares - position.shares : initialShares * settledWeight;
+    const releasedInitialAmount = position ? position.originalCapital - position.capital : subAmount * settledWeight;
     const remainingInitialShares = Math.max(0, initialShares - releasedInitialShares);
-    const remainingInitialPrincipal = Math.max(0, subAmount - releasedInitialAmount);
+    const remainingInitialPrincipal = position ? position.capital : Math.max(0, subAmount - releasedInitialAmount);
     const initialCurrentValue = remainingInitialShares * price;
     entries.push({
       id: `${batch.id}-initial`,
@@ -169,7 +170,7 @@ export function buildCollateralLedger(batches: BatchLike[]): CollateralLedgerSum
       batchNumber: (batch as any).batchNumber ?? batch.id,
       type: "initial",
       entryPrice,
-      principal: subAmount,
+      principal: position?.originalCapital ?? subAmount,
       shares: initialShares,
       releasedShares: releasedInitialShares,
       releasedAmount: releasedInitialAmount,
