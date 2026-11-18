@@ -47,6 +47,14 @@ async function main() {
   near(partial.finance!.rounds[0].allocations.a.fulfilled, partialRequired * 0.25);
   near(partial.finance!.rounds[0].allocations.b.fulfilled, partialRequired * 0.75);
   console.log("PASS proportional underpayment, exact payment, overpayment and successive partial payments");
+  const dated = make();
+  executeInstitutionTopup(dated, { amount: required, topupDate: "2026-11-10" });
+  assert.equal(marketDate(new Date(dated.finance!.trades.at(-1)!.createdAt)), "2026-11-10");
+  assert.equal(dated.finance!.rounds[0].allocations.a.history.at(-1)!.fulfilledAt, dated.finance!.trades.at(-1)!.createdAt);
+  const invalidDate = make();
+  const untouched = structuredClone(invalidDate);
+  assert.throws(() => executeInstitutionTopup(invalidDate, { amount: required, topupDate: "2026-02-30" }), /日期/);
+  assert.deepEqual(invalidDate, untouched);
   const cash = make(); executeInstitutionTopup(cash, { amount: required, collateralType: 'cash' });
   near(calculateRescueStats(cash, 140).rescueCurrentValue, required);
   near(calculateRescueStats(cash, 140).unpricedAmount!, 0);

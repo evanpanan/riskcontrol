@@ -1,4 +1,5 @@
 "use client";
+import { defaultTopupDate } from "@/lib/topupDate";
 
 import { toast } from "sonner";
 import { useMemo, useState, useEffect, useRef } from "react";
@@ -191,6 +192,7 @@ export function ClientTable({
   const [marginCollateralType, setMarginCollateralType] = useState<"stock" | "cash">("stock");
   const [marginDialogOpen, setMarginDialogOpen] = useState(false);
   const [marginDialogClientId, setMarginDialogClientId] = useState<string | null>(null);
+  const [marginDate, setMarginDate] = useState(defaultTopupDate);
   const [marginInputValue, setMarginInputValue] = useState<string>("");
   const [marginDialogTick, setMarginDialogTick] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
@@ -770,6 +772,7 @@ export function ClientTable({
                                   return;
                                 }
                                 setMarginCollateralType("stock");
+                                setMarginDate(defaultTopupDate());
                                 setMarginDialogClientId(client.id);
                                 setMarginInputValue((clientPending / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toFixed(6));
                                 setMarginDialogOpen(true);
@@ -901,6 +904,7 @@ export function ClientTable({
                 { label: "客户投资本金", value: formatCurrency(mm?.initialInvestment ?? marginDialogClient.investmentAmount ?? 0), accent: "muted" as const },
                 { label: "机构归属补仓", value: formatCurrency(req), accent: "danger" as const },
                 { label: "机构已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
+                { label: "补仓日期", value: marginDate },
                 { label: "补仓形式", value: marginCollateralType === "stock" ? "股票（默认）" : "现金", accent: "primary" as const },
                 ...[{ label: "等值股票 / 计价", value: `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 / $${(batch?.currentStockPrice || batch?.stockPriceAtStart || 0).toFixed(4)}`, accent: "muted" as const }],
                 { label: "本次机构补仓", value: marginCollateralType === "stock" ? `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股（${formatCurrency(applyAmount)}）` : formatCurrency(applyAmount), accent: "warning" as const },
@@ -910,9 +914,25 @@ export function ClientTable({
               ];
             })()
           }
-          footerExtra={
-            <div className="flex items-center gap-2 w-full">
-              <select aria-label="补仓形式" className="h-10 rounded-md border border-border bg-background px-2 text-xs" value={marginCollateralType} onChange={e => { setMarginCollateralType(e.target.value as "stock" | "cash"); setMarginInputValue(""); }}><option value="stock">补股票</option><option value="cash">补现金</option></select>
+          bodyExtra={
+            <div className="w-full space-y-3">
+              <label className="block space-y-1 text-xs">
+                <span>补仓日期</span>
+                <Input type="date" value={marginDate} onChange={(event) => setMarginDate(event.target.value)} />
+              </label>
+              <div className="grid grid-cols-2 gap-2" role="group" aria-label="补仓形式">
+                {(["stock", "cash"] as const).map((type) => (
+                  <Button key={type} type="button" variant="outline"
+                    aria-pressed={marginCollateralType === type}
+                    className={cn("h-11 gap-2", marginCollateralType === type && "border-primary bg-primary/10 text-primary")}
+                    onClick={() => { setMarginCollateralType(type); setMarginInputValue(""); }}>
+                    {type === "stock" ? <Landmark className="h-4 w-4" /> : <Wallet className="h-4 w-4" />}
+                    {type === "stock" ? "补股票" : "补现金"}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 w-full">
+
               <div className="relative flex-1">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{marginCollateralType === "stock" ? "股" : "$"}</span>
                 <Input
@@ -945,6 +965,7 @@ export function ClientTable({
                 剩余全额
               </Button>
             </div>
+            </div>
           }
           confirmText={(() => {
             const mm = perClientStateMap.get(marginDialogClient.id);
@@ -967,7 +988,7 @@ export function ClientTable({
             let applied: number;
             try {
               applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
-                amount, allowExcess: true, expectedPrice: batch.currentStockPrice || batch.stockPriceAtStart, clientId: c.id, expectedRoundId: mm?.roundId, collateralType: marginCollateralType,
+                amount, allowExcess: true, expectedPrice: batch.currentStockPrice || batch.stockPriceAtStart, clientId: c.id, expectedRoundId: mm?.roundId, collateralType: marginCollateralType, topupDate: marginDate,
                 operatorName: viewerUser?.displayName ?? viewerUser?.email,
               }));
             } catch (err) {

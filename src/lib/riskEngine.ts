@@ -1,3 +1,4 @@
+import { topupDateTimestamp } from "./topupDate";
 import { Client, Batch, MarginCall, RiskLevel, BatchStatus, ClientStatus } from "@prisma/client";
 import { calculateTradingWindows } from "./utils";
 import { getProfitSettings, DEFAULT_PROFIT_SETTINGS } from "./profitSettings";
@@ -892,7 +893,7 @@ export function syncBatchFinance(batch: BatchLike): void {
     id: r.id, batchId: batch.id, triggerDate: new Date(r.triggerDate), createdAt: new Date(r.triggerDate),
     triggerMarketValue: r.triggerMarketValue, dropPercent: r.dropPercent,
     requiredAmount: r.requiredAmount, fulfilledAmount: r.fulfilledAmount, status: r.status,
-    fulfilledDate: r.status === "FULLFILLED" ? new Date(f.trades.filter((t) => t.roundId === r.id).at(-1)?.createdAt ?? r.triggerDate) : null,
+    fulfilledDate: r.status === "FULLFILLED" ? new Date(f.trades.filter((t) => t.roundId === r.id).map((t) => t.createdAt).sort().at(-1) ?? r.triggerDate) : null,
     dueDate: r.dueDate ? new Date(r.dueDate) : null,
     collateralType: r.collateralType ?? null,
     note: `第 ${r.number} 轮 · WIN100 担保出资，补仓本金及收益全部归 WIN100`,
@@ -931,7 +932,9 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   collateralType?: "cash" | "stock";
   allowExcess?: boolean;
   expectedPrice?: number;
+  topupDate?: string;
 }): number {
+  const createdAt = topupDateTimestamp(options.topupDate);
   initializeBatchFinance(batch);
   const round = openObligationRound(batch);
   if (!round || (options.expectedRoundId && options.expectedRoundId !== round.id)) return 0;
@@ -964,7 +967,6 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
     if (pay <= 0) continue;
     const id = uid();
     const source = options.clientId ? "client_single" : "batch_one_click";
-    const createdAt = new Date().toISOString();
     // cash 形式不买入股票，只记金额；stock 形式按当前价买入份额
     const entryPrice = ct === "stock" ? price : null;
     const shares = ct === "stock" ? pay / price : 0;
@@ -993,6 +995,7 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
           entryPrice: ct === "stock" ? price : null,
           shares: ct === "stock" ? applied / price : 0,
           expectedAmount: options.amount,
+          topupDate: createdAt,
           targetClientId: options.clientId ?? null,
           operatorName: options.operatorName ?? null,
           source: options.clientId ? "client_single" : "batch_one_click",

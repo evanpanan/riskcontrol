@@ -1,4 +1,5 @@
 "use client";
+import { defaultTopupDate } from "@/lib/topupDate";
 
 import Link from "next/link";
 import { MasonryCards } from "@/components/ui/masonry-cards";
@@ -272,6 +273,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   const [addClientOpen, setAddClientOpen] = useState(false);
   const [mcDialog, setMcDialog] = useState(false);
   const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [topupDate, setTopupDate] = useState(defaultTopupDate);
   const [topupInput, setTopupInput] = useState("");
   const [topupCollateralType, setTopupCollateralType] = useState<"cash" | "stock">("stock");
   const [lockedExitTarget, setLockedExitTarget] = useState<string | null>(null);
@@ -586,6 +588,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     if (isTopupBlockedByLegacyLedger(batch as any)) { setRecoveryOpen(true); return; }
     setTopupCollateralType("stock");
     setTopupInput("");
+    setTopupDate(defaultTopupDate());
     setFulfillOpen(true);
   };
   const handleNotify = async (channel: "email" | "telegram") => {
@@ -616,6 +619,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
       amount: topupAmount, allowExcess: true, expectedPrice: topupPrice, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
       collateralType: topupCollateralType,
+      topupDate,
     }));
     if (applied <= 0) throw new Error("本轮已完成，请刷新后查看。");
     window.dispatchEvent(
@@ -1802,6 +1806,10 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
                 </button>
               </div>
             </div>
+            <label className="block space-y-2 text-sm">
+              <span>补仓日期</span>
+              <Input type="date" value={topupDate} onChange={(event) => setTopupDate(event.target.value)} />
+            </label>
             <label className="block space-y-2 text-sm">
               <span>{topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"}</span>
               <Input type="number" min="0" step={topupCollateralType === "stock" ? "0.000001" : "0.01"}

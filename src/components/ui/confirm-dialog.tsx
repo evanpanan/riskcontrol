@@ -28,6 +28,7 @@ export interface ConfirmDialogProps {
   confirmLoading?: boolean;
   confirmDisabled?: boolean;
   footerExtra?: React.ReactNode;
+  bodyExtra?: React.ReactNode;
   summary?: Array<{ label: string; value: React.ReactNode; detail?: React.ReactNode; accent?: "danger" | "warning" | "success" | "primary" | "muted" }>;
   contentClassName?: string;
 }
@@ -90,6 +91,7 @@ export function ConfirmDialog({
   confirmLoading,
   confirmDisabled,
   footerExtra,
+  bodyExtra,
   summary,
   contentClassName,
 }: ConfirmDialogProps) {
@@ -194,6 +196,7 @@ export function ConfirmDialog({
           </div>
         )}
 
+        {bodyExtra && <div className="px-6 pb-4">{bodyExtra}</div>}
         {error && <p role="alert" className="px-6 pb-3 text-sm text-danger">{error}</p>}
         <DialogFooter className="px-6 py-4 border-t border-border/50 bg-background/30 !gap-2 !flex-row-reverse sm:!flex-row-reverse !justify-end !space-x-0">
           {footerExtra}
