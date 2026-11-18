@@ -4,7 +4,7 @@ import {
   type BatchLike, type ClientLike, initializeBatchFinance, syncBatchFinance,
   executeInstitutionTopup, summarizeBatchMarginFromClients, getBatchMetrics,
   calculateBatchPnLSplit, calculateRescueStats, settleClientPosition,
-  calculateClientSettlement, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition,
+  calculateClientSettlement, calculateProfitSplitRatio, getClientProfitSplit, addClientPosition, updateClientPosition,
 } from "../src/lib/riskEngine";
 import { commitBatchFinance, FINANCE_STORE_KEY } from "../src/lib/mockData";
 import { formatPercent } from "../src/lib/utils";
@@ -37,6 +37,21 @@ function batch(price = 80): BatchLike {
   } as unknown as BatchLike;
   initializeBatchFinance(b);
   return b;
+}
+{
+  const edited = batch(100);
+  const otherClient = structuredClone(edited.clients![1]);
+  updateClientPosition(edited, "a", { investmentAmount: 420000, entryStockPrice: 120 });
+  near(edited.finance!.remainingCapital, 1100000, "edited capital");
+  near(edited.finance!.remainingShares, 10000, "shares unchanged when price and capital grow together");
+  updateClientPosition(edited, "a", { entryStockPrice: 100 });
+  near(edited.finance!.remainingShares, 11000, "edited share balance");
+  near(edited.clients![0].investmentAmount / edited.clients![0].entryStockPrice!, 4200, "client shares");
+  assert.deepEqual(edited.clients![1], otherClient);
+  const previous = structuredClone(edited);
+  assert.throws(() => updateClientPosition(edited, "a", { investmentAmount: 430000, entryStockPrice: 0 }));
+  assert.deepEqual(edited, previous, "invalid price must leave finance intact");
+  console.log("PASS explicit client capital/share corrections preserve other accounts");
 }
 // Phase 3 起结算要求客户先提交退出申请且通知期已过。
 // 结算用例统一走“到期退出”路径（签约日早于最终到期日，无提前退出费），

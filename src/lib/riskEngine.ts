@@ -1183,23 +1183,23 @@ export function updateClientPosition(batch: BatchLike, clientId: string, patch: 
   if (!client) throw new Error("未找到该客户。");
   if (client.status === ClientStatus.SETTLED) throw new Error("已结算客户不可修改。");
   if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再修改客户。");
-  if (patch.investmentAmount !== undefined) {
-    const newAmt = Number(patch.investmentAmount);
-    if (!Number.isFinite(newAmt) || newAmt <= 0) throw new Error("客户本金无效。");
-    const price = client.entryStockPrice ?? batch.stockPriceAtStart;
-    if (!(price > 0)) throw new Error("当前成交价无效。");
-    const delta = newAmt - Number(client.investmentAmount || 0);
-    if (Math.abs(delta) > 0.005) {
-      if (f.settlements[clientId]) throw new Error("已结算客户不可调整本金。");
-      const capitalDelta = delta / PRIORITY_RATIO;
-      f.originalCapital += capitalDelta;
-      f.originalPriority += delta;
-      f.remainingCapital += capitalDelta;
-      f.originalShares += capitalDelta / price;
-      f.remainingShares += capitalDelta / price;
-    }
-    (client as any).investmentAmount = newAmt;
-    (client as any).initialInvestment = newAmt;
+  if (patch.investmentAmount !== undefined || patch.entryStockPrice !== undefined) {
+    const previousAmount = client.investmentAmount;
+    const previousPrice = client.entryStockPrice ?? batch.stockPriceAtStart;
+    const newAmount = Number(patch.investmentAmount ?? previousAmount);
+    const newPrice = Number(patch.entryStockPrice ?? previousPrice);
+    if (!Number.isFinite(newAmount) || newAmount <= 0) throw new Error("客户本金无效。");
+    if (!Number.isFinite(newPrice) || newPrice <= 0 || !(previousPrice > 0)) throw new Error("客户入场价无效。");
+    const capitalDelta = (newAmount - previousAmount) / PRIORITY_RATIO;
+    const sharesDelta = (newAmount / newPrice - previousAmount / previousPrice) / PRIORITY_RATIO;
+    f.originalCapital += capitalDelta;
+    f.originalPriority += newAmount - previousAmount;
+    f.remainingCapital += capitalDelta;
+    f.originalShares += sharesDelta;
+    f.remainingShares += sharesDelta;
+    client.investmentAmount = newAmount;
+    client.entryStockPrice = newPrice;
+    (client as any).initialInvestment = newAmount;
   }
   if (patch.name !== undefined) (client as any).name = String(patch.name);
   if (patch.bdManager !== undefined) (client as any).bdManager = String(patch.bdManager);

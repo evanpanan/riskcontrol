@@ -188,6 +188,7 @@ export default function ClientsPage() {
     status: ClientStatus.ACTIVE,
   });
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [editShares, setEditShares] = useState("");
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
   const [lastAddedSummary, setLastAddedSummary] = useState<{ clientNo?: string; name: string; amount: number; batchNumber: string }[]>([]);
   const [moreFilterOpen, setMoreFilterOpen] = useState(false);
@@ -756,10 +757,33 @@ export default function ClientsPage() {
   }, [allClients]);
 
   const canEdit = (c: any): boolean => {
+    if (c.status === ClientStatus.SETTLED) return false;
     if (role === APP_ROLES.ADMIN || role === APP_ROLES.RISK_MANAGER) return true;
     if (isBdManager && bdManagerFullName && c.bdManager === bdManagerFullName) return true;
     return false;
   };
+
+  const openClientEditor = (client: any) => {
+    const batch = batches.find((entry) => entry.id === client.batchId);
+    const price = Number(client.entryStockPrice ?? batch?.stockPriceAtStart);
+    setEditShares(price > 0 ? String(Number(client.investmentAmount) / price) : "");
+    setEditErrors({});
+    setEditForm({
+      name: String(client.name ?? ""),
+      investment: String(client.investmentAmount ?? ""),
+      bdManager: String(client.bdManager ?? ""),
+      signDate: (client.signDate ? new Date(client.signDate) : new Date()).toISOString().split("T")[0],
+      status: client.status,
+    });
+    setEditClientOpen({ id: client.id, batchId: client.batchId, clientNo: client.clientNo });
+  };
+  const editingPersonClients = allClients.filter((client: any) => {
+    const selected = allClients.find((entry: any) => entry.id === editClientOpen?.id);
+    return selected && client.name === selected.name && client.bdManager === selected.bdManager && canEdit(client);
+  });
+  const editedEntryPrice = Number(editForm.investment) > 0 && Number(editShares) > 0
+    ? Number(editForm.investment) / Number(editShares)
+    : 0;
 
   return (
     <div className="space-y-6 max-w-[1800px] mx-auto">
@@ -1599,6 +1623,12 @@ export default function ClientsPage() {
                           </p>
                         </div>
                         <div className="col-span-2 flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                          {g.clients.some((client: any) => canEdit(client)) && (
+                            <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs"
+                              onClick={() => openClientEditor(g.clients.find((client: any) => canEdit(client)))}>
+                              <Pencil className="h-3 w-3" />编辑
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1649,18 +1679,14 @@ export default function ClientsPage() {
                                   </Link>
                                 </div>
                                 <div className="col-span-2 min-w-0">
-                                  <span className="text-[10px] text-muted-foreground font-mono block">客户编号</span>
-                                  <span className="font-mono text-[11px] truncate">{String((c as any).clientNo ?? "—")}</span>
+                                  <span className="text-[10px] text-muted-foreground block">客户股数</span>
+                                  <span className="font-mono text-[11px]">{(Number(c.investmentAmount) / (Number(c.entryStockPrice) || Number(batches.find((batch) => batch.id === c.batchId)?.stockPriceAtStart) || Infinity)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股</span>
                                 </div>
                                 <div className="col-span-2 text-right">
                                   <p className="font-mono font-bold text-sm">
                                     {formatCurrency(Number(c.investmentAmount ?? 0))}
                                   </p>
-                                  {isVipClient(c) && (
-                                    <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
-                                      VIP
-                                    </Badge>
-                                  )}
+
                                 </div>
                                 <div className="col-span-2 text-right">
                                   <Badge
@@ -1691,15 +1717,7 @@ export default function ClientsPage() {
                                       className="h-7 gap-1 text-[11px] opacity-60 group-hover:opacity-100 transition-opacity"
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        setEditErrors({});
-                                        setEditForm({
-                                          name: String(c.name ?? ""),
-                                          investment: Number(c.investmentAmount || 0).toFixed(2),
-                                          bdManager: String(c.bdManager ?? bdManagerFullName ?? ""),
-                                          signDate: (c.signDate ? new Date(c.signDate) : new Date()).toISOString().split("T")[0],
-                                          status: (c.status as ClientStatus) || ClientStatus.ACTIVE,
-                                        });
-                                        setEditClientOpen({ id: c.id, batchId: c.batchId, clientNo: (c as any).clientNo });
+                                        openClientEditor(c);
                                       }}
                                     >
                                       <Pencil className="h-3 w-3" />
@@ -2141,12 +2159,24 @@ export default function ClientsPage() {
                 <DialogDescription className="text-[11px] text-muted-foreground mt-0.5">
                   {isBdManager
                     ? "商务经理仅可修改客户姓名；本金 / 商务经理 / 签约日期 / 状态由机构端维护"
-                    : "允许修改姓名 / 本金 / 商务经理 / 签约日期 / 状态；已结算客户不能再修改"}
+                    : "修改当前批次的客户资料，本金和股数共同决定入场价"}
                 </DialogDescription>
               </div>
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {editingPersonClients.length > 1 && (
+              <label className="block space-y-1 text-xs">
+                <span>编辑所属批次</span>
+                <select className="h-10 w-full rounded-md border bg-background px-3" value={editClientOpen?.id ?? ""}
+                  onChange={(event) => {
+                    const client = editingPersonClients.find((entry: any) => entry.id === event.target.value);
+                    if (client) openClientEditor(client);
+                  }}>
+                  {editingPersonClients.map((client: any) => <option key={client.id} value={client.id}>{client.batchNumber} · {client.subAccountNo}</option>)}
+                </select>
+              </label>
+            )}
             <div className="rounded-lg border border-border/50 bg-card/40 p-3 space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5">
@@ -2186,6 +2216,16 @@ export default function ClientsPage() {
                   {isBdManager && (
                     <p className="text-[10px] text-muted-foreground">本金由机构端维护，不可修改</p>
                   )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-client-shares" className="text-[11px]">客户股数 *</Label>
+                  <Input id="edit-client-shares" type="number" min="0" step="any" value={editShares}
+                    disabled={isBdManager} onChange={(event) => setEditShares(event.target.value)} />
+                  {editErrors.shares && <p className="text-[10px] text-danger">{editErrors.shares}</p>}
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[11px]">客户入场价（USD）</Label>
+                  <Input value={editedEntryPrice > 0 ? String(editedEntryPrice) : ""} readOnly placeholder="本金 ÷ 股数" />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px]">商务经理（选填）</Label>
@@ -2256,6 +2296,7 @@ export default function ClientsPage() {
                   const numAmt = Number(editForm.investment.replace(/[^0-9.]/g, ""));
                   if (!isBdManager) {
                     if (!Number.isFinite(numAmt) || numAmt <= 100) errs.investment = "最低 $100";
+                    if (!Number.isFinite(Number(editShares)) || Number(editShares) <= 0) errs.shares = "请输入有效客户股数";
                   }
                   setEditErrors(errs);
                   if (Object.keys(errs).length > 0 || !editClientOpen) return;
@@ -2269,11 +2310,16 @@ export default function ClientsPage() {
                   const mock = getMockData();
                   const batch = mock.batches.find((x) => x.id === editClientOpen.batchId);
                   if (!batch) return;
+                  const beforeClient = structuredClone(batch.clients?.find((c: any) => c?.id === editClientOpen.id));
+                  const previousPrice = Number((beforeClient as any)?.entryStockPrice ?? batch.stockPriceAtStart);
+                  const previousShares = Number(beforeClient?.investmentAmount ?? 0) / previousPrice;
+                  if (!isBdManager && (numAmt !== beforeClient?.investmentAmount || Number(editShares) !== previousShares)) {
+                    patch.entryStockPrice = editedEntryPrice;
+                  }
                   try {
                     commitBatchFinance(batch, (draft) =>
                       updateClientPosition(draft, editClientOpen.id, patch as any)
                     );
-                    const beforeClient = batch.clients?.find((c: any) => c?.id === editClientOpen.id);
                     try {
                       const { logAudit } = require("@/lib/auth/audit") as typeof import("@/lib/auth/audit");
                       logAudit({
@@ -2285,12 +2331,14 @@ export default function ClientsPage() {
                           before: beforeClient ? {
                             name: (beforeClient as any).name,
                             investmentAmount: (beforeClient as any).investmentAmount,
+                            entryStockPrice: (beforeClient as any).entryStockPrice,
                             bdManager: (beforeClient as any).bdManager,
                             status: (beforeClient as any).status,
                           } : null,
                           after: {
                             name: editForm.name.trim(),
                             investmentAmount: isBdManager ? beforeClient?.investmentAmount : numAmt,
+                            entryStockPrice: patch.entryStockPrice ?? (beforeClient as any)?.entryStockPrice,
                             bdManager: isBdManager ? beforeClient?.bdManager : editForm.bdManager,
                             status: isBdManager ? beforeClient?.status : editForm.status,
                           },
