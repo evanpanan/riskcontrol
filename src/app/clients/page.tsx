@@ -763,6 +763,15 @@ export default function ClientsPage() {
     return false;
   };
 
+  const showClientList = (batchId: string) => {
+    setBatchFilter(batchId);
+    setSearch("");
+    setBdFilter("ALL");
+    setStatusFilter("ALL");
+    setExpandedPersons(new Set());
+    setManagementTab("clients");
+  };
+
   const openClientEditor = (client: any) => {
     const batch = batches.find((entry) => entry.id === client.batchId);
     const price = Number(client.entryStockPrice ?? batch?.stockPriceAtStart);
@@ -1184,11 +1193,10 @@ export default function ClientsPage() {
                                   size="sm"
                                   className="h-7 px-2.5 text-[10px] text-white hover:text-white"
                                   onClick={() => {
-                                    setBatchFilter(active ? "ALL" : tab.batchId);
-                                    setManagementTab("clients");
+                                    showClientList(tab.batchId);
                                   }}
                                 >
-                                  {active ? "查看全部客户" : "查看该批次客户"}
+                                  查看该批次客户
                                 </Button>
                                 <Button
                                   variant="outline"
@@ -1313,11 +1321,10 @@ export default function ClientsPage() {
                             size="sm"
                             className="h-8 text-[11px] text-white hover:text-white"
                             onClick={() => {
-                              setBatchFilter(active ? "ALL" : tab.batchId);
-                              setManagementTab("clients");
+                              showClientList(tab.batchId);
                             }}
                           >
-                            {active ? "查看全部客户" : "查看该批次客户"}
+                            查看该批次客户
                           </Button>
                           <Button
                             variant="outline"
@@ -1388,6 +1395,10 @@ export default function ClientsPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" className="h-9 text-[11px]" onClick={() => showClientList("ALL")}>
+                    <ArrowRight className="mr-1 h-3.5 w-3.5 rotate-180" />
+                    返回全部客户
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -1432,26 +1443,9 @@ export default function ClientsPage() {
             <div className="space-y-2">
               <CardTitle className="text-sm font-bold flex items-center gap-2">
                 <Users className="h-4 w-4" />
-                客户总表（{stats.totalClients} 位自然人 · {stats.totalSubAccounts} 个子账户）
+                {batchFilter === "ALL" ? "客户总表" : "批次客户"}（{stats.totalClients} 位自然人 · {stats.totalSubAccounts} 个子账户）
               </CardTitle>
-              {batchFilter !== "ALL" && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-[11px] text-white hover:text-white"
-                    onClick={() => {
-                      setBatchFilter("ALL");
-                      setManagementTab("batches");
-                    }}
-                  >
-                    返回批次管理
-                  </Button>
-                  <Badge variant="primary" className="text-[10px] font-mono">
-                    当前筛选批次：{batchTabs.find((b) => b.batchId === batchFilter)?.batchNumber ?? batchFilter}
-                  </Badge>
-                </div>
-              )}
+
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
