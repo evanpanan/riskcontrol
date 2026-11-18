@@ -1591,7 +1591,7 @@ export default function ClientsPage() {
                             {formatCurrency(g.totalInvestment)}
                           </p>
                           <p className="mt-1 text-xs font-mono text-muted-foreground">
-                            {g.totalShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股
+                            {g.totalShares.toLocaleString(undefined, { maximumFractionDigits: 0 })} 股
                           </p>
                           {g.clients.some((c: any) => isVipClient(c)) && (
                             <Badge variant="primary" className="mt-0.5 text-[9px] px-1.5">
@@ -1674,7 +1674,7 @@ export default function ClientsPage() {
                                 </div>
                                 <div className="col-span-2 min-w-0">
                                   <span className="text-[10px] text-muted-foreground block">客户股数</span>
-                                  <span className="font-mono text-[11px]">{(Number(c.investmentAmount) / (Number(c.entryStockPrice) || Number(batches.find((batch) => batch.id === c.batchId)?.stockPriceAtStart) || Infinity)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股</span>
+                                  <span className="font-mono text-[11px]">{(Number(c.investmentAmount) / (Number(c.entryStockPrice) || Number(batches.find((batch) => batch.id === c.batchId)?.stockPriceAtStart) || Infinity)).toLocaleString(undefined, { maximumFractionDigits: 0 })} 股</span>
                                 </div>
                                 <div className="col-span-2 text-right">
                                   <p className="font-mono font-bold text-sm">
@@ -2749,7 +2749,7 @@ export default function ClientsPage() {
                                 </li>
                                 <li className="flex justify-between gap-3">
                                   <span className="text-muted-foreground">结算股份数量</span>
-                                  <span className="font-mono tabular-nums">{Number(d.settlement.settledShares ?? 0).toFixed(4)} 股</span>
+                                  <span className="font-mono tabular-nums">{Number(d.settlement.settledShares ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} 股</span>
                                 </li>
                               </ul>
                             </div>
