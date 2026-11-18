@@ -1931,6 +1931,24 @@ export default function ClientsPage() {
                   {addErrors.batchId && <p className="text-[10px] text-danger font-mono">{addErrors.batchId}</p>}
                 </div>
                 <div className="space-y-1.5">
+                  <Label htmlFor="new-client-shares" className="text-[11px]">客户股数 *</Label>
+                  <Input id="new-client-shares" type="number" min="0" step="any" value={addShares}
+                    onChange={(event) => {
+                      const shares = event.target.value;
+                      setAddShares(shares);
+                      setAddForm((previous) => ({ ...previous, entryPrice: Number(shares) > 0 && addClientAmount > 0 ? String(addClientAmount / Number(shares)) : "" }));
+                    }} />
+                  {addErrors.shares && <p className="text-[10px] text-danger">{addErrors.shares}</p>}
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="text-[11px]">签约日期</Label>
+                  <Input
+                    type="date"
+                    value={addForm.signDate}
+                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
                   <Label className="text-[11px]">商务经理（选填）</Label>
                   <Select
                     value={addForm.bdManager || UNASSIGNED_MANAGER}
@@ -1948,24 +1966,6 @@ export default function ClientsPage() {
                     </SelectContent>
                   </Select>
                   {addErrors.bdManager && <p className="text-[10px] text-danger font-mono">{addErrors.bdManager}</p>}
-                </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label className="text-[11px]">签约日期</Label>
-                  <Input
-                    type="date"
-                    value={addForm.signDate}
-                    onChange={(e) => setAddForm({ ...addForm, signDate: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="new-client-shares" className="text-[11px]">客户股数 *</Label>
-                  <Input id="new-client-shares" type="number" min="0" step="any" value={addShares}
-                    onChange={(event) => {
-                      const shares = event.target.value;
-                      setAddShares(shares);
-                      setAddForm((previous) => ({ ...previous, entryPrice: Number(shares) > 0 && addClientAmount > 0 ? String(addClientAmount / Number(shares)) : "" }));
-                    }} />
-                  {addErrors.shares && <p className="text-[10px] text-danger">{addErrors.shares}</p>}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px]">客户入场价（USD）*</Label>
