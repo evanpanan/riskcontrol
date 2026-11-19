@@ -12,7 +12,10 @@ async function main() {
   if (!file || !process.env.BACKUP_KEY) throw new Error('Provide an archive path and BACKUP_KEY');
   const backup = decryptBackup(await readFile(file), process.env.BACKUP_KEY);
   if (backup.format !== 'riskcontrol-json-v1' || !backup.tables || !backup.capturedAt) throw new Error('Unsupported backup format');
-  for (const model of backupModels) if (!Array.isArray(backup.tables[model.name])) throw new Error(`Missing table: ${model.name}`);
+  for (const model of backupModels) {
+    if (['MonthlyStatement', 'ClientStatementContact'].includes(model.name) && !backup.tables[model.name]) backup.tables[model.name] = [];
+    if (!Array.isArray(backup.tables[model.name])) throw new Error(`Missing table: ${model.name}`);
+  }
   if (!process.argv.includes('--restore')) {
     console.log(JSON.stringify({ valid: true, capturedAt: backup.capturedAt, tables: Object.fromEntries(Object.entries(backup.tables).map(([name, rows]) => [name, (rows as any[]).length])) }, null, 2));
     return;
@@ -37,6 +40,7 @@ async function main() {
         const rows = backup.tables[model.name].map((value: any) => {
           const row = { ...value };
           for (const field of model.fields.filter(f => f.kind === 'object')) delete row[field.name];
+          for (const field of model.fields.filter(f => f.type === 'Bytes')) if (row[field.name]?.type === 'Buffer') row[field.name] = Buffer.from(row[field.name].data);
           for (const name of dates) if (row[name] != null) row[name] = new Date(row[name]);
           for (const field of model.fields.filter(f => f.type === 'Json')) if (row[field.name] === null) row[field.name] = field.isRequired ? Prisma.JsonNull : Prisma.DbNull;
           return row;

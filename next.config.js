@@ -8,6 +8,8 @@ module.exports = (phase) => {
     distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
     // 显式锁定工作区根目录：上级目录若存在其它 lockfile，Next 会误判根目录并扩大监听范围。
     outputFileTracingRoot: __dirname,
+    serverExternalPackages: ["fonteditor-core"],
+    outputFileTracingIncludes: { "/api/statements/**": ["./assets/fonts/*", "./public/win100.png"] },
   };
   return nextConfig;
 };

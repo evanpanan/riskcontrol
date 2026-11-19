@@ -1,6 +1,6 @@
 import { type BatchLike, PRIORITY_RATIO, syncBatchFinance, calculateContractDates, initializeBatchFinance } from '@/lib/riskEngine';
 import { contractDate, marketDate, summarizeDailyBatch, type BatchDailySummary } from '@/lib/batchDaily';
-export function replayBatchDay(original: BatchLike, date: string, close: number): BatchDailySummary | null {
+export function replayBatchState(original: BatchLike, date: string, close: number): BatchLike | null {
   if (date < contractDate(original.signDate)) return null;
   const batch = structuredClone(original);
   if (!batch.finance) initializeBatchFinance(batch);
@@ -50,7 +50,11 @@ export function replayBatchDay(original: BatchLike, date: string, close: number)
   batch.status = active.length ? (date < marketDate(calculateContractDates(batch.signDate).lockUpEndDate) ? "LOCKED" : "TRADING_OPEN") : "CLOSED";
   batch.currentStockPrice = close;
   syncBatchFinance(batch);
-  return replaySafeSummary(batch, date, close);
+  return batch;
+}
+export function replayBatchDay(original: BatchLike, date: string, close: number): BatchDailySummary | null {
+  const state = replayBatchState(original, date, close);
+  return state ? replaySafeSummary(state, date, close) : null;
 }
 function replaySafeSummary(batch: BatchLike, date: string, close: number) {
   const summary = summarizeDailyBatch(batch, date, close);

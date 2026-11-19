@@ -44,6 +44,7 @@ import {
   TrendingUp,
   Filter,
   UserPlus,
+  FileText,
   DollarSign,
   ShieldCheck,
   EyeOff,
@@ -822,7 +823,8 @@ export default function ClientsPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+              <Link href="/statements"><Button size="sm" variant="outline" className="gap-1.5"><FileText className="h-3.5 w-3.5" />客户月结单</Button></Link>
           {!isBdManager && (
             <>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={async () => {

@@ -45,6 +45,7 @@ export async function POST(req: Request) {
   try {
     const result = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(701841323)`;
+      if (kinds.includes('ledger')) { await tx.monthlyStatement.deleteMany(); await tx.clientStatementContact.deleteMany(); }
       const deleted = await tx.workspaceRecord.deleteMany({ where: { kind: { in: kinds } } });
       const existingMeta = await tx.workspaceRecord.findUnique({
         where: { kind_key: { kind: 'meta', key: 'empty' } },

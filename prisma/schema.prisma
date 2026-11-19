@@ -421,3 +421,31 @@ model BackupArchive {
   leaseUntil DateTime?
   lastError String?
 }
+
+// Derived monthly statements: additive tables; never rewrite the source finance ledger.
+model ClientStatementContact {
+  customerKey String @id
+  email String
+  updatedBy String
+  updatedAt DateTime @updatedAt
+}
+
+model MonthlyStatement {
+  id String @id @default(cuid())
+  month String
+  customerKey String
+  customerName String
+  bdManager String
+  report Json
+  pdf Bytes
+  generatedBy String
+  generatedAt DateTime @default(now())
+  emailStatus String @default("DRAFT")
+  emailAddress String?
+  sendToken String?
+  sendStartedAt DateTime?
+  sentAt DateTime?
+  lastError String?
+  @@unique([month, customerKey])
+  @@index([emailStatus])
+}
