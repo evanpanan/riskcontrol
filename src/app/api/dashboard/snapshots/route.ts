@@ -1,7 +1,7 @@
-import { backfillBatchHistory } from '@/lib/server/batchHistoryBackfill';
+import { contractDate } from '@/lib/batchDaily';
+import { ensureDailyCloseHistory } from '@/lib/server/batchHistoryBackfill';
+import { loadBatchHistoryView } from '@/lib/server/batchHistoryView';
 import { aggregateDailyHistory } from '@/lib/dashboardHistory';
-import { replayBatchDay } from '@/lib/batchHistoryReplay';
-import { marketDate, type BatchDailySummary } from '@/lib/batchDaily';
 import type { BatchLike } from '@/lib/riskEngine';
 import { ledgerOwnsBd } from '@/lib/server/workspaceScope';
 import { NextResponse } from "next/server";
@@ -176,6 +176,17 @@ export async function GET() {
 
   const ledgers = await prisma.workspaceRecord.findMany({ where: { kind: 'ledger' }, select: { key: true, payload: true } });
   const visible = ledgers.filter(l => scope.scopeType !== 'bd' || ledgerOwnsBd(l.payload, scope.scopeKey));
+  const earliest = new Map<string, string>();
+  for (const ledger of visible) {
+    const batch = (ledger.payload as any)?.batch as BatchLike | undefined;
+    if (!batch?.stockSymbol || !batch.clients?.length) continue;
+    const symbol = batch.stockSymbol.trim().toUpperCase();
+    const from = contractDate(batch.signDate);
+    if (!earliest.has(symbol) || from < earliest.get(symbol)!) earliest.set(symbol, from);
+  }
+  // One archive load per symbol avoids parallel batches competing for the same quote lock.
+  const archives = new Map<string, ReturnType<typeof ensureDailyCloseHistory>>();
+  const now = new Date();
   const series = [];
   let historyWarning: string | null = null;
   // Reuse the same archived closes and replay as batch detail. No ledger writes.
@@ -183,17 +194,11 @@ export async function GET() {
     const batch = (ledger.payload as any)?.batch as BatchLike | undefined;
     if (!batch?.clients?.length) continue;
     const stored = await prisma.batchDailySnapshot.findMany({ where: { batchId: ledger.key }, select: { tradingDate: true, summary: true } });
-    let calculated: BatchDailySummary[] = [];
-    try { calculated = await backfillBatchHistory(batch, new Set(stored.map(r => r.tradingDate))); }
-    catch { historyWarning = '部分历史收盘价暂不可用，仅展示完整留存日期'; }
-    const actual = stored.map(r => {
-      const summary = r.summary as unknown as BatchDailySummary;
-      const enriched = replayBatchDay(batch, r.tradingDate, summary.price);
-      return { ...enriched, ...summary } as BatchDailySummary;
-    });
-    const firstClient = batch.clients.map(c => marketDate(new Date(c.signDate))).sort()[0];
-    const start = [marketDate(new Date(batch.signDate)), firstClient].sort().at(-1)!;
-    series.push({ start, rows: [...calculated, ...actual] });
+    const symbol = batch.stockSymbol?.trim().toUpperCase() ?? '';
+    if (symbol && !archives.has(symbol)) archives.set(symbol, ensureDailyCloseHistory(symbol, earliest.get(symbol)!, now));
+    const history = await loadBatchHistoryView(batch, stored, now, archives.get(symbol));
+    if (history.warning) historyWarning = history.warning;
+    series.push({ start: history.start, rows: history.rows });
   }
   const dailyRows = aggregateDailyHistory(series);
   // Intraday samples stay intraday. Longer views use daily close history exclusively.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { fetchDailyCloses, backfillBatchHistory, getOrArchiveDailyClose } from '../src/lib/server/batchHistoryBackfill';
+import { fetchDailyCloses, backfillBatchHistory, getOrArchiveDailyClose, tradingDates } from '../src/lib/server/batchHistoryBackfill';
 import { prisma } from '../src/lib/prisma';
 import type { BatchLike } from '../src/lib/riskEngine';
 
@@ -19,14 +19,16 @@ async function main() {
       const start = url.searchParams.get('period1');
       const end = url.searchParams.get('period2');
       const dates = Number(end) - Number(start) === 86400
-        ? [Number(start)] : ['2026-01-05', '2026-01-06'].map(date => Date.parse(date) / 1000);
+        ? [Number(start)] : tradingDates(new Date(Number(start) * 1000).toISOString().slice(0, 10), new Date(Number(end) * 1000 - 1).toISOString().slice(0, 10)).map(date => Date.parse(date) / 1000);
+      const values = dates.map((_, i) => 11 + i);
       return Response.json({ chart: { result: [{
         timestamp: dates,
-        indicators: { quote: [{ open: [10, 11], high: [12, 13], low: [9, 10], close: [11, 12], volume: [100, 200] }] },
+        indicators: { quote: [{ open: values, high: values, low: values, close: values, volume: values.map(() => 100) }] },
       }] } });
     };
     prisma.workspaceRecord.findUnique = (async () => marker) as any;
-    prisma.quoteHistoryCandle.findMany = (async () => archive) as any;
+    const findMany = async ({ where }: any) => archive.filter(row => row.candleTime >= where.candleTime.gte && row.candleTime <= where.candleTime.lte);
+    prisma.quoteHistoryCandle.findMany = findMany as any;
     const findClose = async ({ where }: any) => archive.find(row =>
       row.candleTime.getTime() === where.symbol_interval_candleTime.candleTime.getTime()) ?? null;
     prisma.quoteHistoryCandle.findUnique = findClose as any;
@@ -34,10 +36,11 @@ async function main() {
       $executeRaw: async () => 0,
       workspaceRecord: {
         findUnique: async () => marker,
-        create: async () => { marker = { initialized: true }; },
+        upsert: async ({ update }: any) => { marker = update; },
       },
       quoteHistoryCandle: {
         findUnique: findClose,
+        findMany,
         createMany: async ({ data }: any) => archive.push(...data.map((row: any) => ({ ...row, createdAt: new Date() }))),
       },
     })) as any;
@@ -49,19 +52,21 @@ async function main() {
     } as unknown as BatchLike;
     const dates = new Set(['2026-01-05']);
     const days = await backfillBatchHistory(batch, dates, new Date('2026-01-10'));
-    assert.equal(days.length, 1);
-    assert.equal(days[0].date, '2026-01-06');
+    assert.equal(days.length, 5);
+    assert.ok(days.every(day => day.date !== '2026-01-05'));
     assert.equal(requests, 1);
-    await backfillBatchHistory(batch, dates, new Date('2026-02-10'));
+    await backfillBatchHistory(batch, dates, new Date('2026-01-10'));
     assert.equal(requests, 1, 'archived history does not expire');
-    const newClose = await getOrArchiveDailyClose('NEW', '2026-01-12', fetchDailyCloses);
-    assert.equal(newClose?.candleTime.toISOString().slice(0, 10), '2026-01-12');
-    assert.equal(requests, 2);
-    await getOrArchiveDailyClose('NEW', '2026-01-12', fetchDailyCloses);
-    assert.equal(requests, 2, 'same-day archive is reused');
-    assert.equal(archive.length, 3);
+    await backfillBatchHistory(batch, dates, new Date('2026-01-13T07:00:00Z'));
+    assert.equal(requests, 2, 'only new completed sessions are fetched');
+    const newClose = await getOrArchiveDailyClose('NEW', '2026-01-14', fetchDailyCloses);
+    assert.equal(newClose?.candleTime.toISOString().slice(0, 10), '2026-01-14');
+    assert.equal(requests, 3);
+    await getOrArchiveDailyClose('NEW', '2026-01-14', fetchDailyCloses);
+    assert.equal(requests, 3, 'same-day archive is reused');
+    assert.equal(archive.length, 8);
     assert.equal(batch.finance, undefined);
-    console.log('PASS: one-time history initialization, permanent reuse, one-day close query and deduplication');
+    console.log('PASS: daily gap catch-up, permanent reuse of completed history, exact-day close query and deduplication');
   } finally {
     globalThis.fetch = originalFetch;
     prisma.$transaction = originalTransaction;

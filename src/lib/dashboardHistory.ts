@@ -16,8 +16,8 @@ export function aggregateDailyHistory(series: Array<{ start: string; rows: Batch
     const clientPnL = sum(r => r.clientPnL);
     const institutionPnL = sum(r => r.institutionPnL);
     return [{ bucketAt: new Date(`${date}T21:00:00Z`), totalValue: sum(r => r.marketValue),
-      institutionValue: sum(r => Math.max(0, r.originalCapital! - r.originalPriority! + r.cumulativeTopup + r.institutionPnL)),
-      clientValue: sum(r => Math.max(0, r.originalPriority! + r.clientPnL)),
+      institutionValue: sum(r => r.institutionAssetValue ?? r.marketValue - (r.originalPriority! + r.clientPnL)),
+      clientValue: sum(r => r.clientAssetValue ?? r.originalPriority! + r.clientPnL),
       totalYieldPct: capital > 0 ? (clientPnL + institutionPnL) / capital * 100 : 0,
       institutionYieldPct: institutionCapital > 0 ? institutionPnL / institutionCapital * 100 : 0,
       clientYieldPct: clientCapital > 0 ? clientPnL / clientCapital * 100 : 0 }];

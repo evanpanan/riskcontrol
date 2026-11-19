@@ -1,24 +1,37 @@
 import { type BatchLike, PRIORITY_RATIO, syncBatchFinance, calculateContractDates, initializeBatchFinance } from '@/lib/riskEngine';
-import { marketDate, summarizeDailyBatch, type BatchDailySummary } from '@/lib/batchDaily';
+import { contractDate, marketDate, summarizeDailyBatch, type BatchDailySummary } from '@/lib/batchDaily';
 export function replayBatchDay(original: BatchLike, date: string, close: number): BatchDailySummary | null {
-  if (date < marketDate(new Date(original.signDate))) return null;
+  if (date < contractDate(original.signDate)) return null;
   const batch = structuredClone(original);
   if (!batch.finance) initializeBatchFinance(batch);
   if (!batch.finance) return null;
   const f = batch.finance;
   const before = (value: unknown) => !!value && marketDate(new Date(value as string)) <= date;
   const allSettlements = f.settlements;
-  const entered = (batch.clients ?? []).filter(c => before(c.signDate));
+  const entered = (batch.clients ?? []).filter(c => contractDate(c.signDate) <= date);
   const ended = (id: string) => !!allSettlements[id] && before(allSettlements[id].settledAt);
-  const capital = (c: typeof entered[number]) => c.investmentAmount / PRIORITY_RATIO;
+  const explicitInstitution = f.institutionPosition;
+  const capital = (c: typeof entered[number]) => c.investmentAmount / (explicitInstitution ? 1 : PRIORITY_RATIO);
   const shares = (c: typeof entered[number]) => capital(c) / (c.entryStockPrice || batch.stockPriceAtStart);
   if (!entered.length) return null;
   const active = entered.filter(c => !ended(c.id));
   f.originalCapital = entered.reduce((sum, c) => sum + capital(c), 0);
-  f.originalPriority = f.originalCapital * PRIORITY_RATIO;
+  f.originalPriority = entered.reduce((sum, c) => sum + c.investmentAmount, 0);
   f.originalShares = entered.reduce((sum, c) => sum + shares(c), 0);
   f.remainingCapital = active.reduce((sum, c) => sum + capital(c), 0);
   f.remainingShares = active.reduce((sum, c) => sum + shares(c), 0);
+  if (explicitInstitution) {
+    // Restore the original institution shares before exits; a corrected share count is authoritative.
+    const originalCapital = explicitInstitution.originalCapital;
+    const originalShares = explicitInstitution.originalShares;
+    const exitedCapital = Object.values(allSettlements).filter(s => before(s.settledAt)).reduce((sum, s) => sum + s.institutionInitialCapital, 0);
+    const remainingFraction = originalCapital > 0 ? Math.max(0, 1 - exitedCapital / originalCapital) : (active.length ? 1 : 0);
+    f.institutionPosition = { originalCapital, originalShares, capital: originalCapital * remainingFraction, shares: originalShares * remainingFraction };
+    f.originalCapital += originalCapital;
+    f.originalShares += originalShares;
+    f.remainingCapital += originalCapital * remainingFraction;
+    f.remainingShares += originalShares * remainingFraction;
+  }
   f.settlements = Object.fromEntries(Object.entries(allSettlements).filter(([, s]) => before(s.settledAt)));
   batch.clients = entered.map(c => {
     if (ended(c.id)) return c;

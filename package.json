@@ -26,7 +26,7 @@
     "verify:notification-policy": "tsx scripts/check-notification-policy.ts",
     "db:restore-daily": "tsx scripts/restore-daily-backup.ts",
     "verify:daily": "tsx scripts/check-daily-operations.ts",
-    "verify:history": "tsx scripts/check-historical-operations.ts"
+    "verify:history": "tsx scripts/check-historical-operations.ts && tsx scripts/check-dashboard-history.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",

@@ -458,7 +458,7 @@ export async function nasdaqHistory(symbol: string, period: HistoryPeriod, bound
   const fromdateMs = bounds?.from ?? Date.now() - days * 24 * 3600 * 1000;
   const end = bounds ? `&todate=${new Date(bounds.to - 1).toISOString().slice(0, 10)}` : "";
   const url =
-    `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${new Date(fromdateMs).toISOString().slice(0, 10)}&limit=${limit}`;
+    `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=stocks&fromdate=${new Date(fromdateMs).toISOString().slice(0, 10)}&limit=${limit}${end}`;
   const res = await timeout(
     fetch(url, {
       headers: {

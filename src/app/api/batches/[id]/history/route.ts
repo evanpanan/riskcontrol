@@ -1,4 +1,4 @@
-import { backfillBatchHistory } from '@/lib/server/batchHistoryBackfill';
+import { loadBatchHistoryView } from '@/lib/server/batchHistoryView';
 import type { BatchLike } from '@/lib/riskEngine';
 import { prisma } from '@/lib/prisma';
 import { resolveSessionUser, unauthorized, forbidden, jsonNoStore } from '@/lib/server/apiAuth';
@@ -17,10 +17,7 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
       warning = '每日留存暂不可用，当前按历史收盘价回算';
       return [];
     });
-    let calculated: object[] = [];
-    try { calculated = await backfillBatchHistory((ledger.payload as any).batch as BatchLike, new Set(rows.map(r => r.tradingDate))); }
-    catch { warning = '历史收盘价暂不可用，当前仅显示已有留存数据，请稍后重试'; }
-    const actual = rows.map(r => ({ ...r.summary as object, capturedAt: r.capturedAt.toISOString(), source: r.source, reconstructed: false }));
-    return jsonNoStore({ rows: [...calculated, ...actual].sort((a: any, b: any) => a.date.localeCompare(b.date)), warning });
+    const history = await loadBatchHistoryView((ledger.payload as any).batch as BatchLike, rows);
+    return jsonNoStore({ rows: history.rows, warning: history.warning ?? warning });
   } catch { return jsonNoStore({ error: '历史数据暂不可用，请稍后重试' }, 503); }
 }

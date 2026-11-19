@@ -577,6 +577,15 @@ export function DashboardCharts({
 }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1M");
   const [snapshotSeries, setSnapshotSeries] = useState<SnapshotSeries | null>(null);
+  const [historyWarning, setHistoryWarning] = useState<string | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(() => setHistoryVersion(v => v + 1), 500); };
+    window.addEventListener('risk-control:workspace-synced', refresh);
+    window.addEventListener('risk-control:finance-changed', refresh);
+    return () => { clearTimeout(timer); window.removeEventListener('risk-control:workspace-synced', refresh); window.removeEventListener('risk-control:finance-changed', refresh); };
+  }, []);
   const persistRef = useRef<{ at: number; fingerprint: string }>({ at: 0, fingerprint: "" });
   /* 派生当前价值：机构 = 原始机构投入 + 累计补仓 + 机构盈亏； 客户 = 原始客户投入 + 客户盈亏 */
   const institutionValue = useMemo(
@@ -630,19 +639,20 @@ export function DashboardCharts({
           cache: "no-store",
           signal: controller.signal,
         });
-        if (!res.ok) return;
+        if (!res.ok) throw new Error("历史数据暂不可用，请稍后刷新");
         const data = await res.json();
         if (cancelled || !data?.ok || !data?.timeframes) return;
         setSnapshotSeries(data.timeframes as SnapshotSeries);
+        setHistoryWarning(data.warning ?? null);
       } catch {
-        /* ignore */
+        if (!cancelled) setHistoryWarning("历史数据暂不可用，请稍后刷新");
       }
     })();
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [summary.totalBatches]);
+  }, [summary.totalBatches, historyVersion]);
 
   useEffect(() => {
     if (summary.totalBatches <= 0) return;
@@ -687,6 +697,7 @@ export function DashboardCharts({
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      {historyWarning && <p role="status" className="xl:col-span-2 text-xs text-warning">{historyWarning}</p>}
       <ValueChart
         currentMarketValueTotal={summary.currentMarketValueTotal}
         institutionValue={institutionValue}

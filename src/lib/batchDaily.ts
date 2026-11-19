@@ -5,6 +5,7 @@ export type BatchDailySummary = {
   totalPnL: number; yieldPct: number; institutionPnL: number; clientPnL: number;
   institutionYieldPct?: number; clientYieldPct?: number;
   originalCapital?: number; originalPriority?: number;
+  clientAssetValue?: number; institutionAssetValue?: number;
   requiredMargin: number; cumulativeTopup: number; topupAmount: number; topups: DailyTopup[];
   activeClients: number; status: string; riskLevel: string;
 };
@@ -12,6 +13,11 @@ export function marketDate(date: Date) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
   const part = (name: string) => parts.find(p => p.type === name)!.value;
   return `${part('year')}-${part('month')}-${part('day')}`;
+}
+/** Signing dates are calendar dates; UTC midnight must not become the previous NY day. */
+export function contractDate(value: Date | string): string {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  return candleDate(new Date(value).getTime());
 }
 // Daily provider candles may be stamped at UTC midnight or at the session open.
 export function candleDate(time: number) {
@@ -32,6 +38,8 @@ export function summarizeDailyBatch(batch: BatchLike, date: string, close: numbe
   const trades = batch.finance?.trades ?? [];
   const topups: DailyTopup[] = trades.filter(t => marketDate(new Date(t.createdAt)) === date).map(t => ({ amount: t.amount, type: t.collateralType ?? (t.entryPrice ? 'stock' : 'unknown'), shares: t.shares, price: t.entryPrice, at: t.createdAt }));
   return {
+    clientAssetValue: (batch.clients ?? []).filter(c => c.status !== 'SETTLED').reduce((sum, c) => sum + c.investmentAmount + (split.perClient.get(c.id)?.unrealizedPnL ?? 0), 0),
+    institutionAssetValue: metrics.currentMarketValue - (batch.clients ?? []).filter(c => c.status !== 'SETTLED').reduce((sum, c) => sum + c.investmentAmount + (split.perClient.get(c.id)?.unrealizedPnL ?? 0), 0),
     originalCapital: batch.finance?.originalCapital ?? batch.initialTotalAmount,
     originalPriority: batch.finance?.originalPriority ?? batch.priorityAmount,
     date, price: close, shares: batch.totalShares + rescue.totalRescueShares,
