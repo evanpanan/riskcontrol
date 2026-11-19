@@ -1,3 +1,4 @@
+import { notificationEmailHtml } from "../notificationFormatting";
 import { NotificationTransportError, unknownNotificationOutcome } from "./notificationErrors";
 import { formatTelegramAlert, sendTelegramChannel } from "./telegram";
 
@@ -6,10 +7,6 @@ type Env = Record<string, string | undefined>;
 const configured = (value?: string): value is string =>
   !!value?.trim() && !/example\.com|your[-_.]|x{4}|placeholder|riskcontrol\.local/i.test(value);
 const emailValid = (value: string) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value);
-const phoneValid = (value: string) => /^\+[1-9]\d{7,14}$/.test(value);
-const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
 function provider(channel: Channel, env: Env) {
   if (channel === "email" && configured(env.EMAIL_WEBHOOK_URL)) return "webhook";
   if (channel === "email") {
@@ -109,7 +106,7 @@ export async function deliverNotification(body: any, env: Env = process.env, att
   const message = `${payload.title}\n\n${payload.message}`;
 
   const from = env.NOTIFICATION_FROM_EMAIL!;
-  const html = `<h2>${escapeHtml(payload.title)}</h2><p>${escapeHtml(payload.message).replace(/\n/g, "<br>")}</p>`;
+  const html = notificationEmailHtml(payload.title, payload.message);
 
   if (selected === "webhook") {
     const response = await request(allowedWebhook(body.webhookOverride || configuredUrl, configuredUrl), json({

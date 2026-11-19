@@ -158,8 +158,15 @@ export function pushInternalNotification(payload: Omit<NotificationPayload, "rec
   window.dispatchEvent(new CustomEvent("risk-control:notifications-changed"));
 }
 
+type AlertBatch = Batch & { clients?: Client[]; finance?: { rounds?: Array<{ id: string; triggerStockPrice?: number; triggerClientCount?: number }> } };
+const alertMoney = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const alertPrice = (n?: number | null) => typeof n === "number" && Number.isFinite(n) && n > 0 ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} / 股` : "未留存";
+const alertShares = (amount: number, price?: number | null) => typeof price === "number" && Number.isFinite(price) && price > 0 ? `${(amount / price).toLocaleString("en-US", { maximumFractionDigits: 6 })} 股` : "暂无法计算（价格待核验）";
+const alertTime = (date: Date | string) => new Date(date).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+const alertClients = (batch: AlertBatch) => batch.clients ? `${batch.clients.filter(c => c.status !== "SETTLED").length} 人` : "未提供";
+
 export function buildMarginCallNotification(
-  batch: Batch,
+  batch: AlertBatch,
   marginCall: MarginCall,
   bdManagers?: string[],
   opts?: { marginDropPercent?: number; warningDropPercent?: number }
@@ -179,22 +186,49 @@ export function buildMarginCallNotification(
 
   const marginPct = typeof opts?.marginDropPercent === "number" && opts.marginDropPercent > 0 ? opts.marginDropPercent : 20;
   const warnPct = typeof opts?.warningDropPercent === "number" && opts.warningDropPercent > 0 ? opts.warningDropPercent : 15;
+  const round = batch.finance?.rounds?.find(r => r.id === marginCall.id);
+  const snapshot = marginCall as MarginCall & { triggerStockPrice?: number; triggerClientCount?: number };
+  const triggerPrice = round?.triggerStockPrice ?? snapshot.triggerStockPrice;
+  const triggerCount = round?.triggerClientCount ?? snapshot.triggerClientCount;
+  const remaining = Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0));
+  const referencePrice = batch.currentStockPrice;
   return {
     type: "MARGIN_CALL",
     severity: "CRITICAL",
-    title: `【紧急补仓警报】批次 ${batch.batchNumber} 已触发补仓机制`,
-    message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前仓位价值跌幅达到 ${(
-      marginCall.dropPercent * 100
-    ).toFixed(2)}%，已触发 ${marginPct.toFixed(2)}% 补仓预警线（预警阈值 ${warnPct.toFixed(
-      2
-    )}%）。请立即处理补仓事宜。需补仓金额：${(
-      Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)) / 1000000
-    ).toFixed(2)}M USD（$${Math.max(0, marginCall.requiredAmount - (marginCall.fulfilledAmount ?? 0)).toLocaleString()}）。`,
+    title: `【紧急补仓警报】${batch.batchNumber}`,
+    message: [
+      "📋 批次信息",
+      `批次：${batch.batchNumber}`,
+      `标的：${batch.stockSymbol}${batch.stockName ? ` · ${batch.stockName}` : ""}`,
+      `批次客户：${alertClients(batch)}（在管）`,
+      ...(typeof triggerCount === "number" ? [`触发时人数：${triggerCount} 人`] : []),
+      "",
+      "📉 触发情况",
+      `触发时间：${alertTime(marginCall.triggerDate)}（北京时间）`,
+      `触发时价格：${alertPrice(triggerPrice)}`,
+      `触发时跌幅：${(marginCall.dropPercent * 100).toFixed(2)}%`,
+      `触发时仓位价值：${alertMoney(marginCall.triggerMarketValue)}`,
+      `预警线 / 补仓线：${warnPct.toFixed(2)}% / ${marginPct.toFixed(2)}%`,
+      "",
+      "💰 待处理补仓",
+      `本轮应补：${alertMoney(marginCall.requiredAmount)}`,
+      `本轮已补：${alertMoney(marginCall.fulfilledAmount ?? 0)}`,
+      `需补仓金额：${alertMoney(remaining)}`,
+      `对应股数：${alertShares(remaining, referencePrice)}`,
+      `股数参考价：${alertPrice(referencePrice)}（当前价）`,
+      ...(typeof triggerPrice === "number" && triggerPrice > 0 ? [`按触发价折合：${alertShares(remaining, triggerPrice)}`] : []),
+      "",
+      "请及时处理补仓。股票或现金二选一，实际股数及金额以确认补仓时的成交价为准。",
+    ].join("\n"),
     batchId: batch.id,
     batchNumber: batch.batchNumber,
     stockSymbol: batch.stockSymbol,
     details: {
       marginCallId: marginCall.id,
+      triggerStockPrice: triggerPrice,
+      clientCount: batch.clients?.filter(c => c.status !== "SETTLED").length,
+      remainingAmount: remaining,
+      referencePrice,
       batchNumber: batch.batchNumber,
       stockSymbol: batch.stockSymbol,
       stockName: batch.stockName,
@@ -219,7 +253,7 @@ export function buildMarginCallNotification(
 }
 
 export function buildWarningNotification(
-  batch: Batch,
+  batch: AlertBatch,
   dropPercent: number,
   safetyBufferPercent: number,
   opts?: { marginDropPercent?: number; warningDropPercent?: number }
@@ -234,13 +268,26 @@ export function buildWarningNotification(
     type: "WARNING",
     severity: "MEDIUM",
     title: `【风险预警】批次 ${batch.batchNumber} 达到 ${warnPct.toFixed(2)}% 预警阈值`,
-    message: `批次 ${batch.batchNumber}（${batch.stockSymbol}）当前跌幅 ${dropPercent.toFixed(
-      2
-    )}%，已触发 ${warnPct.toFixed(2)}% 预警阈值；距离 ${marginPct.toFixed(
-      2
-    )}% 补仓线仅剩 ${safetyBufferPercent.toFixed(
-      2
-    )}%，请密切关注行情波动，准备应对预案。`,
+    message: [
+      "📋 批次信息",
+      `批次：${batch.batchNumber}`,
+      `标的：${batch.stockSymbol}${batch.stockName ? ` · ${batch.stockName}` : ""}`,
+      `批次客户：${alertClients(batch)}（在管）`,
+      "",
+      "📉 本次预警",
+      `检测时间：${alertTime(new Date())}（北京时间）`,
+      `本次预警价格：${alertPrice(batch.currentStockPrice)}`,
+      `当前跌幅：${dropPercent.toFixed(2)}%`,
+      `预警线 / 补仓线：${warnPct.toFixed(2)}% / ${marginPct.toFixed(2)}%`,
+      `距补仓线：${safetyBufferPercent.toFixed(2)} 个百分点`,
+      "",
+      "💰 补仓参考",
+      `需补仓金额：${alertMoney(getBatchMetrics(batch as any).requiredMarginCall)}`,
+      `对应股数：${alertShares(getBatchMetrics(batch as any).requiredMarginCall, batch.currentStockPrice)}`,
+      `股数参考价：${alertPrice(batch.currentStockPrice)}（本次预警价）`,
+      "",
+      "未触发补仓时无需补入，请密切关注行情与仓位。",
+    ].join("\n"),
     batchId: batch.id,
     batchNumber: batch.batchNumber,
     stockSymbol: batch.stockSymbol,
@@ -452,9 +499,9 @@ export async function notifyBatchChannel(
   pendingBatchNotifications.add(key);
   try {
     const bds = [...new Set((batch.clients ?? []).map(c => c.bdManager))];
-    const current = batch.marginCalls?.find(m => m.status === 'PENDING' && m.requiredAmount - (m.fulfilledAmount ?? 0) > 0.005);
+    const current = batch.marginCalls?.find(m => ['PENDING', 'OVERDUE'].includes(m.status) && m.requiredAmount - (m.fulfilledAmount ?? 0) > 0.005);
     const thresholds = getRuntimeThresholds();
-    const drop = Math.max(0, (1 - (batch.currentMarketValue ?? 0) / (batch.initialTotalAmount ?? 1)) * 100);
+    const drop = Math.max(0, getBatchMetrics(batch as any).dropPercent);
     const payload = current ? buildMarginCallNotification(batch, current, bds, thresholds) : buildWarningNotification(batch, drop, Math.max(0,(thresholds.marginDropPercent ?? 20)-drop), thresholds);
     const metrics = getBatchMetrics(batch as any);
     if (metrics.riskLevel === 'CRITICAL' || summarizeBatchMarginFromClients(batch as any).totalPending > 0) payload.severity = 'CRITICAL';

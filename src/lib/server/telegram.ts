@@ -1,3 +1,4 @@
+import { notificationHighlights } from "../notificationFormatting";
 import { NotificationTransportError } from './notificationErrors';
 import { prisma } from '../prisma';
 
@@ -58,9 +59,8 @@ export function formatTelegramAlert(title: string, message: string, severity: st
   const prefix = `${icon} `;
   const heading = `${prefix}${title}\n\n`;
   const entities: BoldEntity[] = [{ type: 'bold', offset: prefix.length, length: title.length }];
-  const highlights = /【(?:手动发送|系统自动提醒)】|^发起人：[^\n]+|批次 [^\s（，。]+(?:（[^）\n]+）)?|(?:需补仓金额|待补仓金额)[:：][^。\n]+|(?:实际跌幅|当前跌幅) [\d.]+%/gm;
-  for (const match of message.matchAll(highlights)) {
-    entities.push({ type: 'bold', offset: heading.length + match.index!, length: match[0].length });
+  for (const range of notificationHighlights(message)) {
+    entities.push({ type: 'bold', offset: heading.length + range.offset, length: range.length });
   }
   return { text: heading + message, entities };
 }

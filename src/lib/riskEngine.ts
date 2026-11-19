@@ -122,6 +122,8 @@ export interface MarginRound {
   requiredAmount: number;
   fulfilledAmount: number;
   triggerMarketValue: number;
+  triggerStockPrice?: number;
+  triggerClientCount?: number;
   triggerDate: string;
   dueDate: string;
   dropPercent: number;
@@ -918,6 +920,8 @@ export function syncBatchFinance(batch: BatchLike): void {
     const triggerDate = new Date().toISOString();
     f.rounds.push({ id, number: f.rounds.length + 1, requiredAmount: metrics.requiredMarginCall,
       fulfilledAmount: 0, triggerMarketValue: batch.currentMarketValue,
+      triggerStockPrice: batch.currentStockPrice ?? batch.stockPriceAtStart,
+      triggerClientCount: (batch.clients ?? []).filter(c => c.status !== ClientStatus.SETTLED).length,
       triggerDate, dueDate: getMarginRoundDueDate(triggerDate),
       dropPercent: metrics.dropPercent / 100, status: "PENDING",
       allocations: allocateRound(batch, metrics.requiredMarginCall, id) });
@@ -930,6 +934,7 @@ export function syncBatchFinance(batch: BatchLike): void {
   batch.marginCalls = f.rounds.map((r) => ({
     id: r.id, batchId: batch.id, triggerDate: new Date(r.triggerDate), createdAt: new Date(r.triggerDate),
     triggerMarketValue: r.triggerMarketValue, dropPercent: r.dropPercent,
+    triggerStockPrice: r.triggerStockPrice, triggerClientCount: r.triggerClientCount,
     requiredAmount: r.requiredAmount, fulfilledAmount: r.fulfilledAmount, status: r.status,
     fulfilledDate: r.status === "FULLFILLED" ? new Date(f.trades.filter((t) => t.roundId === r.id).map((t) => t.createdAt).sort().at(-1) ?? r.triggerDate) : null,
     dueDate: r.dueDate ? new Date(r.dueDate) : null,

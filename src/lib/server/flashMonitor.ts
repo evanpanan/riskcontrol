@@ -1,3 +1,4 @@
+import { getBatchMetrics, summarizeBatchMarginFromClients, type BatchLike } from "../riskEngine";
 import { getNYSEInfo } from "@/lib/liveQuote";
 /**
  * 服务端闪跌监控。
@@ -56,6 +57,7 @@ export interface MonitorCycleResult {
 }
 
 interface MonitoredBatch {
+  ledger?: BatchLike;
   batchId: string;
   symbol: string;
   batchNumber: string;
@@ -128,6 +130,7 @@ export async function loadMonitoredBatches(): Promise<MonitoredBatch[]> {
     const symbol = typeof batch.stockSymbol === 'string' ? batch.stockSymbol.trim().toUpperCase() : '';
     if (!symbol) continue;
     out.push({
+      ledger: batch as unknown as BatchLike,
       batchId: typeof batch.id === 'string' && batch.id ? batch.id : row.key,
       symbol,
       batchNumber: typeof batch.batchNumber === 'string' && batch.batchNumber ? batch.batchNumber : row.key,
@@ -356,11 +359,25 @@ export async function deliverFlashCrashAlert(
   leaseToken: string
 ): Promise<DeliveryOutcome> {
   const title = `【闪跌预警】${batch.batchNumber}（${alert.symbol}）${alert.windowMinutes} 分钟内跌幅 ${alert.actualDropPercent.toFixed(2)}%`;
+  const ledger = batch.ledger ? { ...batch.ledger, currentStockPrice: alert.currentPrice } : null;
+  const openRound = ledger?.finance?.rounds.some(r => r.status === 'PENDING' || r.status === 'OVERDUE');
+  const required = ledger ? (openRound ? summarizeBatchMarginFromClients(ledger).totalPending : getBatchMetrics(ledger).requiredMarginCall) : null;
   const message = [
-    `批次 ${batch.batchNumber}（${alert.symbol}）触发闪跌预警。`,
-    `检测窗口：${alert.windowMinutes} 分钟，阈值 ${alert.dropPercent.toFixed(2)}%，实际跌幅 ${alert.actualDropPercent.toFixed(2)}%。`,
-    `窗口最高价 $${alert.highPrice.toFixed(2)}，当前价 $${alert.currentPrice.toFixed(2)}。`,
-    `请立即核查行情与仓位。`,
+    "📋 批次信息",
+    `批次：${batch.batchNumber}`,
+    `标的：${alert.symbol}`,
+    `批次客户：${ledger?.clients ? `${ledger.clients.filter(c => c.status !== 'SETTLED').length} 人（在管）` : '未提供'}`,
+    "",
+    "📉 本次预警",
+    `本次预警价格：$${alert.currentPrice.toFixed(4)} / 股`,
+    `窗口最高价：$${alert.highPrice.toFixed(4)} / 股`,
+    `实际跌幅 ${alert.actualDropPercent.toFixed(2)}%`,
+    `检测窗口：${alert.windowMinutes} 分钟 · 阈值 ${alert.dropPercent.toFixed(2)}%`,
+    "",
+    "💰 补仓参考",
+    `需补仓金额：${required === null ? '待核验' : `$${required.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}`,
+    `对应股数：${required !== null && alert.currentPrice > 0 ? `${(required / alert.currentPrice).toLocaleString('en-US', { maximumFractionDigits: 6 })} 股` : '待核验'}`,
+    "股数按本次预警价格折算，实际以确认补仓时的成交价为准。请核查行情与仓位。",
   ].join('\n');
 
   const payload = { type: 'WARNING', severity: 'CRITICAL', title, message,
