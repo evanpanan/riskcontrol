@@ -81,7 +81,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <AppSidebar />
       <div className="flex flex-1 flex-col min-w-0">
         <TopBar />
-        <main className="app-content flex-1 overflow-y-auto scrollbar-thin p-4 sm:p-5 xl:p-6">
+        <main className="app-content min-w-0 flex-1 overflow-y-auto scrollbar-thin p-4 sm:p-5 xl:p-6">
           {children}
         </main>
       </div>

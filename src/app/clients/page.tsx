@@ -1507,7 +1507,8 @@ export default function ClientsPage() {
           </div>
         </CardHeader>
         <CardContent className="pt-0">
-          <div className="border border-border/50 rounded-xl overflow-hidden">
+          <div className="border border-border/50 rounded-xl overflow-x-auto">
+            <div className="min-w-[1080px]">
             <div className="grid grid-cols-12 px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30 border-b border-border/50">
               <div className="col-span-2">客户</div>
               <div className="col-span-2">所属商务经理</div>
@@ -1766,6 +1767,7 @@ export default function ClientsPage() {
                 })
               )}
             </div>
+          </div>
           </div>
         </CardContent>
           </Card>

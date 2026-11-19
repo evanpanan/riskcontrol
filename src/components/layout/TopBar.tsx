@@ -1,5 +1,6 @@
 "use client";
 
+import { NAV_ITEMS, SECONDARY_NAV, isNavVisible } from "./navigation";
 import { notificationChannelLabel } from "@/lib/notificationPolicy";
 import { Bell, Search, RefreshCw, ChevronDown, Clock, RadioTower, Menu, X, LogOut, ImagePlus, AlertTriangle, CheckCircle2, Info, TrendingUp, TrendingDown, LineChart } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -36,7 +37,7 @@ import { APP_ROLES } from "@/types/auth";
 import { ClientAvatar } from "@/components/branding/ClientAvatar";
 import { Logo } from "@/components/branding/Logo";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { getNotificationLogs, LAST_NOTIFICATIONS_KEY, type NotificationLogEntry, type NotificationPayload } from "@/lib/notifier";
 import { toast } from "sonner";
 import { DEFAULT_LIVE_QUOTE, LIVE_QUOTE_SETTINGS_KEY, fetchQuoteBrowser, getLiveQuoteSettings, getNYSEInfo, quoteSourceLabel, getCachedQuote } from "@/lib/liveQuote";
@@ -59,6 +60,16 @@ export function TopBar() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const pathname = usePathname();
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setMobileMenuOpen(false); }, [pathname]);
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const closeOnDesktop = () => { if (desktop.matches) setMobileMenuOpen(false); };
+    if (desktop.addEventListener) desktop.addEventListener('change', closeOnDesktop);
+    else desktop.addListener(closeOnDesktop);
+    return () => { if (desktop.removeEventListener) desktop.removeEventListener('change', closeOnDesktop); else desktop.removeListener(closeOnDesktop); };
+  }, []);
   const [nextUpdateAt, setNextUpdateAt] = useState<number>(0);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -256,13 +267,17 @@ export function TopBar() {
   return (
     <>
       <header className="app-topbar sticky top-0 z-40 h-14 shrink-0 border-b border-border/50 bg-background/70 backdrop-blur-2xl supports-[backdrop-filter]:bg-background/40">
-      <div className="flex h-full items-center gap-3 px-5 lg:px-6">
+      <div className="flex h-full items-center gap-2 px-3 sm:gap-3 sm:px-5 lg:px-6">
         <Link href="/" aria-label="RiskControl 首页" className="lg:hidden shrink-0"><Logo size={32} /></Link>
         <Button
           variant="ghost"
           size="icon"
           className="lg:hidden shrink-0"
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          ref={menuButtonRef}
+          aria-label="打开导航菜单"
+          aria-expanded={mobileMenuOpen}
+          aria-controls={mobileMenuOpen ? 'mobile-navigation' : undefined}
+          onClick={() => setMobileMenuOpen(true)}
         >
           {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </Button>
@@ -555,14 +570,27 @@ export function TopBar() {
         </div>
       </div>
 
-      {mobileMenuOpen && (
-        <div className="lg:hidden absolute top-14 left-0 right-0 border-b border-border/60 bg-background z-50 p-4 space-y-2 shadow-2xl">
-          <Badge variant="danger" className="w-full justify-center py-2">
-            🔒 锁仓期内禁止交易提示：3 个批次处于锁仓期
-          </Badge>
-        </div>
-      )}
     </header>
+    <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+      <DialogContent id="mobile-navigation" onCloseAutoFocus={event => { event.preventDefault(); menuButtonRef.current?.focus(); }}
+        className="!left-0 !top-0 !translate-x-0 !translate-y-0 w-[85vw] max-w-xs h-screen supports-[height:100dvh]:h-[100dvh] !rounded-none !gap-0 !p-0 flex flex-col data-[state=open]:!animate-none data-[state=closed]:!animate-none">
+        <DialogHeader className="border-b border-border/60 px-5 py-5 !text-left">
+          <DialogTitle className="flex items-center gap-3"><Logo size={36} /><span>RiskControl</span></DialogTitle>
+          <DialogDescription>主控制台</DialogDescription>
+        </DialogHeader>
+        <nav aria-label="手机导航" className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {[...NAV_ITEMS, ...SECONDARY_NAV].filter(item => isNavVisible(item, user)).map(item => {
+            const active = item.href === '/' ? pathname === '/' : pathname?.startsWith(item.href);
+            const Icon = item.icon;
+            return <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined}
+              onClick={() => setMobileMenuOpen(false)}
+              className={cn("flex min-h-12 items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium", active ? "bg-primary/10 text-primary ring-1 ring-primary/20" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+              <Icon className="h-4 w-4 shrink-0" />{item.title}
+            </Link>;
+          })}
+        </nav>
+      </DialogContent>
+    </Dialog>
     <KLineDialog
       open={klineOpen}
       symbol={(quote.symbol || "").trim().toUpperCase()}

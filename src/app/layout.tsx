@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter as FontSans } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,8 @@ const fontSans = FontSans({
 
 const title = "RiskControl · 机构级股票风控平台";
 const description = "面向 Win100 的股票组合风控工作台，集中管理批次、风险预警、补仓、客户结算与操作留痕。";
+
+export const viewport: Viewport = { width: "device-width", initialScale: 1 };
 
 export const metadata: Metadata = {
   title,

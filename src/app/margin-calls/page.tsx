@@ -147,7 +147,10 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
       const hash = window.location.hash;
       if (!hash.startsWith("#margin-call-")) return;
       try {
-        document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: "center" });
+        const id = decodeURIComponent(hash.slice(1));
+        const desktop = document.getElementById(id);
+        const target = desktop?.getClientRects().length ? desktop : document.getElementById(`mobile-${id}`);
+        target?.scrollIntoView({ block: "center" });
       } catch {
         // Ignore malformed hashes.
       }
@@ -339,7 +342,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
               <p className="text-xs text-muted-foreground">累计应补仓</p>
               <History className="h-4 w-4 text-warning" />
             </div>
-            <p className="text-2xl font-bold font-mono text-warning">
+            <p className="text-lg sm:text-2xl font-bold font-mono break-words text-warning">
               {formatCurrency(stats.totalRequired)}
             </p>
           </CardContent>
@@ -350,7 +353,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
               <p className="text-xs text-muted-foreground">实际到账</p>
               <CheckCircle className="h-4 w-4 text-success" />
             </div>
-            <p className="text-2xl font-bold font-mono text-success">
+            <p className="text-lg sm:text-2xl font-bold font-mono break-words text-success">
               {formatCurrency(stats.totalFulfilled)}
             </p>
             <Progress
@@ -385,19 +388,19 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
       </div>
 
       <Card className="border-border/50">
-        <CardHeader className="pb-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <CardHeader className="px-3 sm:px-6 pb-3">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
             <CardTitle className="text-sm font-bold flex items-center gap-2">
               <FileText className="h-4 w-4" />
               补仓记录明细 ({allCalls.length})
             </CardTitle>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+              <div className="relative min-w-0 col-span-2">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   placeholder="批次号 / 客户 / 签约年份"
-                  className="pl-8 h-9 w-[200px] text-xs"
+                  className="pl-8 h-9 w-full sm:w-[200px] text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -452,18 +455,50 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
             </div>
           )}
         </CardHeader>
-        <CardContent className="pt-0">
-          <div className="border border-border/50 rounded-xl overflow-hidden">
-            <div className="grid grid-cols-12 px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30 border-b border-border/50">
-              <div className="col-span-2">批次号</div>
-              <div className="col-span-1 text-center">触发时间</div>
-              <div className="col-span-1 text-right">触发时仓位价值</div>
-              <div className="col-span-1 text-right">跌幅</div>
-              <div className="col-span-1 text-right">应补金额</div>
-              <div className="col-span-1 text-right">已到账</div>
-              <div className="col-span-2 text-center">完成进度</div>
-              <div className="col-span-1 text-center">状态</div>
-              <div className="col-span-2 text-right">操作</div>
+        <CardContent className="px-3 sm:px-6 pt-0">
+          <div className="grid gap-3 lg:grid-cols-2 2xl:hidden">
+            {allCalls.length === 0 && <p className="py-12 text-center text-sm text-muted-foreground">暂无补仓记录</p>}
+            {allCalls.map(mc => {
+              const sc = getStatusConfig(mc.status);
+              const SIcon = sc.Icon;
+              return <article key={mc.id} id={`mobile-margin-call-${mc.id}`} className={cn("min-w-0 rounded-xl border border-border/60 p-4 space-y-4", mc.status === 'PENDING' && "border-danger/25 bg-danger/5")}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0"><p className="font-mono text-xs font-semibold break-words">{mc.batchNumber}</p><p className="mt-1 text-xs text-muted-foreground">第 {mc.roundNumber} 轮 · {mc.symbol}{mc.stockName && mc.stockName !== mc.symbol ? ` · ${mc.stockName}` : ''}</p></div>
+                  <Badge variant={sc.variant as any} className="shrink-0 gap-1 whitespace-nowrap text-[10px]"><SIcon className="h-3 w-3 shrink-0" />{sc.label}</Badge>
+                </div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+                  {[
+                    ['触发时间', formatDate(mc.triggerDate)],
+                    ['到期时间（T+2）', mc.dueDate ? formatDate(mc.dueDate) : '—'],
+                    ['触发时仓位价值', formatCurrency(mc.triggerMarketValue)],
+                    ['跌幅', `-${(mc.dropPercent * 100).toFixed(1)}%`],
+                    ['应补金额', formatCurrency(mc.requiredAmount)],
+                    ['已到账', formatCurrency(mc.fulfilledAmount || 0)],
+                  ].map(([label, value]) => <div key={label} className="min-w-0 space-y-1"><dt className="text-muted-foreground">{label}</dt><dd className={cn("font-mono font-semibold break-words tabular-nums", label === '应补金额' && 'text-warning', label === '跌幅' && 'text-danger')}>{value}</dd></div>)}
+                </dl>
+                <div className="space-y-2"><div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">完成进度</span><span className="font-mono">{mc.fulfillmentPct.toFixed(0)}%</span></div><Progress value={mc.fulfillmentPct} variant={mc.fulfillmentPct >= 100 ? 'success' : mc.fulfillmentPct > 0 ? 'warning' : 'danger'} className="h-2" /></div>
+                {(mc.fulfilledDate || mc.collateralType) && <p className="text-xs text-muted-foreground">{mc.collateralType && (mc.collateralType === 'cash' ? '现金' : '股票')}{mc.fulfilledDate && ` · 到账 ${formatDate(mc.fulfilledDate)}`}</p>}
+                {mc.isOverdue && <p className="text-xs text-danger">逾期 {mc.overdueDays} 天{mc.penalty > 0 && ` · 罚息 ${formatCurrency(mc.penalty)}`}</p>}
+                {mc.trades?.length > 0 && <div className="min-w-0 space-y-2 border-t border-border/50 pt-3"><p className="text-xs text-muted-foreground">分次到账明细 · {topupReceipts(mc.trades).length} 次</p><TopupReceiptsTable trades={mc.trades} /></div>}
+                <div className="flex justify-end gap-2 border-t border-border/50 pt-3">
+                  <Link href={`/batch/${mc.batchId}`}><Button size="sm" variant="outline" className="gap-1.5"><Building2 className="h-3.5 w-3.5" />查看批次</Button></Link>
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setDocTarget(mc)}><FileText className="h-3.5 w-3.5" />查看单据</Button>
+                </div>
+              </article>;
+            })}
+          </div>
+          <div className="hidden 2xl:block border border-border/50 rounded-xl overflow-x-auto">
+            <div className="min-w-[1240px]">
+            <div className="grid grid-cols-[minmax(170px,1fr)_110px_140px_70px_140px_140px_110px_110px_88px] px-5 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-secondary/30 border-b border-border/50">
+              <div className="min-w-0">批次号</div>
+              <div className="min-w-0 text-center">触发时间</div>
+              <div className="min-w-0 text-right">触发时仓位价值</div>
+              <div className="min-w-0 text-right">跌幅</div>
+              <div className="min-w-0 text-right">应补金额</div>
+              <div className="min-w-0 text-right">已到账</div>
+              <div className="min-w-0 text-center">完成进度</div>
+              <div className="min-w-0 text-center">状态</div>
+              <div className="min-w-0 text-right">操作</div>
             </div>
             <div className="divide-y divide-border/40 max-h-[600px] overflow-y-auto scrollbar-thin">
               {allCalls.length === 0 ? (
@@ -485,11 +520,11 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                       key={mc.id}
                       id={`margin-call-${mc.id}`}
                       className={cn(
-                        "grid grid-cols-12 items-center px-5 py-4 hover:bg-secondary/30 transition-colors target:ring-2 target:ring-inset target:ring-primary",
+                        "grid grid-cols-[minmax(170px,1fr)_110px_140px_70px_140px_140px_110px_110px_88px] items-center px-5 py-4 hover:bg-secondary/30 transition-colors target:ring-2 target:ring-inset target:ring-primary",
                         mc.status === "PENDING" && "bg-danger/5 hover:bg-danger/10"
                       )}
                     >
-                      <div className="col-span-2 min-w-0">
+                      <div className="min-w-0 min-w-0">
                         <p className="font-mono text-xs text-muted-foreground">
                           {mc.batchNumber} · 第 {mc.roundNumber} 轮
                         </p>
@@ -502,7 +537,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           )}
                         </p>
                       </div>
-                      <div className="col-span-1 text-center font-mono text-xs">
+                      <div className="min-w-0 text-center font-mono text-xs">
                         {formatDate(mc.triggerDate)}
                         {mc.dueDate && (
                           <p className={cn(
@@ -518,19 +553,19 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           </p>
                         )}
                       </div>
-                      <div className="col-span-1 text-right font-mono text-sm">
+                      <div className="min-w-0 text-right font-mono text-sm whitespace-nowrap">
                         {formatCurrency(mc.triggerMarketValue)}
                       </div>
-                      <div className="col-span-1 text-right font-mono text-sm font-bold text-danger">
+                      <div className="min-w-0 text-right font-mono text-sm whitespace-nowrap font-bold text-danger">
                         -{(mc.dropPercent * 100).toFixed(1)}%
                       </div>
-                      <div className="col-span-1 text-right font-mono text-sm font-bold text-warning">
+                      <div className="min-w-0 text-right font-mono text-sm whitespace-nowrap font-bold text-warning">
                         {formatCurrency(mc.requiredAmount)}
                       </div>
-                      <div className="col-span-1 text-right font-mono text-sm font-semibold">
+                      <div className="min-w-0 text-right font-mono text-sm whitespace-nowrap font-semibold">
                         {formatCurrency(mc.fulfilledAmount || 0)}
                       </div>
-                      <div className="col-span-2 px-2">
+                      <div className="min-w-0 px-2">
                         <Progress
                           value={fulfillmentPct}
                           variant={
@@ -546,8 +581,8 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           {fulfillmentPct.toFixed(0)}%
                         </p>
                       </div>
-                      <div className="col-span-1 text-center">
-                        <Badge variant={sc.variant as any} className="gap-1 text-[10px]">
+                      <div className="min-w-0 text-center">
+                        <Badge variant={sc.variant as any} className="gap-1 text-[10px] whitespace-nowrap">
                           <SIcon className="h-2.5 w-2.5" />
                           {sc.label}
                         </Badge>
@@ -562,7 +597,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           </p>
                         )}
                       </div>
-                      <div className="col-span-2 flex justify-end gap-1.5">
+                      <div className="min-w-0 flex justify-end gap-1.5">
                         <Link href={`/batch/${mc.batchId}`}>
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="查看批次">
                             <Building2 className="h-3.5 w-3.5" />
@@ -574,7 +609,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      {mc.trades?.length > 0 && <div className="col-span-12 mt-3">
+                      {mc.trades?.length > 0 && <div className="col-span-full mt-3">
                         <p className="text-xs text-muted-foreground mb-2">分次到账明细 · {topupReceipts(mc.trades).length} 次</p>
                         <TopupReceiptsTable trades={mc.trades} />
                       </div>}
@@ -583,6 +618,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                 })
               )}
             </div>
+          </div>
           </div>
         </CardContent>
       </Card>
