@@ -102,6 +102,8 @@ export interface SettlementSnapshot extends SettlementResult {
 }
 export interface InstitutionTrade {
   id: string;
+  receiptId?: string;
+  recordedAt?: string;
   roundId: string;
   clientId?: string;
   amount: number;
@@ -968,20 +970,26 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   collateralType?: "cash" | "stock";
   allowExcess?: boolean;
   expectedPrice?: number;
+  executionPrice?: number;
+  stockShares?: number;
   topupDate?: string;
 }): number {
   const createdAt = topupDateTimestamp(options.topupDate);
   initializeBatchFinance(batch);
   const round = openObligationRound(batch);
   if (!round || (options.expectedRoundId && options.expectedRoundId !== round.id)) return 0;
-  const price = batch.currentStockPrice ?? batch.stockPriceAtStart;
+  const price = options.executionPrice ?? batch.currentStockPrice ?? batch.stockPriceAtStart;
   if (isTopupBlockedByLegacyLedger(batch)) {
     throw new Error("历史结算或补仓分配尚未核对，本次未记账。请进入批次详情，点击「重新检查账本」或「查看处理方法」。");
   }
   const ct = options.collateralType ?? "stock";
-  if (ct === "stock" && options.expectedPrice !== undefined && Math.abs(price - options.expectedPrice) > 0.000001) throw new Error("股价已更新，请核对等值金额后重新确认补仓。");
+  if (ct === "stock" && options.executionPrice === undefined && options.expectedPrice !== undefined && Math.abs(price - options.expectedPrice) > 0.000001) throw new Error("股价已更新，请核对等值金额后重新确认补仓。");
   if (ct === "stock" && (!Number.isFinite(price) || price <= 0)) throw new Error("当前成交价无效，无法记录股票补仓。");
   if (!Number.isFinite(options.amount) || options.amount <= 0) return 0;
+  if (ct === 'stock' && options.stockShares !== undefined &&
+      (!Number.isFinite(options.stockShares) || options.stockShares <= 0 || Math.abs(money(options.stockShares * price) - money(options.amount)) > 0.005)) {
+    throw new Error("补仓股数、成交价与金额不一致，请重新核对。");
+  }
   round.collateralType = ct;
   const targets = Object.entries(round.allocations)
     .filter(([id]) => (!options.clientId || id === options.clientId) && batch.clients?.some((client) => client.id === id && client.status !== ClientStatus.SETTLED))
@@ -989,8 +997,13 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
   const outstanding = targets.reduce((sum, [, state]) => sum + Math.max(0, state.required - state.fulfilled), 0);
   if (outstanding <= 0) return 0;
   let remaining = money(options.allowExcess ? options.amount : Math.min(options.amount, outstanding));
+  const totalBooked = remaining;
+  const bookedShares = options.stockShares === undefined ? totalBooked / price : options.stockShares * totalBooked / money(options.amount);
+  let remainingShares = bookedShares;
   let remainingWeight = outstanding;
   let applied = 0;
+  const receiptId = uid();
+  const recordedAt = new Date().toISOString();
   for (const [clientId, state] of targets) {
     const client = batch.clients?.find((c) => c.id === clientId);
     if (!client || client.status === ClientStatus.SETTLED) continue;
@@ -1003,10 +1016,11 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
     if (pay <= 0) continue;
     const id = uid();
     const source = options.clientId ? "client_single" : "batch_one_click";
-    // cash 形式不买入股票，只记金额；stock 形式按当前价买入份额
+    // Cash stays cash; stock uses the confirmed execution price and conserves entered shares.
     const entryPrice = ct === "stock" ? price : null;
-    const shares = ct === "stock" ? pay / price : 0;
-    batch.finance!.trades.push({ id, roundId: round.id, clientId, amount: pay, entryPrice,
+    const shares = ct === "stock" ? (remaining === 0 ? remainingShares : bookedShares * pay / totalBooked) : 0;
+    if (ct === "stock") remainingShares -= shares;
+    batch.finance!.trades.push({ id, receiptId, recordedAt, roundId: round.id, clientId, amount: pay, entryPrice,
       shares, remainingFraction: 1, createdAt, source, operatorName: options.operatorName, collateralType: ct });
     state.fulfilled = money(state.fulfilled + pay);
     state.history.push({ id, clientId, amount: pay, fulfilledAt: createdAt, source, roundId: round.id, operatorName: options.operatorName });
@@ -1026,10 +1040,11 @@ export function executeInstitutionTopup(batch: BatchLike, options: {
           batchId: batch.id,
           batchNumber: (batch as any).batchNumber ?? null,
           roundId: round.id,
+          receiptId,
           appliedAmount: applied,
           collateralType: ct,
           entryPrice: ct === "stock" ? price : null,
-          shares: ct === "stock" ? applied / price : 0,
+          shares: ct === "stock" ? bookedShares : 0,
           expectedAmount: options.amount,
           topupDate: createdAt,
           targetClientId: options.clientId ?? null,
@@ -1202,10 +1217,14 @@ export function settleClientPosition(batch: BatchLike, clientId: string, opts: {
   return snapshot;
 }
 
-export function addClientPosition(batch: BatchLike, client: ClientLike): void {
+export function addClientPosition(batch: BatchLike, client: ClientLike, options: { allowHistoricalImport?: boolean } = {}): void {
   initializeBatchFinance(batch);
   if (batch.finance!.legacyWarnings.length) throw new Error("请先核对该批次历史资金记录，再新增客户。");
-  if (openObligationRound(batch)) throw new Error("请先处理当前补仓轮次，再新增客户。");
+  const pending = openObligationRound(batch);
+  const historical = options.allowHistoricalImport && Number.isFinite(new Date(client.signDate).getTime()) &&
+    (!pending || new Date(client.signDate).getTime() <= new Date(pending.triggerDate).getTime());
+  if (pending && !historical) throw new Error("当前有待处理补仓，仅管理员可补录该轮触发前已签约的历史客户。");
+  const oldPool = (batch.clients ?? []).filter(c => c.status !== ClientStatus.SETTLED).reduce((sum, c) => sum + c.investmentAmount, 0);
   const price = client.entryStockPrice ?? batch.stockPriceAtStart ?? batch.currentStockPrice;
   if (!(price > 0)) throw new Error("当前成交价无效。");
   if (!Number.isFinite(client.investmentAmount) || client.investmentAmount <= 0) throw new Error("客户本金无效。");
@@ -1219,6 +1238,12 @@ export function addClientPosition(batch: BatchLike, client: ClientLike): void {
   client.entryStockPrice = price;
   (client as any).__financeManaged = true;
   (batch.clients ??= []).push(client);
+  // Append the missing obligation only; existing receipts and client allocations remain unchanged.
+  if (pending && historical) {
+    const required = oldPool > 0 ? money(pending.requiredAmount * client.investmentAmount / oldPool) : 0;
+    pending.allocations[client.id] = { initialInvestment: client.investmentAmount, required, fulfilled: 0, history: [], roundId: pending.id };
+    pending.requiredAmount = money(pending.requiredAmount + required);
+  }
   f.revision++;
   syncBatchFinance(batch);
 }

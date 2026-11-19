@@ -1,5 +1,7 @@
 "use client";
 
+import { TopupReceiptsTable } from "@/components/batch/TopupReceiptsTable";
+import { topupReceipts } from "@/lib/topupReceipts";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -93,6 +95,7 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
         const round = rounds.get(mc.id);
         list.push({
           ...mc,
+          trades: ((b as BatchLike).finance?.trades ?? []).filter(t => t.roundId === mc.id),
           roundNumber: round?.number ?? index + 1,
           ...calcPenalty(round ?? mc),
           batchNumber: b.batchNumber,
@@ -230,6 +233,10 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
     ["罚息", formatCurrency(mc.penalty)],
     ["到账日期", mc.fulfilledDate ? formatDate(mc.fulfilledDate) : "—"],
     ["备注", mc.note || "—"],
+    ...topupReceipts(mc.trades ?? []).map((r, index): [string, string] => [
+      `第 ${index + 1} 次到账 · ${formatDate(r.at)}`,
+      r.type === 'stock' ? `${r.shares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 × $${r.price?.toFixed(4)} = ${formatCurrency(r.amount)}` : `现金 ${formatCurrency(r.amount)}`,
+    ]),
   ];
 
   const handleExport = async () => {
@@ -262,7 +269,12 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
         { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
       ];
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "补仓记录明细");
+      XLSX.utils.book_append_sheet(wb, ws, "补仓轮次汇总");
+      const receipts = allCalls.flatMap(mc => topupReceipts(mc.trades ?? []).map(r => ({
+        "批次号": mc.batchNumber, "轮次": mc.roundNumber, "补仓日期": formatDate(r.at), "形式": r.type === 'stock' ? '股票' : '现金',
+        "成交股数": r.shares, "成交价": r.price ?? '', "本次金额": r.amount, "记录人": r.operatorName ?? '',
+      })));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(receipts), "分次到账明细");
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const fileName = `补仓记录明细_${stamp}.xlsx`;
       await XLSX.writeFile(wb, fileName);
@@ -562,6 +574,10 @@ function MarginCallsList({ initialStatus }: { initialStatus: "ALL" | MarginCallS
                           <FileText className="h-3.5 w-3.5" />
                         </Button>
                       </div>
+                      {mc.trades?.length > 0 && <div className="col-span-12 mt-3">
+                        <p className="text-xs text-muted-foreground mb-2">分次到账明细 · {topupReceipts(mc.trades).length} 次</p>
+                        <TopupReceiptsTable trades={mc.trades} />
+                      </div>}
                     </div>
                   );
                 })

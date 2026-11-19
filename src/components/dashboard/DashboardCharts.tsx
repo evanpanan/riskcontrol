@@ -28,15 +28,6 @@ import {
 
 type Timeframe = "1D" | "1W" | "1M" | "3M" | "6M" | "1Y";
 
-const TIMEFRAME_POINTS: Record<Timeframe, number> = {
-  "1D": 24,
-  "1W": 7,
-  "1M": 30,
-  "3M": 13,
-  "6M": 26,
-  "1Y": 52,
-};
-
 const TIMEFRAMES: { key: Timeframe; label: string }[] = [
   { key: "1D", label: "1天" },
   { key: "1W", label: "1周" },
@@ -50,233 +41,6 @@ type SnapshotSeries = Record<
   Timeframe,
   { valuePoints: ValueDataPoint[]; yieldPoints: YieldDataPoint[] }
 >;
-
-function hasEnoughSnapshotPoints(timeframe: Timeframe, count: number) {
-  return count >= Math.max(2, Math.floor(TIMEFRAME_POINTS[timeframe] * 0.5));
-}
-
-/* -------- 确定性伪随机（seeded, 同 tick/timeframe 下数据一致）-------- */
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function formatTick(tf: Timeframe, i: number, total: number): { tick: string; tooltip: string } {
-  const now = new Date();
-  const nowY = now.getUTCFullYear();
-  const nowM = now.getUTCMonth();
-  const nowD = now.getUTCDate();
-  if (tf === "1D") {
-    const d = new Date(Date.UTC(nowY, nowM, nowD, 9 + Math.floor((i / Math.max(1, total - 1)) * 7), 0));
-    const hh = d.getUTCHours().toString().padStart(2, "0");
-    const mm = d.getUTCMinutes().toString().padStart(2, "0");
-    return {
-      tick: `${hh}:${mm}`,
-      tooltip: `${nowY}年${nowM + 1}月${nowD}日 ${hh}:${mm}`,
-    };
-  }
-  if (tf === "1W") {
-    const offsetDays = i - (total - 1);
-    const d = new Date(Date.UTC(nowY, nowM, nowD + offsetDays));
-    const dow = ["日", "一", "二", "三", "四", "五", "六"][d.getUTCDay()];
-    return {
-      tick: `周${dow}`,
-      tooltip: `${d.getUTCFullYear()}年${d.getUTCMonth() + 1}月${d.getUTCDate()}日 周${dow}`,
-    };
-  }
-  if (tf === "1M") {
-    const offsetDays = i - (total - 1);
-    const d = new Date(Date.UTC(nowY, nowM, nowD + offsetDays));
-    const y = d.getUTCFullYear();
-    const m = d.getUTCMonth() + 1;
-    const day = d.getUTCDate();
-    const showY = y !== nowY ? `${y.toString().slice(2)}/` : "";
-    return {
-      tick: `${showY}${m}/${day}`,
-      tooltip: `${y}年${m}月${day}日`,
-    };
-  }
-  if (tf === "3M" || tf === "6M" || tf === "1Y") {
-    const span = tf === "3M" ? 3 : tf === "6M" ? 6 : 12;
-    const progress = total === 1 ? 0 : i / (total - 1);
-    const days = span * 30.4375;
-    const base = new Date(Date.UTC(nowY, nowM, nowD - Math.round(days * (1 - progress))));
-    const y = base.getUTCFullYear();
-    const m = base.getUTCMonth() + 1;
-    const showY = tf === "1Y" || y !== nowY || i === 0 || m === 1 ? `${y.toString().slice(2)}年` : "";
-    return {
-      tick: `${showY}${m}月`,
-      tooltip: `${y}年${m}月`,
-    };
-  }
-  return { tick: `W${i + 1}`, tooltip: `第 ${i + 1} 周` };
-}
-
-/* -------- 合成历史（相对当前值沿时间轴回推，保持最新点为当前值）* 增加"月度新增批次 ramp"：早期批次少 → AUM 自然更低，后期每月新增 4 批 → AUM 阶梯抬升，* 让曲线形状体现"近半年每月都有新增 4 批"的真实增长。-------- */
-function synthesizeHistory(
-  totalBase: number,
-  institutionBase: number,
-  clientBase: number,
-  timeframe: Timeframe,
-  seed: number
-) {
-  const N = TIMEFRAME_POINTS[timeframe];
-  const rnd = mulberry32(seed + TIMEFRAME_POINTS[timeframe] * 7);
-  const vol =
-    timeframe === "1D"
-      ? 0.006
-      : timeframe === "1W"
-      ? 0.012
-      : timeframe === "1M"
-      ? 0.025
-      : timeframe === "3M"
-      ? 0.05
-      : timeframe === "6M"
-      ? 0.09
-      : 0.16;
-
-  /* --- 月度新增批次 ramp：6 个月 × 每月 4 批 → 第 i 个点归一化 0..1 对应 3月→8月 AUM 增长因子 --- * 若 tf < 6 个月，ramp 仍从 0.7 起点开始（部分月已在管），但保持最新点 = 1.0 */
-  const rampPoints = (() => {
-    const arr: number[] = [];
-    for (let i = 0; i < N; i++) {
-      const progress = N === 1 ? 1 : i / (N - 1); // 0 = 最早历史点, 1 = 最新点
-      // 在 6M 时间框架下，ramp 应该准确对应 3月起点 33% → 8月终点 100%（每月 +1 单位 = 线性）
-      // 其他时间框架：更小的动态 range 避免 1D 也 0.3→1 的假陡峭
-      let ramp: number;
-      if (timeframe === "6M") {
-        // 26 点：3月 4 批（起点 4/24=0.167） → 每月 +4/24 线性到 8月 24/24=1.0
-        ramp = 4 / 24 + progress * (20 / 24); // 0.167 → 1.0
-      } else if (timeframe === "1Y") {
-        ramp = 0.12 + progress * 0.88;
-      } else if (timeframe === "3M") {
-        // 3 个月 13 点：约 6月 40% → 8月 100%
-        ramp = 0.45 + progress * 0.55;
-      } else if (timeframe === "1M") {
-        ramp = 0.82 + progress * 0.18;
-      } else if (timeframe === "1W") {
-        ramp = 0.93 + progress * 0.07;
-      } else {
-        // 1D：日内，ramp 很窄
-        ramp = 0.98 + progress * 0.02;
-      }
-      arr.push(ramp);
-    }
-    // 保证最后一个点 = 1.0（归一化锚点）
-    if (arr.length) arr[arr.length - 1] = 1.0;
-    return arr;
-  })();
-
-  const walk: { t: number; total: number; institution: number; client: number }[] = [];
-  let tR = 0,
-    iR = 0,
-    cR = 0;
-  for (let i = 0; i < N; i++) {
-    const drift = ((i + 1) / N) * vol * 0.6;
-    const shock = (rnd() - 0.5) * 2 * vol;
-    const shockI = (rnd() - 0.5) * 2 * vol * 1.15;
-    const shockC = (rnd() - 0.5) * 2 * vol * 0.85;
-    tR = drift + shock;
-    iR = drift * 1.1 + shockI;
-    cR = drift * 0.8 + shockC;
-    walk.push({
-      t: tR,
-      total: -tR,
-      institution: -iR,
-      client: -cR,
-    });
-  }
-  /* 最新点必须等于 current value；同时乘以 ramp 对应每月 AUM 增加 */
-  const last = walk[walk.length - 1];
-  const scaleT = 1 + (last.total ?? 0);
-  const scaleI = 1 + (last.institution ?? 0);
-  const scaleC = 1 + (last.client ?? 0);
-  return walk.map((w, i) => {
-    const ramp = rampPoints[i] ?? 1;
-    const total = totalBase * (1 + w.total) / scaleT * ramp;
-    const institution = institutionBase * (1 + w.institution) / scaleI * ramp;
-    const client = clientBase * (1 + w.client) / scaleC * ramp;
-    const ft = formatTick(timeframe, i, N);
-    return {
-      label: ft.tick,
-      tooltipLabel: ft.tooltip,
-      total: Math.max(0, total),
-      institution: Math.max(0, institution),
-      client: Math.max(0, client),
-    };
-  });
-}
-
-/* -------- 合成收益率历史（与 synthesizeHistory 对应：最新点 = 当前百分比锚定） -------- */
-function synthesizeYieldHistory(
-  totalPnLPercent: number,
-  institutionPnLPercent: number,
-  allClientsPnLPercent: number,
-  timeframe: Timeframe,
-  seed: number
-): YieldDataPoint[] {
-  const N = TIMEFRAME_POINTS[timeframe];
-  if (
-    Math.abs(totalPnLPercent) < 1e-9 &&
-    Math.abs(institutionPnLPercent) < 1e-9 &&
-    Math.abs(allClientsPnLPercent) < 1e-9
-  ) {
-    return Array.from({ length: N }, (_, i) => {
-      const ft = formatTick(timeframe, i, N);
-      return {
-        label: ft.tick,
-        tooltipLabel: ft.tooltip,
-        total: 0,
-        institution: 0,
-        client: 0,
-      };
-    });
-  }
-  const rnd = mulberry32(seed + TIMEFRAME_POINTS[timeframe] * 11);
-  const vol =
-    timeframe === "1D"
-      ? 1.2
-      : timeframe === "1W"
-      ? 2.5
-      : timeframe === "1M"
-      ? 5
-      : timeframe === "3M"
-      ? 10
-      : timeframe === "6M"
-      ? 16
-      : 28;
-  const walk: { t: number; i: number; c: number }[] = [];
-  for (let idx = 0; idx < N; idx++) {
-    const k = (idx + 1) / N;
-    walk.push({
-      t: totalPnLPercent * k + (rnd() - 0.5) * vol,
-      i: institutionPnLPercent * k + (rnd() - 0.5) * vol * 1.2,
-      c: allClientsPnLPercent * k + (rnd() - 0.5) * vol * 0.85,
-    });
-  }
-  const last = walk[walk.length - 1];
-  const adjT = totalPnLPercent - last.t;
-  const adjI = institutionPnLPercent - last.i;
-  const adjC = allClientsPnLPercent - last.c;
-  return walk.map((w, i) => {
-    const k = (i + 1) / N;
-    const t = w.t + adjT * k;
-    const inst = w.i + adjI * k;
-    const cl = w.c + adjC * k;
-    const ft = formatTick(timeframe, i, N);
-    return {
-      label: ft.tick,
-      tooltipLabel: ft.tooltip,
-      total: +t.toFixed(2),
-      institution: +inst.toFixed(2),
-      client: +cl.toFixed(2),
-    };
-  });
-}
 
 /* -------- CHART_COLORS + module-level formatters（引用稳定，避免 Recharts 每帧 new function） -------- */
 const CHART_COLORS = {
@@ -380,6 +144,7 @@ function ValueChart({
       timeframe={timeframe}
       onTimeframeChange={onTimeframeChange}
     >
+      {data.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">当前时段暂无真实历史数据</p>}
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
           <defs>
@@ -538,6 +303,7 @@ function YieldChart({
       timeframe={timeframe}
       onTimeframeChange={onTimeframeChange}
     >
+      {data.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">当前时段暂无真实历史数据</p>}
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
           <defs>
@@ -876,7 +642,7 @@ export function DashboardCharts({
       cancelled = true;
       controller.abort();
     };
-  }, []);
+  }, [summary.totalBatches]);
 
   useEffect(() => {
     if (summary.totalBatches <= 0) return;
@@ -909,68 +675,15 @@ export function DashboardCharts({
     });
   }, [snapshotPayload, summary.totalBatches]);
 
-  /* 稳定 seed：派生自 summary 数值 hash（价格/仓位真正变动时才变） */
-  const stableSeed = useMemo(() => {
-    const raw = [
-      summary.currentMarketValueTotal.toFixed(2),
-      summary.institutionPnL.toFixed(2),
-      summary.allClientsPnL.toFixed(2),
-      summary.totalSubordinate.toFixed(2),
-      summary.totalPriority.toFixed(2),
-      summary.totalMarginCalls?.toFixed(2) ?? "0",
-    ].join("|");
-    let h = 2166136261;
-    for (let i = 0; i < raw.length; i++) {
-      h ^= raw.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return (h >>> 0) || 42;
-  }, [
-    summary.currentMarketValueTotal,
-    summary.institutionPnL,
-    summary.allClientsPnL,
-    summary.totalSubordinate,
-    summary.totalPriority,
-    summary.totalMarginCalls,
-  ]);
-
-  /* ================ 性能核心：6 Timeframe 全量数据一次性预计算缓存 ================ * 之前：切 Tab → setState → useMemo 重新跑合成（mulberry32 N 次循环）→ 卡顿 * 现在：summary/seed 变动时，1 次 useMemo 同时跑 1D/1W/1M/3M/6M/1Y × 2 图 = 12 条 * 总点数 ≈ (24+7+30+13+26+52)*2 = 304 点，成本可忽略；Tab 切换只是读取 Record 索引 = O(1) 无计算 * 同时共享 timeframe：资产图点 1M → 收益率图同步到 1M，UX 更自然 */
   const { valueDataByTimeframe, yieldDataByTimeframe } = useMemo(() => {
     const v = {} as Record<Timeframe, ValueDataPoint[]>;
     const y = {} as Record<Timeframe, YieldDataPoint[]>;
-    const keys: Timeframe[] = ["1D", "1W", "1M", "3M", "6M", "1Y"];
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      const fallbackValue = synthesizeHistory(
-        summary.currentMarketValueTotal,
-        institutionValue,
-        clientValue,
-        k,
-        stableSeed
-      );
-      const fallbackYield = synthesizeYieldHistory(
-        summary.totalPnLPercent,
-        summary.institutionPnLPercent,
-        summary.allClientsPnLPercent,
-        k,
-        stableSeed
-      );
-      const snapshotValue = snapshotSeries?.[k]?.valuePoints ?? [];
-      const snapshotYield = snapshotSeries?.[k]?.yieldPoints ?? [];
-      v[k] = hasEnoughSnapshotPoints(k, snapshotValue.length) ? snapshotValue : fallbackValue;
-      y[k] = hasEnoughSnapshotPoints(k, snapshotYield.length) ? snapshotYield : fallbackYield;
+    for (const k of ["1D", "1W", "1M", "3M", "6M", "1Y"] as Timeframe[]) {
+      v[k] = snapshotSeries?.[k]?.valuePoints ?? [];
+      y[k] = snapshotSeries?.[k]?.yieldPoints ?? [];
     }
     return { valueDataByTimeframe: v, yieldDataByTimeframe: y };
-  }, [
-    summary.currentMarketValueTotal,
-    summary.totalPnLPercent,
-    summary.institutionPnLPercent,
-    summary.allClientsPnLPercent,
-    institutionValue,
-    clientValue,
-    stableSeed,
-    snapshotSeries,
-  ]);
+  }, [snapshotSeries]);
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

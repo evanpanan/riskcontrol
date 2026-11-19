@@ -276,6 +276,15 @@ export async function PUT(req: Request) {
         blockedFields = merged.blocked ?? [];
       }
 
+      if (kind === 'ledger' && existing && session.role !== 'ADMIN') {
+        const oldBatch = (existing.payload as any)?.batch;
+        const nextBatch = (nextPayload as any)?.batch;
+        const pending = oldBatch?.finance?.rounds?.some((r: any) => ['PENDING', 'OVERDUE'].includes(r.status) && r.requiredAmount - r.fulfilledAmount > 0.005);
+        const ids = new Set((oldBatch?.clients ?? []).map((c: any) => c.id));
+        if (pending && (nextBatch?.clients ?? []).some((c: any) => !ids.has(c.id))) {
+          return { ok: false as const, forbidden: '有待处理补仓的批次仅管理员可补录历史客户' };
+        }
+      }
       if (kind === 'ledger' && existing) {
         const violation = validateSpecialExitWrite(existing.payload, nextPayload, session.role);
         if (violation) return { ok: false as const, forbidden: violation };

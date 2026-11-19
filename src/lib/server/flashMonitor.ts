@@ -1,3 +1,4 @@
+import { getNYSEInfo } from "@/lib/liveQuote";
 /**
  * 服务端闪跌监控。
  *
@@ -169,6 +170,10 @@ export async function runFlashMonitorCycle(opts: MonitorCycleOptions = {}): Prom
   };
 
   result.notificationRetries = await retryPendingNotifications(env);
+  if (getNYSEInfo(now.getTime()).marketState === 'CLOSED') {
+    result.notes.push('休市期间不采集跳动行情，保留最近交易日收盘价');
+    return result;
+  }
   const [batches, thresholds, recipients] = await Promise.all([
     loadMonitoredBatches(),
     loadFlashCrashThresholds(),

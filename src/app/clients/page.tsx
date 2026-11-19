@@ -515,7 +515,7 @@ export default function ClientsPage() {
       settledAt: null,
     };
     try {
-      commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+      commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient, { allowHistoricalImport: role === APP_ROLES.ADMIN }));
     } catch (err) {
       if (err instanceof Error && err.name === "RevisionMismatchError") {
         toast.error(err.message);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchRealtimeWithFallback } from "@/lib/quote/providers";
+import { fetchSessionQuote } from "@/lib/server/sessionQuote";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -11,7 +11,7 @@ export async function GET(req: Request) {
     if (!symbol) {
       return NextResponse.json({ error: "symbol required" }, { status: 400 });
     }
-    const data = await fetchRealtimeWithFallback(symbol);
+    const data = await fetchSessionQuote(symbol);
     return NextResponse.json(data, {
       headers: {
         "Cache-Control": "public, s-maxage=3, stale-while-revalidate=10",

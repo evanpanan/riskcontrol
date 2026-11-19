@@ -4,6 +4,7 @@ export type BatchDailySummary = {
   date: string; price: number; shares: number; cash: number; marketValue: number;
   totalPnL: number; yieldPct: number; institutionPnL: number; clientPnL: number;
   institutionYieldPct?: number; clientYieldPct?: number;
+  originalCapital?: number; originalPriority?: number;
   requiredMargin: number; cumulativeTopup: number; topupAmount: number; topups: DailyTopup[];
   activeClients: number; status: string; riskLevel: string;
 };
@@ -31,6 +32,8 @@ export function summarizeDailyBatch(batch: BatchLike, date: string, close: numbe
   const trades = batch.finance?.trades ?? [];
   const topups: DailyTopup[] = trades.filter(t => marketDate(new Date(t.createdAt)) === date).map(t => ({ amount: t.amount, type: t.collateralType ?? (t.entryPrice ? 'stock' : 'unknown'), shares: t.shares, price: t.entryPrice, at: t.createdAt }));
   return {
+    originalCapital: batch.finance?.originalCapital ?? batch.initialTotalAmount,
+    originalPriority: batch.finance?.originalPriority ?? batch.priorityAmount,
     date, price: close, shares: batch.totalShares + rescue.totalRescueShares,
     cash: trades.filter(t => t.collateralType === 'cash').reduce((sum, t) => sum + t.amount * t.remainingFraction, 0),
     marketValue: metrics.currentMarketValue, totalPnL: split.institutionTotalPnL + split.clientTotalPnL, yieldPct: (batch.finance?.originalCapital ?? batch.initialTotalAmount) > 0 ? (split.institutionTotalPnL + split.clientTotalPnL) / (batch.finance?.originalCapital ?? batch.initialTotalAmount) * 100 : 0,

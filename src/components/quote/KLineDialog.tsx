@@ -100,21 +100,8 @@ export function KLineDialog({ open, symbol, onOpenChange, anchorPrice }: KLineDi
 
   const candles = useMemo(() => {
     if (!rawCandles || rawCandles.length === 0) return null;
-    const sortedCandles = [...rawCandles].sort((a, b) => a.time - b.time);
-    const anchorClose = Number(anchorPrice || 0) > 0 ? Number(anchorPrice) : null;
-    if (!anchorClose) return sortedCandles;
-    const out = [...sortedCandles];
-    const last = out[out.length - 1];
-    const fixedClose = Number(anchorClose.toFixed(2));
-    out[out.length - 1] = {
-      ...last,
-      open: Number(last.open.toFixed(2)),
-      high: Number(Math.max(last.high, fixedClose).toFixed(2)),
-      low: Number(Math.min(last.low, fixedClose).toFixed(2)),
-      close: fixedClose,
-    };
-    return out;
-  }, [rawCandles, anchorPrice]);
+    return [...rawCandles].sort((a, b) => a.time - b.time);
+  }, [rawCandles]);
 
   candlesRef.current = candles;
 

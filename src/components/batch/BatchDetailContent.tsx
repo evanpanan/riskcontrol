@@ -1,4 +1,7 @@
 "use client";
+import { useExecutionPrice } from "@/hooks/useExecutionPrice";
+import { topupReceipts } from "@/lib/topupReceipts";
+import { TopupReceiptsTable } from "@/components/batch/TopupReceiptsTable";
 import { defaultTopupDate } from "@/lib/topupDate";
 
 import Link from "next/link";
@@ -599,11 +602,12 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
     try { toast.success(await notifyBatchChannel(batch as any, channel)); }
     catch (err) { toast.error(err instanceof Error ? err.message : "通知失败"); }
   };
-  const topupPrice = batch.currentStockPrice || batch.stockPriceAtStart;
+  const execution = useExecutionPrice(batch.stockSymbol ?? "", topupDate, fulfillOpen, batch.currentStockPrice || batch.stockPriceAtStart);
+  const topupPrice = execution.price;
   const topupAmount = topupInput === ""
     ? marginSummary.totalPending
     : Number(topupInput) * (topupCollateralType === "stock" ? topupPrice : 1);
-  const topupShares = topupAmount / topupPrice;
+  const topupShares = topupPrice > 0 ? topupAmount / topupPrice : 0;
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("topup") === "1" &&
         (user?.role === APP_ROLES.ADMIN || user?.role === APP_ROLES.RISK_MANAGER)) {
@@ -612,12 +616,14 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
   }, [user?.role]);
 
   const doFulfill = () => {
+    if (!Number.isFinite(topupPrice) || topupPrice <= 0) throw new Error("请填写有效成交价");
     if (!Number.isFinite(topupAmount) || topupAmount <= 0) throw new Error("请输入有效补仓股数或金额");
     const canonical = getMockData().batches.find((b) => b.id === batch.id);
     if (!canonical) throw new Error("批次不存在，请刷新。");
     const applied = commitBatchFinance<number>(canonical, (draft) => executeInstitutionTopup(draft, {
-      amount: topupAmount, allowExcess: true, expectedPrice: topupPrice, expectedRoundId: marginSummary.roundId,
+      amount: topupAmount, allowExcess: true, executionPrice: topupPrice, expectedRoundId: marginSummary.roundId,
       operatorName: user?.displayName ?? user?.email,
+      stockShares: topupCollateralType === "stock" ? topupShares : undefined,
       collateralType: topupCollateralType,
       topupDate,
     }));
@@ -919,7 +925,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             <p className={cn("text-sm font-bold font-mono", batch.cumulativeMarginCalls > 0 ? "text-warning" : "")}>
               {formatCurrency(batch.cumulativeMarginCalls || 0)}
             </p>
-            <p className="text-[10px] text-muted-foreground">{batch.marginCalls?.length || 0} 次记录</p>
+            <p className="text-[10px] text-muted-foreground">{topupReceipts(batch.finance?.trades ?? []).length} 次到账</p>
           </CardContent>
         </Card>
 
@@ -1576,7 +1582,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <History className="h-4 w-4 text-warning" />
               WIN100 补仓记录
               <Badge variant="secondary" className="text-[10px] ml-1">
-                {batch.marginCalls?.length || 0} 条
+                {batch.marginCalls?.length || 0} 轮 · {topupReceipts(batch.finance?.trades ?? []).length} 次到账
               </Badge>
             </DialogTitle>
             <DialogDescription>
@@ -1588,23 +1594,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             {((batch as import("@/lib/riskEngine").BatchLike).finance?.legacyWarnings ?? []).map((warning) => (
               <p key={warning} role="alert" className="text-xs text-warning">{warning}</p>
             ))}
-            <div className="max-h-48 overflow-auto rounded-lg border border-border/50">
-              <table className="w-full text-xs tabular-nums">
-                <thead className="sticky top-0 bg-card text-muted-foreground">
-                  <tr><th className="p-2 text-left">WIN100 成交时间</th><th>出资金额</th><th>成交价</th><th>买入份额</th></tr>
-                </thead>
-                <tbody>
-                  {((batch as import("@/lib/riskEngine").BatchLike).finance?.trades ?? []).map((trade) => (
-                    <tr key={trade.id} className="border-t border-border/40">
-                      <td className="p-2">{formatDateTime(new Date(trade.createdAt))}</td>
-                      <td className="text-right p-2">{formatCurrency(trade.amount)}</td>
-                      <td className="text-right p-2">{trade.entryPrice ? formatCurrency(trade.entryPrice) : "待核对"}</td>
-                      <td className="text-right p-2">{trade.entryPrice ? trade.shares.toFixed(4) : "待核对"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <TopupReceiptsTable trades={(batch as import("@/lib/riskEngine").BatchLike).finance?.trades ?? []} />
             {!batch.marginCalls?.length ? (
               <div className="text-center py-12 text-muted-foreground border rounded-xl border-dashed border-border/60">
                 <History className="h-10 w-10 mx-auto mb-2 opacity-30" />
@@ -1737,7 +1727,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
 
       {/* 确认补仓 AlertDialog */}
       <Dialog open={fulfillOpen} onOpenChange={setFulfillOpen}>
-        <DialogContent className="sm:max-w-[460px] !p-0 overflow-hidden border-danger/30">
+        <DialogContent className="sm:max-w-[460px] max-h-[calc(100dvh-2rem)] !p-0 overflow-y-auto border-danger/30">
           <div className="bg-gradient-to-r from-danger/20 via-danger/10 to-transparent border-b border-border/60 px-6 py-4">
             <DialogHeader className="text-left sm:text-left">
               <DialogTitle className="flex items-center gap-2">
@@ -1811,15 +1801,20 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
               <Input type="date" value={topupDate} onChange={(event) => setTopupDate(event.target.value)} />
             </label>
             <label className="block space-y-2 text-sm">
+              <span className="block text-xs">成交价（USD / 股，可修改）</span>
+              <Input aria-label="补仓成交价" type="number" min="0" step="any" value={execution.value} onChange={event => execution.setValue(event.target.value)} />
+              <span className="block text-xs text-muted-foreground">{execution.note}</span>
+            </label>
+            <label className="block space-y-2 text-sm">
               <span>{topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"}</span>
               <Input type="number" min="0" step={topupCollateralType === "stock" ? "0.000001" : "0.01"}
-                value={topupInput} placeholder={String(topupCollateralType === "stock" ? marginSummary.totalPending / topupPrice : marginSummary.totalPending)}
+                value={topupInput} placeholder={(topupPrice > 0 ? String(topupCollateralType === "stock" ? marginSummary.totalPending / topupPrice : marginSummary.totalPending) : "请先填写成交价")}
                 onChange={(event) => setTopupInput(event.target.value)} />
             </label>
             {topupAmount > marginSummary.totalPending + 0.005 && (
               <p className="text-sm text-warning">本次超额补仓 {formatCurrency(topupAmount - marginSummary.totalPending)}，全部计入 WIN100 补仓本金。</p>
             )}
-            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${Number(batch.currentStockPrice || batch.stockPriceAtStart).toFixed(4)}/股</p>
+            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${topupPrice.toFixed(4)}/股</p>
             <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
               <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
               <div className="space-y-0.5">
@@ -1836,7 +1831,7 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
             </Button>
             <Button type="button" variant="danger" onClick={() => {
               try { doFulfill(); } catch (err) { toast.error(err instanceof Error ? err.message : "补仓失败"); }
-            }} className="h-9 px-4 gap-1.5">
+            }} disabled={!(topupPrice > 0) || !(topupAmount > 0)} className="h-9 px-4 gap-1.5">
               <Zap className="h-3.5 w-3.5" />
               {topupCollateralType === "stock" ? `确认补入 ${topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 $${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             </Button>

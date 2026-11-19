@@ -23,7 +23,7 @@ const PERIOD_CACHE_TTL_MS: Record<HistoryPeriod, number> = {
 };
 
 function getIntervalKey(period: HistoryPeriod): string {
-  return HISTORY_PERIOD_CONFIG[period].interval;
+  return `${HISTORY_PERIOD_CONFIG[period].interval}-actual-v2`;
 }
 
 function getCacheWindowStart(period: HistoryPeriod): Date {
@@ -57,6 +57,7 @@ async function readHistoryCache(symbol: string, period: HistoryPeriod) {
     where: {
       symbol,
       interval,
+      provider: { not: "SYNTHETIC_INTRADAY" },
       candleTime: { gte: getCacheWindowStart(period) },
     },
     orderBy: { candleTime: "asc" },

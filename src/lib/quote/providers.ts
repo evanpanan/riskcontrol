@@ -555,109 +555,6 @@ export function mergeCandlesByTime(groups: HistoryCandle[][]): HistoryCandle[] {
   return arr;
 }
 
-export function synthesizeIntradayCandles(
-  period: HistoryPeriod,
-  dailyFallback: HistoryCandle[],
-  referencePrice?: number,
-): HistoryCandle[] {
-  const cfg = HISTORY_PERIOD_CONFIG[period];
-  if (!cfg.isIntraday) return [];
-  let stepMs = 5 * 60 * 1000;
-  if (period === "15M") stepMs = 15 * 60 * 1000;
-  else if (period === "1H") stepMs = 60 * 60 * 1000;
-  else if (period === "4H") stepMs = 4 * 60 * 60 * 1000;
-  const days = cfg.calendarDays;
-  const todayEnd = new Date();
-  todayEnd.setSeconds(0, 0);
-  const endMs = todayEnd.getTime();
-  const startMs = endMs - days * 86400_000;
-  const useDaily = dailyFallback && dailyFallback.length > 0 ? [...dailyFallback].sort((a, b) => a.time - b.time) : [];
-  const lastDaily = useDaily[useDaily.length - 1];
-  const baseClose = lastDaily?.close ?? referencePrice ?? 41.88;
-  const baseOpen = lastDaily?.open ?? baseClose * 0.998;
-  const baseHigh = lastDaily?.high ?? baseClose * 1.005;
-  const baseLow = lastDaily?.low ?? baseClose * 0.995;
-  const totalVol = useDaily.reduce((s, d) => s + (d.volume || 0), 0) || 2_000_000;
-  const nyTz = -4 * 60;
-  function isTradingHour(ms: number): boolean {
-    const d = new Date(ms + nyTz * 60_000);
-    const wd = d.getUTCDay();
-    if (wd === 0 || wd === 6) return false;
-    const h = d.getUTCHours();
-    const m = d.getUTCMinutes();
-    const mins = h * 60 + m;
-    return mins >= 9 * 60 + 30 && mins <= 16 * 60;
-  }
-  function tradingStart(dayStartMs: number): number {
-    const d = new Date(dayStartMs + nyTz * 60_000);
-    d.setUTCHours(9, 30, 0, 0);
-    return d.getTime() - nyTz * 60_000;
-  }
-  const slots: number[] = [];
-  const day0 = new Date(startMs);
-  day0.setHours(0, 0, 0, 0);
-  const startDay = day0.getTime();
-  for (let t = startDay; t <= endMs; t += 86400_000) {
-    const s = tradingStart(t);
-    for (let slot = s; isTradingHour(slot); slot += stepMs) {
-      slots.push(slot);
-    }
-  }
-  if (slots.length === 0) return [];
-  const cfgMin = cfg.minExpected;
-  if (slots.length < cfgMin) {
-    const base = slots.length > 0 ? slots[slots.length - 1] : endMs;
-    for (let i = slots.length; i < cfgMin; i++) {
-      slots.push(base + stepMs * (i - slots.length + 1));
-    }
-  }
-  const out: HistoryCandle[] = [];
-  let price = baseOpen;
-  const vol = 0.002 + (baseHigh - baseLow) / Math.max(1e-6, baseClose);
-  const amp = 0.8 + vol * 0.9;
-  const perVol = Math.max(5000, Math.round(totalVol / Math.max(1, slots.length)));
-  let seed = 1337 + stepMs;
-  function rnd(): number {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  }
-  for (let i = 0; i < slots.length; i++) {
-    const t = slots[i];
-    const driftBase = useDaily.length > 0
-      ? Math.sin(i / Math.max(3, slots.length / useDaily.length)) * 0.3
-      : (rnd() - 0.5);
-    const o = price;
-    const nextClose = o * (1 + (rnd() - 0.5) * amp * 0.008 + driftBase * 0.0015);
-    const h = Math.max(o, nextClose) * (1 + rnd() * amp * 0.004);
-    const l = Math.min(o, nextClose) * (1 - rnd() * amp * 0.004);
-    const c = nextClose;
-    price = c;
-    out.push({
-      time: t,
-      open: Number(o.toFixed(2)),
-      high: Number(h.toFixed(2)),
-      low: Number(l.toFixed(2)),
-      close: Number(c.toFixed(2)),
-      volume: Math.max(100, Math.round(perVol * (0.4 + rnd() * 1.2))),
-    });
-  }
-  if (out.length > 0) {
-    const lc = out[out.length - 1];
-    const f = baseClose / lc.close;
-    if (Number.isFinite(f) && f > 0.5 && f < 1.5) {
-      out[out.length - 1] = {
-        ...lc,
-        open: Number((lc.open * f).toFixed(2)),
-        high: Number((lc.high * f).toFixed(2)),
-        low: Number((lc.low * f).toFixed(2)),
-        close: Number(baseClose.toFixed(2)),
-        volume: lc.volume,
-      };
-    }
-  }
-  return out;
-}
-
 const SYNTHETIC_PROVIDER = "SYNTHETIC_INTRADAY" as const;
 export type HistoryResultProvider = QuoteProvider | typeof SYNTHETIC_PROVIDER;
 
@@ -665,124 +562,22 @@ export async function fetchHistoryWithFallback(
   symbol: string,
   period: HistoryPeriod,
 ): Promise<{ provider: HistoryResultProvider; candles: HistoryCandle[]; fallbackNote?: string }> {
-  if (!symbol || !symbol.trim()) throw new Error("empty symbol");
+  if (!symbol?.trim()) throw new Error("empty symbol");
   const s = symbol.trim().toUpperCase();
   const cfg = HISTORY_PERIOD_CONFIG[period];
-  const minThreshold = Math.max(1, Math.floor(cfg.minExpected * 0.8));
   const chain: Array<[QuoteProvider, (s: string, p: HistoryPeriod) => Promise<HistoryCandle[]>]> = [];
   if (getFinnhubKey()) chain.push(["FINNHUB", finnhubHistory]);
-  chain.push(["YAHOO_FINANCE", yahooFinanceHistory], ["NASDAQ_UNOFFICIAL", nasdaqHistory], ["STOOQ", stooqHistory]);
-
-  const anchorPeriod: HistoryPeriod = cfg.calendarDays <= 5 ? "5D" : cfg.calendarDays <= 90 ? "1M" : "3M";
-  let dailyAnchor: HistoryCandle | null = null;
-  try {
-    const tryNasdaqAnchor = await timeout(
-      nasdaqHistory(s, anchorPeriod).catch(() => [] as HistoryCandle[]),
-      3000,
-    );
-    if (tryNasdaqAnchor && tryNasdaqAnchor.length > 0) {
-      dailyAnchor = tryNasdaqAnchor[tryNasdaqAnchor.length - 1];
-    }
-  } catch { /* ignore */ }
-  const anchorClose = dailyAnchor?.close ?? null;
-  const anchorHigh = dailyAnchor?.high ?? null;
-  const anchorLow = dailyAnchor?.low ?? null;
-
-  const collected: Array<{ name: QuoteProvider; candles: HistoryCandle[] }> = [];
-  const errors: string[] = [];
-
-  for (const [name, fn] of chain) {
+  chain.push(["YAHOO_FINANCE", yahooFinanceHistory]);
+  if (!cfg.isIntraday) chain.push(["NASDAQ_UNOFFICIAL", nasdaqHistory]);
+  chain.push(["STOOQ", stooqHistory]);
+  let best: { provider: QuoteProvider; candles: HistoryCandle[] } | null = null;
+  for (const [provider, load] of chain) {
     try {
-      const t0 = Date.now();
-      const raw = await fn(s, period);
-      const sorted = raw && raw.length > 0 ? [...raw].sort((a, b) => a.time - b.time) : [];
-      const dt = Date.now() - t0;
-      if (sorted.length >= minThreshold) {
-        const normalized = forceNormalizeLastCandle(sorted, { close: anchorClose, high: anchorHigh, low: anchorLow });
-        const fbErrors = errors.length > 0 ? `快速源成功: ${name} (${dt}ms, n=${sorted.length}); 前置失败: ${errors.join("; ")}` : undefined;
-        return { provider: name, candles: normalized, fallbackNote: fbErrors };
-      }
-      if (sorted.length > 0) collected.push({ name, candles: sorted });
-    } catch (e: any) {
-      errors.push(`${name}: ${e?.message || String(e || "failed")}`);
-    }
+      const candles = (await load(s, period)).filter(c => Number.isFinite(c.time) && Number.isFinite(c.close) && c.close > 0).sort((a, b) => a.time - b.time);
+      if (candles.length >= Math.max(1, Math.floor(cfg.minExpected * 0.8))) return { provider, candles };
+      if (candles.length > (best?.candles.length ?? 0)) best = { provider, candles };
+    } catch { /* Try the next actual source. */ }
   }
-
-  const mergedAll = forceNormalizeLastCandle(
-    mergeCandlesByTime(collected.map((x) => x.candles)),
-    { close: anchorClose, high: anchorHigh, low: anchorLow },
-  );
-  const firstProvider = collected[0]?.name;
-  if (!cfg.isIntraday && mergedAll.length >= Math.max(1, Math.floor(cfg.minExpected * 0.6)) && firstProvider) {
-    return { provider: firstProvider, candles: mergedAll, fallbackNote: errors.length > 0 ? `合并补齐源: ${errors.join("; ")}` : undefined };
-  }
-  if (cfg.isIntraday && mergedAll.length >= cfg.minExpected && firstProvider) {
-    return { provider: firstProvider, candles: mergedAll, fallbackNote: errors.length > 0 ? `合并补齐源: ${errors.join("; ")}` : undefined };
-  }
-
-  let dailySupport: HistoryCandle[] = [];
-  try {
-    const supportPeriod: HistoryPeriod = cfg.calendarDays <= 5 ? "5D" : cfg.calendarDays <= 30 ? "1M" : cfg.calendarDays <= 120 ? "3M" : "1Y";
-    const supportChain: Array<[string, (s: string, p: HistoryPeriod) => Promise<HistoryCandle[]>]> = [];
-    if (getFinnhubKey()) supportChain.push(["FINNHUB", finnhubHistory]);
-    supportChain.push(["YAHOO_FINANCE", yahooFinanceHistory], ["NASDAQ_UNOFFICIAL", nasdaqHistory], ["STOOQ", stooqHistory]);
-    const collectedSupport: HistoryCandle[][] = [];
-    for (const [_nm, fn] of supportChain) {
-      try {
-        const r = await timeout(
-          fn(s, supportPeriod).catch(() => [] as HistoryCandle[]),
-          3000,
-        );
-        if (r?.length) {
-          collectedSupport.push(r);
-          if (r.length >= Math.max(10, Math.floor(cfg.minExpected * 0.5))) break;
-        }
-      } catch { /* ignore */ }
-    }
-    dailySupport = forceNormalizeLastCandle(mergeCandlesByTime(collectedSupport), { close: anchorClose, high: anchorHigh, low: anchorLow });
-    if (dailySupport.length > 0 && !anchorClose) {
-      dailyAnchor = dailySupport[dailySupport.length - 1];
-    }
-  } catch { /* ignore */ }
-
-  if (cfg.isIntraday) {
-    const dailyBase = dailySupport.length > 0 ? dailySupport : mergedAll;
-    const syn0 = synthesizeIntradayCandles(period, dailyBase);
-    const syn = forceNormalizeLastCandle(syn0, { close: anchorClose ?? dailyAnchor?.close ?? null, high: anchorHigh ?? dailyAnchor?.high ?? null, low: anchorLow ?? dailyAnchor?.low ?? null });
-    if (syn.length >= Math.max(1, Math.ceil(cfg.minExpected * 0.5))) {
-      return {
-        provider: "SYNTHETIC_INTRADAY",
-        candles: syn,
-        fallbackNote: errors.length ? `合成基准: ${dailyBase.length} 根日线; 源错误: ${errors.join("; ")}` : undefined,
-      };
-    }
-  }
-
-  if (mergedAll.length > 0 && firstProvider) {
-    return { provider: firstProvider, candles: forceNormalizeLastCandle(mergedAll, { close: anchorClose, high: anchorHigh, low: anchorLow }), fallbackNote: errors.join("; ") || undefined };
-  }
-  if (dailySupport.length > 0) {
-    return { provider: firstProvider ?? "YAHOO_FINANCE", candles: forceNormalizeLastCandle(dailySupport, { close: anchorClose, high: anchorHigh, low: anchorLow }), fallbackNote: `宽周期回退 (${errors.join("; ")})` };
-  }
-
-  let refQuote: RealtimeQuote | null = null;
-  try { refQuote = await timeout(fetchRealtimeWithFallback(s).catch(() => null), 3500) ?? null; } catch { /* ignore */ }
-  if (refQuote) {
-    const t = refQuote.updatedAt || Date.now();
-    return {
-      provider: refQuote.provider,
-      candles: forceNormalizeLastCandle([{
-        time: t,
-        open: refQuote.open || refQuote.price,
-        high: refQuote.high || refQuote.price,
-        low: refQuote.low || refQuote.price,
-        close: refQuote.price,
-        volume: refQuote.volume || 0,
-      }], { close: anchorClose ?? refQuote.price, high: anchorHigh ?? refQuote.high ?? refQuote.price, low: anchorLow ?? refQuote.low ?? refQuote.price }),
-      fallbackNote: `K线全部源失败，退回实时行情单根参考: ${errors.join("; ")}`,
-    };
-  }
-
-  throw new Error(`所有行情源均失败: ${errors.length > 0 ? errors.join("; ") : "no response"}`);
+  if (best) return { ...best, fallbackNote: "仅展示行情源提供的真实数据，部分时段暂无记录" };
+  throw new Error("行情源暂无可用历史数据");
 }
-

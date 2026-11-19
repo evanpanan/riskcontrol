@@ -1,3 +1,9 @@
+import { backfillBatchHistory } from '@/lib/server/batchHistoryBackfill';
+import { aggregateDailyHistory } from '@/lib/dashboardHistory';
+import { replayBatchDay } from '@/lib/batchHistoryReplay';
+import { marketDate, type BatchDailySummary } from '@/lib/batchDaily';
+import type { BatchLike } from '@/lib/riskEngine';
+import { ledgerOwnsBd } from '@/lib/server/workspaceScope';
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { jsonNoStore, resolveSessionUser, unauthorized, forbidden } from "@/lib/server/apiAuth";
@@ -168,19 +174,43 @@ export async function GET() {
     },
   });
 
+  const ledgers = await prisma.workspaceRecord.findMany({ where: { kind: 'ledger' }, select: { key: true, payload: true } });
+  const visible = ledgers.filter(l => scope.scopeType !== 'bd' || ledgerOwnsBd(l.payload, scope.scopeKey));
+  const series = [];
+  let historyWarning: string | null = null;
+  // Reuse the same archived closes and replay as batch detail. No ledger writes.
+  for (const ledger of visible) {
+    const batch = (ledger.payload as any)?.batch as BatchLike | undefined;
+    if (!batch?.clients?.length) continue;
+    const stored = await prisma.batchDailySnapshot.findMany({ where: { batchId: ledger.key }, select: { tradingDate: true, summary: true } });
+    let calculated: BatchDailySummary[] = [];
+    try { calculated = await backfillBatchHistory(batch, new Set(stored.map(r => r.tradingDate))); }
+    catch { historyWarning = '部分历史收盘价暂不可用，仅展示完整留存日期'; }
+    const actual = stored.map(r => {
+      const summary = r.summary as unknown as BatchDailySummary;
+      const enriched = replayBatchDay(batch, r.tradingDate, summary.price);
+      return { ...enriched, ...summary } as BatchDailySummary;
+    });
+    const firstClient = batch.clients.map(c => marketDate(new Date(c.signDate))).sort()[0];
+    const start = [marketDate(new Date(batch.signDate)), firstClient].sort().at(-1)!;
+    series.push({ start, rows: [...calculated, ...actual] });
+  }
+  const dailyRows = aggregateDailyHistory(series);
+  // Intraday samples stay intraday. Longer views use daily close history exclusively.
   const timeframes: Record<DashboardTimeframe, { valuePoints: SnapshotPoint[]; yieldPoints: SnapshotPoint[] }> = {
     "1D": collapseRows(rows, "1D"),
-    "1W": collapseRows(rows, "1W"),
-    "1M": collapseRows(rows, "1M"),
-    "3M": collapseRows(rows, "3M"),
-    "6M": collapseRows(rows, "6M"),
-    "1Y": collapseRows(rows, "1Y"),
+    "1W": collapseRows(dailyRows, "1W"),
+    "1M": collapseRows(dailyRows, "1M"),
+    "3M": collapseRows(dailyRows, "3M"),
+    "6M": collapseRows(dailyRows, "6M"),
+    "1Y": collapseRows(dailyRows, "1Y"),
   };
 
   return jsonNoStore({
     ok: true,
     scope,
     timeframes,
+    warning: historyWarning,
     latestBucketAt: rows[rows.length - 1]?.bucketAt?.toISOString() ?? null,
   });
 }

@@ -181,7 +181,7 @@ export function AddClientDialog({
     } as any;
     if (batch && batch.clients) {
       try {
-        commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient));
+        commitBatchFinance(batch, (draft) => addClientPosition(draft, newClient, { allowHistoricalImport: role === "ADMIN" }));
       } catch (err) {
         if (err instanceof Error && err.name === "RevisionMismatchError") {
           toast.error(err.message);

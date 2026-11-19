@@ -1,4 +1,5 @@
 "use client";
+import { useExecutionPrice } from "@/hooks/useExecutionPrice";
 import { defaultTopupDate } from "@/lib/topupDate";
 
 import { toast } from "sonner";
@@ -194,6 +195,8 @@ export function ClientTable({
   const [marginDialogClientId, setMarginDialogClientId] = useState<string | null>(null);
   const [marginDate, setMarginDate] = useState(defaultTopupDate);
   const [marginInputValue, setMarginInputValue] = useState<string>("");
+  const marginExecution = useExecutionPrice(batch?.stockSymbol ?? "", marginDate, marginDialogOpen, batch?.currentStockPrice || batch?.stockPriceAtStart || 0);
+  const marginPrice = marginExecution.price;
   const [marginDialogTick, setMarginDialogTick] = useState(0);
   const [renderTick, setRenderTick] = useState(0);
   const mountedAtRef = useRef<number>(Date.now());
@@ -898,7 +901,7 @@ export function ClientTable({
               const ful = mm?.fulfilled ?? 0;
               const pending = Math.max(0, req - ful);
               const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
-              const safeAmount = Number.isFinite(parsed) && parsed > 0 ? parsed * (marginCollateralType === "stock" ? (batch?.currentStockPrice || batch?.stockPriceAtStart || 0) : 1) : 0;
+              const safeAmount = Number.isFinite(parsed) && parsed > 0 ? parsed * (marginCollateralType === "stock" ? marginPrice : 1) : 0;
               const applyAmount = Math.max(0, safeAmount);
               return [
                 { label: "客户投资本金", value: formatCurrency(mm?.initialInvestment ?? marginDialogClient.investmentAmount ?? 0), accent: "muted" as const },
@@ -906,8 +909,8 @@ export function ClientTable({
                 { label: "机构已补仓", value: formatCurrency(ful) + (mm?.history?.length ? ` · ${mm.history.length} 次` : ""), accent: "success" as const },
                 { label: "补仓日期", value: marginDate },
                 { label: "补仓形式", value: marginCollateralType === "stock" ? "股票（默认）" : "现金", accent: "primary" as const },
-                ...[{ label: "等值股票 / 计价", value: `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 / $${(batch?.currentStockPrice || batch?.stockPriceAtStart || 0).toFixed(4)}`, accent: "muted" as const }],
-                { label: "本次机构补仓", value: marginCollateralType === "stock" ? `${(applyAmount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股（${formatCurrency(applyAmount)}）` : formatCurrency(applyAmount), accent: "warning" as const },
+                ...[{ label: "等值股票 / 计价", value: `${(applyAmount / (marginPrice || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 / $${marginPrice.toFixed(4)}`, accent: "muted" as const }],
+                { label: "本次机构补仓", value: marginCollateralType === "stock" ? `${(applyAmount / (marginPrice || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股（${formatCurrency(applyAmount)}）` : formatCurrency(applyAmount), accent: "warning" as const },
                 { label: "超额补仓", value: formatCurrency(Math.max(0, applyAmount - pending)), accent: "warning" as const },
                 { label: "补仓后机构剩余缺口", value: formatCurrency(Math.max(0, pending - applyAmount)), accent: applyAmount >= pending ? "success" : "danger" as const },
                 { label: "归属 商务经理", value: marginDialogClient.bdManager ?? "—", accent: "primary" as const },
@@ -919,6 +922,11 @@ export function ClientTable({
               <label className="block space-y-1 text-xs">
                 <span>补仓日期</span>
                 <Input type="date" value={marginDate} onChange={(event) => setMarginDate(event.target.value)} />
+              </label>
+              <label className="block space-y-1 text-xs">
+                <span>成交价（USD / 股，可修改）</span>
+                <Input aria-label="补仓成交价" type="number" min="0" step="any" value={marginExecution.value} onChange={event => marginExecution.setValue(event.target.value)} />
+                <span className="block text-muted-foreground">{marginExecution.note}</span>
               </label>
               <div className="grid grid-cols-2 gap-2" role="group" aria-label="补仓形式">
                 {(["stock", "cash"] as const).map((type) => (
@@ -959,7 +967,7 @@ export function ClientTable({
                 onClick={() => {
                   const mm = perClientStateMap.get(marginDialogClient.id);
                   const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
-                  setMarginInputValue((marginCollateralType === "stock" ? pending / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1) : pending).toFixed(marginCollateralType === "stock" ? 6 : 2));
+                  setMarginInputValue((marginCollateralType === "stock" ? pending / (marginPrice || 1) : pending).toFixed(marginCollateralType === "stock" ? 6 : 2));
                 }}
               >
                 剩余全额
@@ -971,24 +979,26 @@ export function ClientTable({
             const mm = perClientStateMap.get(marginDialogClient.id);
             const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
             const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
-            const amount = Number.isFinite(parsed) && parsed > 0 ? parsed * (marginCollateralType === "stock" ? (batch?.currentStockPrice || batch?.stockPriceAtStart || 0) : 1) : 0;
-            return amount > 0 ? (marginCollateralType === "stock" ? `确认补入 ${(amount / (batch?.currentStockPrice || batch?.stockPriceAtStart || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 ${formatCurrency(amount)}`) : "确认机构补仓";
+            const amount = Number.isFinite(parsed) && parsed > 0 ? parsed * (marginCollateralType === "stock" ? marginPrice : 1) : 0;
+            return amount > 0 ? (marginCollateralType === "stock" ? `确认补入 ${(amount / (marginPrice || 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `确认补入现金 ${formatCurrency(amount)}`) : "确认机构补仓";
           })()}
           cancelText="取消"
+          confirmDisabled={!(marginPrice > 0)}
           onConfirm={async () => {
             const c = clients.find((x) => x.id === marginDialogClient.id);
             if (!c) return;
             const mm = perClientStateMap.get(c.id);
             const pending = Math.max(0, (mm?.required ?? 0) - (mm?.fulfilled ?? 0));
             const parsed = Number(marginInputValue.replace(/[^0-9.]/g, ""));
-            const amount = parsed * (marginCollateralType === "stock" ? (batch?.currentStockPrice || batch?.stockPriceAtStart || 0) : 1);
+            const amount = parsed * (marginCollateralType === "stock" ? marginPrice : 1);
+            if (!Number.isFinite(marginPrice) || marginPrice <= 0) throw new Error("请填写有效成交价");
             if (!batch || !Number.isFinite(parsed) || parsed <= 0 || amount < 0.01) {
               throw new Error("请输入有效补仓股数或金额。");
             }
             let applied: number;
             try {
               applied = commitBatchFinance(batch, (draft) => executeInstitutionTopup(draft, {
-                amount, allowExcess: true, expectedPrice: batch.currentStockPrice || batch.stockPriceAtStart, clientId: c.id, expectedRoundId: mm?.roundId, collateralType: marginCollateralType, topupDate: marginDate,
+                amount, allowExcess: true, executionPrice: marginPrice, stockShares: marginCollateralType === "stock" ? parsed : undefined, clientId: c.id, expectedRoundId: mm?.roundId, collateralType: marginCollateralType, topupDate: marginDate,
                 operatorName: viewerUser?.displayName ?? viewerUser?.email,
               }));
             } catch (err) {

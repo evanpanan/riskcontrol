@@ -47,6 +47,7 @@ export function getNYSEInfo(nowMs: number = Date.now()): {
   ymd: string;
   isTradingDay: boolean;
   inRegularSession: boolean;
+  regularCloseHour: number;
   inPreMarket: boolean;
   inAfterHours: boolean;
   marketState: "PRE" | "REGULAR" | "AFTER" | "CLOSED";
@@ -83,6 +84,7 @@ export function getNYSEInfo(nowMs: number = Date.now()): {
     ymd,
     isTradingDay,
     inRegularSession: inRegular,
+    regularCloseHour: regularClose / 60,
     inPreMarket: inPre,
     inAfterHours: inAfter,
     marketState: state,
