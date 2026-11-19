@@ -1725,110 +1725,88 @@ export function BatchDetailContent({ batch, compact = false, onBack, onChange }:
         </DialogContent>
       </Dialog>
 
-      {/* 确认补仓 AlertDialog */}
+      {/* 批次补仓：桌面横向填写与核对，移动端自然堆叠。 */}
       <Dialog open={fulfillOpen} onOpenChange={setFulfillOpen}>
-        <DialogContent className="sm:max-w-[460px] max-h-[calc(100dvh-2rem)] !p-0 overflow-y-auto border-danger/30">
-          <div className="bg-gradient-to-r from-danger/20 via-danger/10 to-transparent border-b border-border/60 px-6 py-4">
+        <DialogContent className="w-[calc(100%-2rem)] sm:max-w-[940px] max-h-[calc(100dvh-2rem)] !gap-0 !p-0 overflow-y-auto border-danger/30 rounded-xl">
+          <div className="bg-gradient-to-r from-danger/15 via-danger/5 to-transparent border-b border-border/60 px-6 py-4">
             <DialogHeader className="text-left sm:text-left">
-              <DialogTitle className="flex items-center gap-2">
-                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-danger/20 text-danger">
+              <DialogTitle className="flex items-center gap-2 text-base">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-danger/15 text-danger">
                   <AlertTriangle className="h-4 w-4" />
                 </span>
                 确认补仓操作
               </DialogTitle>
-              <DialogDescription className="text-left">
+              <DialogDescription className="text-left text-xs leading-relaxed pr-3">
                 按各客户本轮剩余缺口比例分配本次补仓，多补和少补均按比例分配。本金和收益全部归 WIN100。
               </DialogDescription>
             </DialogHeader>
           </div>
-          <div className="px-6 py-5 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl border border-border/60 bg-secondary/40 p-3 space-y-1">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">批次号</p>
-                <p className="font-mono font-bold text-sm">{batch.batchNumber}</p>
+          <div className="grid gap-5 px-6 py-4 md:grid-cols-[1.1fr_1fr] items-start">
+            <div className="min-w-0 space-y-3">
+              <div className="flex items-start justify-between gap-4 border-b border-border/50 pb-3 text-xs">
+                <div className="min-w-0 space-y-1"><p className="text-muted-foreground">批次号</p><p className="font-mono font-semibold break-words">{batch.batchNumber}</p></div>
+                <div className="shrink-0 space-y-1 text-right"><p className="text-muted-foreground">标的</p><p className="font-mono font-semibold">{batch.stockSymbol}</p></div>
               </div>
-              <div className="rounded-xl border border-border/60 bg-secondary/40 p-3 space-y-1">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">标的</p>
-                <p className="font-mono font-bold text-sm">{batch.stockSymbol}</p>
+              <div className="space-y-2">
+                <p className="text-xs font-semibold">补仓形式（由 WIN100 决定）</p>
+                <div className="grid grid-cols-2 gap-2" role="group" aria-label="补仓形式">
+                  <button type="button" aria-pressed={topupCollateralType === "stock"}
+                    onClick={() => { setTopupCollateralType("stock"); setTopupInput(""); }}
+                    className={cn("rounded-lg border p-3 text-left transition-all", topupCollateralType === "stock" ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border/60 bg-secondary/30 hover:border-border")}>
+                    <span className="flex items-center gap-1.5 mb-1 text-xs font-semibold"><TrendingUp className="h-3.5 w-3.5 text-primary" />股票补仓</span>
+                    <span className="block text-[10px] leading-relaxed text-muted-foreground">补入与缺口等值的 {batch.stockSymbol} 股票，本金及收益归 WIN100</span>
+                  </button>
+                  <button type="button" aria-pressed={topupCollateralType === "cash"}
+                    onClick={() => { setTopupCollateralType("cash"); setTopupInput(""); }}
+                    className={cn("rounded-lg border p-3 text-left transition-all", topupCollateralType === "cash" ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border/60 bg-secondary/30 hover:border-border")}>
+                    <span className="flex items-center gap-1.5 mb-1 text-xs font-semibold"><DollarSign className="h-3.5 w-3.5 text-primary" />现金补仓</span>
+                    <span className="block text-[10px] leading-relaxed text-muted-foreground">补入现金，按现金余额计值，不随股价波动</span>
+                  </button>
+                </div>
               </div>
-              <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 space-y-1 col-span-2">
-                <p className="text-[10px] uppercase tracking-wider text-danger">{topupCollateralType === "stock" ? "补仓股数" : "补仓金额"}</p>
-                <p className="font-mono font-extrabold text-2xl text-danger">
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 items-end gap-3">
+                  <label className="block min-w-0 space-y-2 text-xs"><span>补仓日期</span>
+                    <Input type="date" value={topupDate} onChange={event => setTopupDate(event.target.value)} />
+                  </label>
+                  <label className="block min-w-0 space-y-2 text-xs"><span>成交价（USD / 股，可修改）</span>
+                    <Input aria-label="补仓成交价" type="number" min="0" step="any" value={execution.value} onChange={event => execution.setValue(event.target.value)} />
+                  </label>
+                </div>
+                <p className="text-[11px] text-muted-foreground">{execution.note}</p>
+              </div>
+              <label className="block space-y-2 text-xs"><span>{topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"}</span>
+                <Input aria-label={topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"} type="number" min="0" step={topupCollateralType === "stock" ? "0.000001" : "0.01"}
+                  value={topupInput} placeholder={topupPrice > 0 ? String(topupCollateralType === "stock" ? marginSummary.totalPending / topupPrice : marginSummary.totalPending) : "请先填写成交价"}
+                  onChange={event => setTopupInput(event.target.value)} />
+              </label>
+            </div>
+            <div className="min-w-0 space-y-3 rounded-xl border border-border/60 bg-secondary/20 p-4">
+              <div className="space-y-1 border-b border-border/50 pb-4">
+                <p className="text-xs text-danger">{topupCollateralType === "stock" ? "补仓股数" : "补仓金额"}</p>
+                <p className="font-mono font-bold text-2xl text-danger break-words tabular-nums">
                   {topupCollateralType === "stock" ? `${topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股` : `$${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 </p>
               </div>
-            </div>
-            {/* 补仓形式选择：WIN100 决定现金或股票 */}
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold text-foreground">补仓形式（由 WIN100 决定）</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setTopupCollateralType("stock"); setTopupInput(""); }}
-                  className={cn(
-                    "rounded-lg border p-3 text-left transition-all",
-                    topupCollateralType === "stock"
-                      ? "border-primary bg-primary/10 ring-1 ring-primary"
-                      : "border-border/60 bg-secondary/30 hover:border-border"
-                  )}
-                >
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <TrendingUp className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-semibold">股票补仓</span>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">补入与缺口等值的 {batch.stockSymbol} 股票，本金及收益归 WIN100</p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setTopupCollateralType("cash"); setTopupInput(""); }}
-                  className={cn(
-                    "rounded-lg border p-3 text-left transition-all",
-                    topupCollateralType === "cash"
-                      ? "border-primary bg-primary/10 ring-1 ring-primary"
-                      : "border-border/60 bg-secondary/30 hover:border-border"
-                  )}
-                >
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <DollarSign className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-semibold">现金补仓</span>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">补入现金，按现金余额计值，不随股价波动</p>
-                </button>
-              </div>
-            </div>
-            <label className="block space-y-2 text-sm">
-              <span>补仓日期</span>
-              <Input type="date" value={topupDate} onChange={(event) => setTopupDate(event.target.value)} />
-            </label>
-            <label className="block space-y-2 text-sm">
-              <span className="block text-xs">成交价（USD / 股，可修改）</span>
-              <Input aria-label="补仓成交价" type="number" min="0" step="any" value={execution.value} onChange={event => execution.setValue(event.target.value)} />
-              <span className="block text-xs text-muted-foreground">{execution.note}</span>
-            </label>
-            <label className="block space-y-2 text-sm">
-              <span>{topupCollateralType === "stock" ? "本次补仓股数" : "本次补仓金额"}</span>
-              <Input type="number" min="0" step={topupCollateralType === "stock" ? "0.000001" : "0.01"}
-                value={topupInput} placeholder={(topupPrice > 0 ? String(topupCollateralType === "stock" ? marginSummary.totalPending / topupPrice : marginSummary.totalPending) : "请先填写成交价")}
-                onChange={(event) => setTopupInput(event.target.value)} />
-            </label>
-            {topupAmount > marginSummary.totalPending + 0.005 && (
-              <p className="text-sm text-warning">本次超额补仓 {formatCurrency(topupAmount - marginSummary.totalPending)}，全部计入 WIN100 补仓本金。</p>
-            )}
-            <p className="text-sm font-mono rounded-lg bg-secondary/40 p-3">等值金额：${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 等值股票：{topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股 · 计价 ${topupPrice.toFixed(4)}/股</p>
-            <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/30 p-2.5 text-[11px] text-muted-foreground">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
-              <div className="space-y-0.5">
-                <p>补仓完成后将：</p>
-                <p>· 累计补仓金额 + ${topupAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-                <p>· 原始仓位和 WIN100 补仓仓位分别核算，股票价格不变</p>
-                <p>· 客户保本进度与分成比例保持不变</p>
+              <dl className="space-y-2 text-xs">
+                <div className="flex items-baseline justify-between gap-3"><dt className="shrink-0 text-muted-foreground">等值金额</dt><dd className="font-mono font-semibold text-right break-all">${topupAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</dd></div>
+                <div className="flex items-baseline justify-between gap-3"><dt className="shrink-0 text-muted-foreground">等值股票</dt><dd className="font-mono text-right break-all">{topupShares.toLocaleString(undefined, { maximumFractionDigits: 6 })} 股</dd></div>
+                <div className="flex items-baseline justify-between gap-3"><dt className="shrink-0 text-muted-foreground">计价</dt><dd className="font-mono text-right">${topupPrice.toFixed(4)}/股</dd></div>
+              </dl>
+              {topupAmount > marginSummary.totalPending + 0.005 && <p className="text-xs leading-relaxed text-warning">本次超额补仓 {formatCurrency(topupAmount - marginSummary.totalPending)}，全部计入 WIN100 补仓本金。</p>}
+              <div className="flex items-start gap-2 rounded-lg bg-warning/5 border border-warning/25 p-3 text-[11px] leading-relaxed text-muted-foreground">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
+                <div className="space-y-1">
+                  <p>补仓完成后将：</p>
+                  <p>· 累计补仓金额 + ${topupAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                  <p>· 原始仓位和 WIN100 补仓仓位分别核算，股票价格不变</p>
+                  <p>· 客户保本进度与分成比例保持不变</p>
+                </div>
               </div>
             </div>
           </div>
-          <DialogFooter className="px-6 pb-6 pt-2 gap-2">
-            <Button type="button" variant="secondary" onClick={() => setFulfillOpen(false)} className="h-9 px-4">
-              取消
-            </Button>
+          <DialogFooter className="sticky bottom-0 border-t border-border/60 bg-card px-6 py-4 !flex-row !justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setFulfillOpen(false)} className="h-9 px-4">取消</Button>
             <Button type="button" variant="danger" onClick={() => {
               try { doFulfill(); } catch (err) { toast.error(err instanceof Error ? err.message : "补仓失败"); }
             }} disabled={!(topupPrice > 0) || !(topupAmount > 0)} className="h-9 px-4 gap-1.5">

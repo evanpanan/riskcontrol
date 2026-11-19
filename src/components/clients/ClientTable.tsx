@@ -880,6 +880,7 @@ export function ClientTable({
 
       {marginDialogClient && perClientStateMap.has(marginDialogClient.id) && (
         <ConfirmDialog
+          sideBySide
           open={marginDialogOpen}
           onOpenChange={(v) => {
             setMarginDialogOpen(v);

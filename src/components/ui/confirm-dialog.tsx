@@ -31,6 +31,7 @@ export interface ConfirmDialogProps {
   bodyExtra?: React.ReactNode;
   summary?: Array<{ label: string; value: React.ReactNode; detail?: React.ReactNode; accent?: "danger" | "warning" | "success" | "primary" | "muted" }>;
   contentClassName?: string;
+  sideBySide?: boolean;
 }
 
 const toneConfig: Record<
@@ -94,6 +95,7 @@ export function ConfirmDialog({
   bodyExtra,
   summary,
   contentClassName,
+  sideBySide = false,
 }: ConfirmDialogProps) {
   const cfg = toneConfig[tone];
   const Icon = cfg.Icon;
@@ -127,6 +129,7 @@ export function ConfirmDialog({
         className={cn(
           "w-[95%] max-w-xl rounded-2xl p-0 overflow-hidden",
           "gradient-card border-border/60 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.55)]",
+          sideBySide && "md:max-w-[940px] max-h-[calc(100dvh-2rem)] overflow-y-auto !gap-0",
           contentClassName
         )}
       >
@@ -161,15 +164,16 @@ export function ConfirmDialog({
           </div>
         </div>
 
+        {((summary?.length ?? 0) > 0 || bodyExtra) && <div className={cn(sideBySide ? "grid items-start gap-5 px-6 py-5 md:grid-cols-2" : "grid gap-4")} >
         {summary && summary.length > 0 && (
-          <div className="px-6 py-4 space-y-2">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 rounded-xl border border-border/50 bg-background/30 px-4 py-3.5">
+          <div className={cn(sideBySide ? "min-w-0 order-2" : "px-6 py-4 space-y-2")}>
+            <div className={cn("grid gap-x-6 gap-y-2.5 rounded-xl border border-border/50 bg-background/30 px-4 py-3.5", sideBySide ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
               {summary.map((s, i) => (
                 <div
                   key={i}
                   className={cn(
                     "min-w-0",
-                    i % 2 === 1 ? "sm:justify-self-end sm:min-w-0 sm:w-full" : ""
+                    !sideBySide && i % 2 === 1 ? "sm:justify-self-end sm:min-w-0 sm:w-full" : ""
                   )}
                 >
                   <div className="flex items-center justify-between gap-4">
@@ -179,6 +183,7 @@ export function ConfirmDialog({
                     <span
                       className={cn(
                         "text-[12.5px] font-semibold tabular-nums",
+                        sideBySide && "text-right break-words min-w-0",
                         s.accent === "danger" && "text-danger",
                         s.accent === "warning" && "text-warning",
                         s.accent === "success" && "text-success",
@@ -196,7 +201,8 @@ export function ConfirmDialog({
           </div>
         )}
 
-        {bodyExtra && <div className="px-6 pb-4">{bodyExtra}</div>}
+        {bodyExtra && <div className={cn(sideBySide ? "min-w-0 order-1" : "px-6 pb-4")}>{bodyExtra}</div>}
+        </div>}
         {error && <p role="alert" className="px-6 pb-3 text-sm text-danger">{error}</p>}
         <DialogFooter className="px-6 py-4 border-t border-border/50 bg-background/30 !gap-2 !flex-row-reverse sm:!flex-row-reverse !justify-end !space-x-0">
           {footerExtra}
