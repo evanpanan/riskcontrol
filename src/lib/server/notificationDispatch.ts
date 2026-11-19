@@ -173,6 +173,7 @@ export function notificationIdentity(payload: Payload): string {
     .update(
       JSON.stringify([
         ...(manualContext(payload) ? ["manual", manualContext(payload)!.channel, manualContext(payload)!.actorId] : []),
+        ...(manualContext(payload)?.requestId ? [manualContext(payload)!.requestId] : []),
         payload.batchId || "",
         payload.type,
         payload.severity,
@@ -199,10 +200,12 @@ export async function enqueueNotification(
     const existing = await tx.notificationDispatch.findFirst({
       where: {
         identity,
-        OR: [
+        // A deliberate manual send has its own identity. Retries of that exact request
+        // remain idempotent after the automatic-alert cooldown has elapsed.
+        ...(manualContext(payload)?.requestId ? {} : { OR: [
           { status: { in: ["PENDING", "REVIEW"] } },
           { updatedAt: { gte: new Date(now.getTime() - COOLDOWN_MS) } },
-        ],
+        ] }),
       },
       orderBy: { createdAt: "desc" },
     });

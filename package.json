@@ -19,7 +19,7 @@
     "verify:finance": "tsx scripts/check-finance.ts",
     "verify:hardening": "tsx scripts/check-hardening.ts",
     "verify:test-data": "tsx scripts/check-test-data.ts",
-    "verify:notifications": "tsx scripts/check-notifications.ts && tsx scripts/check-alert-content.ts",
+    "verify:notifications": "tsx scripts/check-notifications.ts && tsx scripts/check-alert-content.ts && tsx scripts/check-manual-notification-idempotency.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",

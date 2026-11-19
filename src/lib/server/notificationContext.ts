@@ -1,5 +1,5 @@
 import type { NotificationPolicy } from '@/lib/notificationPolicy';
-export type DeliveryContext = { kind: 'manual'; channel: 'email' | 'telegram'; actorId: string; actorName: string; actorEmail: string };
+export type DeliveryContext = { kind: 'manual'; channel: 'email' | 'telegram'; actorId: string; actorName: string; actorEmail: string; requestId?: string };
 export function manualContext(payload: { details?: Record<string, unknown> }): DeliveryContext | null {
   const ctx = payload.details?.deliveryContext as DeliveryContext | undefined;
   return ctx?.kind === 'manual' && ['email', 'telegram'].includes(ctx.channel) && typeof ctx.actorId === 'string' && typeof ctx.actorName === 'string' ? ctx : null;

@@ -118,7 +118,9 @@ export async function POST(req: NextRequest) {
         if (!user) return NextResponse.json({ error: "请登录后主动发送提醒" }, { status: 401 });
         if (!["email", "telegram"].includes(body.channel)) return NextResponse.json({ error: "请选择邮件或 Telegram" }, { status: 400 });
         if (body.channel === "email" && !(await loadNotificationPolicy()).coreEmails.length) return NextResponse.json({ error: "请先在通知设置中配置收件邮箱" }, { status: 400 });
-        details.deliveryContext = { kind: "manual", channel: body.channel, actorId: user.id, actorName: user.displayName, actorEmail: user.email };
+        if (body.requestId != null && (typeof body.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.requestId)))
+          return NextResponse.json({ error: "发送请求标识无效，请刷新页面后重试" }, { status: 400 });
+        details.deliveryContext = { kind: "manual", channel: body.channel, actorId: user.id, actorName: user.displayName, actorEmail: user.email, ...(body.requestId ? { requestId: body.requestId } : {}) };
       }
 
       try {
